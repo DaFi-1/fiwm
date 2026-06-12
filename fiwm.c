@@ -14,7 +14,7 @@
 #define SELCLIENT(v)        if (!selmon || !selmon->ws->focus || !(v = selmon->ws->focus->client)) return
 
 enum { SPLIT_VERTICAL, SPLIT_HORIZONTAL };
-enum { COL_BORDER, COL_FOCUS, COL_BAR_BG, COL_BAR_FG, COL_BAR_HL };
+enum { COL_BORDER_ACTIVE, COL_BORDER_INACTIVE, COL_BAR_BG, COL_BAR_FG, COL_BAR_HL };
 enum { WORKSPACE_COUNT = 9 };
 enum { BAR_HEIGHT = 18 };
 enum { WM_PROTOCOLS, WM_DELETE_WINDOW, WM_STATE, WM_LAST };
@@ -43,6 +43,7 @@ typedef struct Monitor Monitor;
 struct Client {
     Window win;
     int x, y, w, h;
+    int tile_x, tile_y, tile_w, tile_h;
     unsigned is_floating : 1;
     unsigned is_fullscreen : 1;
     unsigned is_dialog : 1;
@@ -65,6 +66,7 @@ struct Workspace {
 struct Monitor {
     Workspace *ws;
     Window barwin;
+    Pixmap barpm;
     Monitor *next;
     int num, x, y, w, h;
     short curtag;
@@ -90,6 +92,7 @@ static void node_pool_reset(void);
 
 static void arrange(Monitor *);
 static void arrange_node(Node *, int, int, int, int, int);
+static void arrange_floating(Monitor *);
 
 static void manage(Window, XWindowAttributes *);
 static void unmanage(Client *);
@@ -101,6 +104,8 @@ static void resizemouse(const Arg *);
 static void drawbar(Monitor *);
 static void createbars(void);
 static void updategeom(void);
+static void update_bar_visibility(Monitor *);
+static Monitor *monitor_in_direction(Monitor *, int, int);
 #ifdef XINERAMA
 static int isuniquegeom(XineramaScreenInfo *, int, XineramaScreenInfo *);
 #endif
@@ -134,10 +139,17 @@ static void cleanup(void);
 static void mask_children(Window w);
 
 static const int gappx           = 10;
+static const int borderpx        = 2;
 static const char *termcmd[]     = { "alacritty", NULL };
 static const char *menucmd[]     = {"/bin/sh", "-c", "/home/$USER/dotfile/dmenuscript", NULL};
 static const float default_ratio = 0.5f;
-static const char *colors[]      = { "#222222", "#7c3aed", "#000000", "#ffffff", "#444444" };
+static const char *colors[]      = {
+    "#88775F",  /* COL_BORDER_ACTIVE   — borda da janela focada (ouro miasma) */
+    "#2d2d2d",  /* COL_BORDER_INACTIVE — borda das janelas não focadas */
+    "#1a1a1a",  /* COL_BAR_BG          — fundo da barra */
+    "#c2c2b0",  /* COL_BAR_FG          — texto do workspace ativo na barra (bege miasma) */
+    "#685742",  /* COL_BAR_HL          — texto dos workspaces inativos na barra (marrom miasma) */
+};
 static const int tagmap[WORKSPACE_COUNT] = {
     1, 1, 1, 1, 1, 1, 1, 1, 0
 };
@@ -157,7 +169,8 @@ static Key keys[] = {
     { MODKEY,              XK_q,      killclient,     {0} },
     { MODKEY|ShiftMask,    XK_q,      quit,           {0} },
     { MODKEY,              XK_f,      togglefullscreen, {0} },
-    { MODKEY,              XK_space,  togglefloating, {0} },
+    { MODKEY|ShiftMask,    XK_f,      togglefloating,  {0} },
+    { MODKEY,              XK_space,  togglefloating,  {0} },
     { MODKEY,              XK_r,      rotatecmd,      {0} },
     { MODKEY,              XK_b,      setlayoutcmd,   {.i = SPLIT_VERTICAL} },
     { MODKEY,              XK_v,      setlayoutcmd,   {.i = SPLIT_HORIZONTAL} },
@@ -202,7 +215,7 @@ static Atom netatom[NET_LAST];
 static int running = 1;
 static int (*xerrorxlib)(Display *, XErrorEvent *);
 static unsigned int numlockmask;
-static unsigned long bar_bg, bar_fg, bar_hl;
+static unsigned long border_active, border_inactive, bar_bg, bar_fg, bar_hl;
 static GC bar_gc;
 
 enum { NODEPOOL = 64 };
@@ -572,6 +585,25 @@ void node_hide_foreach(Node *n)
         node_hide_foreach(n->second);
     }
 }
+
+static void
+arrange_floating(Monitor *m)
+{
+    Client *c;
+    Node *n;
+
+    if (!m) return;
+
+    for (c = clients; c; c = c->next) {
+        if (!c->is_floating) continue;
+        n = node_find_client(m->ws->root, c);
+        if (!n) continue;
+        XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
+        XSetWindowBorderWidth(dpy, c->win, borderpx);
+        XSetWindowBorder(dpy, c->win,
+                         (n == m->ws->focus) ? border_active : border_inactive);
+    }
+}
 void arrange_node(Node *n, int x, int y, int w, int h, int gap)
 {
     Client *c;
@@ -581,7 +613,8 @@ void arrange_node(Node *n, int x, int y, int w, int h, int gap)
         c = n->client;
         if (!c || c->is_fullscreen || c->is_floating)
             return;
-        XMoveResizeWindow(dpy, c->win, x, y, w, h);
+        XMoveResizeWindow(dpy, c->win, x + borderpx, y + borderpx,
+                          MAX(1, w - 2 * borderpx), MAX(1, h - 2 * borderpx));
         return;
     }
 
@@ -606,7 +639,8 @@ void arrange(Monitor *m)
     ogap = (gappx > 0) ? gappx : 0;
     igap = (gappx > 0) ? gappx : 0;
 
-    if (m->barwin)
+    if (m->barwin && !(m->ws->focus && m->ws->focus->client &&
+        m->ws->focus->client->is_fullscreen))
         XMoveResizeWindow(dpy, m->barwin,
                           m->x + ogap, m->y + ogap,
                           m->w - 2 * ogap, BAR_HEIGHT);
@@ -619,6 +653,8 @@ void arrange(Monitor *m)
     if (m->ws->root)
         arrange_node(m->ws->root, wx, wy, ww, wh, igap);
 
+    arrange_floating(m);
+
     if (m->ws->focus && m->ws->focus->client) {
         Client *c = m->ws->focus->client;
         if (c->is_fullscreen)
@@ -627,6 +663,7 @@ void arrange(Monitor *m)
     }
 
     drawbar(m);
+    XFlush(dpy);
 }
 void manage(Window w, XWindowAttributes *wa)
 {
@@ -667,6 +704,8 @@ void manage(Window w, XWindowAttributes *wa)
 
     swa.event_mask = EnterWindowMask | FocusChangeMask | PropertyChangeMask |
                      ButtonPressMask | SubstructureNotifyMask;
+    XSetWindowBorderWidth(dpy, w, borderpx);
+    XSetWindowBorder(dpy, w, border_inactive);
     XChangeWindowAttributes(dpy, w, CWEventMask, &swa);
     mask_children(w);
 
@@ -719,7 +758,10 @@ void unmanage(Client *c)
 void focus(Monitor *m, Node *n)
 {
     if (!m || !n || !n->client) return;
+    if (m->ws->focus && m->ws->focus->client && m->ws->focus != n)
+        XSetWindowBorder(dpy, m->ws->focus->client->win, border_inactive);
     m->ws->focus = n;
+    XSetWindowBorder(dpy, n->client->win, border_active);
     XSetInputFocus(dpy, n->client->win, RevertToPointerRoot, CurrentTime);
     XRaiseWindow(dpy, n->client->win);
     XChangeProperty(dpy, root, netatom[NET_ACTIVE_WINDOW],
@@ -814,8 +856,7 @@ void resizemouse(const Arg *arg)
 #ifdef XINERAMA
 int isuniquegeom(XineramaScreenInfo *unique, int n, XineramaScreenInfo *info)
 {
-    int i;
-    for (i = 0; i < n; i++)
+    for (int i = 0; i < n; i++)
         if (unique[i].x_org  == info->x_org  &&
             unique[i].y_org  == info->y_org  &&
             unique[i].width  == info->width  &&
@@ -825,68 +866,100 @@ int isuniquegeom(XineramaScreenInfo *unique, int n, XineramaScreenInfo *info)
 }
 #endif
 
+static Monitor *
+monitor_new(int num, int x, int y, int w, int h)
+{
+    Monitor *m = ecalloc(1, sizeof(Monitor));
+    m->num = num;
+    m->x = x; m->y = y; m->w = w; m->h = h;
+    m->curtag = 0;
+    m->ws = &workspaces[0];
+    m->next_split = -1;
+    return m;
+}
+
 void updategeom(void)
 {
-    Monitor *m, *newmons = NULL;
-
-#ifdef XINERAMA
-    Monitor *tail = NULL;
-    int nmon = 0;
-    if (XineramaIsActive(dpy)) {
-        int i, j, n;
-        XineramaScreenInfo *info = XineramaQueryScreens(dpy, &n);
-        XineramaScreenInfo *unique = ecalloc(n, sizeof(XineramaScreenInfo));
-
-        for (i = 0, j = 0; i < n; i++)
-            if (isuniquegeom(unique, j, &info[i])) {
-                unsigned char *dst = (unsigned char *)&unique[j];
-                unsigned char *src = (unsigned char *)&info[i];
-                for (size_t kk = 0; kk < sizeof(XineramaScreenInfo); kk++)
-                    dst[kk] = src[kk];
-                j++;
-            }
-
-        for (i = 0; i < j; i++) {
-            int t;
-            m = ecalloc(1, sizeof(Monitor));
-            m->num   = nmon++;
-            m->x     = unique[i].x_org;
-            m->y     = unique[i].y_org;
-            m->w     = unique[i].width;
-            m->h     = unique[i].height;
-            for (t = 0; t < WORKSPACE_COUNT; t++)
-                if (tagmap[t] == m->num) break;
-            m->curtag = (t < WORKSPACE_COUNT) ? t : 0;
-            m->ws    = &workspaces[m->curtag];
-            m->next_split = -1;
-            if (!newmons) newmons = m;
-            else          tail->next = m;
-            tail = m;
-        }
-        XFree(info);
-        free(unique);
-    } else
-#endif
-    {
-        m = ecalloc(1, sizeof(Monitor));
-        m->num   = 0;
-        m->x     = 0;
-        m->y     = 0;
-        m->w     = DisplayWidth(dpy, XDefaultScreen(dpy));
-        m->h     = DisplayHeight(dpy, XDefaultScreen(dpy));
-        m->curtag = 0;
-        m->ws    = &workspaces[0];
-        m->next_split = -1;
-        newmons = m;
-    }
+    Monitor *m;
 
     while (mons) {
         m = mons->next;
         free(mons);
         mons = m;
     }
-    mons  = newmons;
+    mons = NULL;
+
+#ifdef XINERAMA
+    if (XineramaIsActive(dpy)) {
+        int n;
+        XineramaScreenInfo *info = XineramaQueryScreens(dpy, &n);
+        XineramaScreenInfo *unique = ecalloc(n, sizeof(XineramaScreenInfo));
+        int nunique = 0;
+
+        for (int i = 0; i < n; i++)
+            if (isuniquegeom(unique, nunique, &info[i]))
+                unique[nunique++] = info[i];
+
+        for (int i = 0; i < nunique; i++) {
+            m = monitor_new(i, unique[i].x_org, unique[i].y_org,
+                            unique[i].width, unique[i].height);
+            m->next = mons;
+            mons = m;
+        }
+        XFree(info);
+        free(unique);
+    } else
+#endif
+    {
+        mons = monitor_new(0, 0, 0,
+                           DisplayWidth(dpy, XDefaultScreen(dpy)),
+                           DisplayHeight(dpy, XDefaultScreen(dpy)));
+    }
+
     selmon = mons;
+}
+
+static void
+update_bar_visibility(Monitor *m)
+{
+    if (!m || !m->barwin) return;
+    if (m->ws->focus && m->ws->focus->client &&
+        m->ws->focus->client->is_fullscreen)
+        XUnmapWindow(dpy, m->barwin);
+    else
+        XMapWindow(dpy, m->barwin);
+}
+
+static Monitor *
+monitor_in_direction(Monitor *m, int orient, int dir)
+{
+    Monitor *target = NULL, *tm;
+
+    for (tm = mons; tm; tm = tm->next) {
+        if (tm == m) continue;
+        if (orient == SPLIT_VERTICAL) {
+            if (dir == 0 && tm->x + tm->w <= m->x &&
+                tm->y < m->y + m->h && tm->y + tm->h > m->y) {
+                if (!target || tm->x + tm->w > target->x + target->w)
+                    target = tm;
+            } else if (dir == 1 && tm->x >= m->x + m->w &&
+                tm->y < m->y + m->h && tm->y + tm->h > m->y) {
+                if (!target || tm->x < target->x)
+                    target = tm;
+            }
+        } else {
+            if (dir == 0 && tm->y + tm->h <= m->y &&
+                tm->x < m->x + m->w && tm->x + tm->w > m->x) {
+                if (!target || tm->y + tm->h > target->y + target->h)
+                    target = tm;
+            } else if (dir == 1 && tm->y >= m->y + m->h &&
+                tm->x < m->x + m->w && tm->x + tm->w > m->x) {
+                if (!target || tm->y < target->y)
+                    target = tm;
+            }
+        }
+    }
+    return target;
 }
 
 void focusworkspace(const Arg *arg)
@@ -917,6 +990,7 @@ void focusworkspace(const Arg *arg)
         if (m->ws->focus && m->ws->focus->client)
             focus(m, m->ws->focus);
         if (prev != m) { prev->dirty = 1; m->dirty = 1; }
+        update_bar_visibility(m);
         arrange(m);
         if (prev != m) drawbar(prev);
         return;
@@ -941,6 +1015,8 @@ void focusworkspace(const Arg *arg)
     if (!om) {
         m->curtag = tag;
         m->ws     = &workspaces[tag];
+    } else {
+        update_bar_visibility(om);
     }
     m->dirty = 1;
 
@@ -953,6 +1029,7 @@ void focusworkspace(const Arg *arg)
     }
 
     if (prev != m) prev->dirty = 1;
+    update_bar_visibility(m);
     arrange(m);
     if (prev != m) drawbar(prev);
 }
@@ -976,13 +1053,12 @@ void drawbar(Monitor *m)
 {
     char buf[8];
     int i, x, sw, ntags, idx;
-    Window win;
+    Drawable d;
     int tags[WORKSPACE_COUNT];
 
     if (!m || !m->barwin) return;
     if (!m->dirty) return;
     m->dirty = 0;
-    win = m->barwin;
 
     ntags = 0;
     for (i = 0; i < WORKSPACE_COUNT; i++)
@@ -993,25 +1069,30 @@ void drawbar(Monitor *m)
 
     {
         XWindowAttributes wa;
-        sw = (XGetWindowAttributes(dpy, win, &wa))
+        sw = (XGetWindowAttributes(dpy, m->barwin, &wa))
              ? wa.width / ntags : 1;
     }
 
     if (!bar_gc)
-        bar_gc = XCreateGC(dpy, win, 0, NULL);
+        bar_gc = XCreateGC(dpy, m->barwin, 0, NULL);
+
+    d = m->barpm ? m->barpm : m->barwin;
 
     XSetForeground(dpy, bar_gc, bar_bg);
-    XFillRectangle(dpy, win, bar_gc, 0, 0, sw * ntags, BAR_HEIGHT);
+    XFillRectangle(dpy, d, bar_gc, 0, 0, sw * ntags, BAR_HEIGHT);
 
     for (idx = 0; idx < ntags; idx++) {
         i = tags[idx];
         x = idx * sw;
         itoa(i + 1, buf, sizeof(buf));
         XSetForeground(dpy, bar_gc, (m == selmon && m->curtag == i) ? bar_fg : bar_hl);
-        XDrawString(dpy, win, bar_gc, x + sw/2 - 4,
+        XDrawString(dpy, d, bar_gc, x + sw/2 - 4,
                     (BAR_HEIGHT / 2) + 5, buf, strlen(buf));
     }
-    XFlush(dpy);
+
+    if (m->barpm)
+        XCopyArea(dpy, m->barpm, m->barwin, bar_gc, 0, 0,
+                  sw * ntags, BAR_HEIGHT, 0, 0);
 }
 
 void createbars(void)
@@ -1030,6 +1111,8 @@ void createbars(void)
                                   CopyFromParent,
                                   CWOverrideRedirect | CWEventMask,
                                   &wa);
+        m->barpm = XCreatePixmap(dpy, root, m->w, BAR_HEIGHT,
+                                 DefaultDepth(dpy, XDefaultScreen(dpy)));
 
         XMapWindow(dpy, m->barwin);
         XLowerWindow(dpy, m->barwin);
@@ -1237,10 +1320,16 @@ void togglefullscreen(const Arg *arg)
 
     c->is_fullscreen = !c->is_fullscreen;
     if (c->is_fullscreen) {
+        XSetWindowBorderWidth(dpy, c->win, 0);
         XMoveResizeWindow(dpy, c->win, selmon->x, selmon->y,
                           selmon->w, selmon->h);
+        XUnmapWindow(dpy, selmon->barwin);
         XRaiseWindow(dpy, c->win);
     } else {
+        XMapWindow(dpy, selmon->barwin);
+        XSetWindowBorderWidth(dpy, c->win, borderpx);
+        XSetWindowBorder(dpy, c->win,
+                         (c == selmon->ws->focus->client) ? border_active : border_inactive);
         arrange(selmon);
     }
 }
@@ -1248,9 +1337,26 @@ void togglefullscreen(const Arg *arg)
 void togglefloating(const Arg *arg)
 {
     Client *c;
+    int fw, fh;
     SELCLIENT(c);
 
     c->is_floating = !c->is_floating;
+    if (c->is_floating) {
+        c->tile_x = c->x; c->tile_y = c->y;
+        c->tile_w = c->w; c->tile_h = c->h;
+        fw = selmon->w * 0.6f;
+        fh = selmon->h * 0.6f;
+        c->x = selmon->x + (selmon->w - fw) / 2;
+        c->y = selmon->y + (selmon->h - fh) / 2;
+        c->w = fw; c->h = fh;
+        XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
+        XSetWindowBorderWidth(dpy, c->win, borderpx);
+        XSetWindowBorder(dpy, c->win, border_active);
+        XRaiseWindow(dpy, c->win);
+    } else {
+        c->x = c->tile_x; c->y = c->tile_y;
+        c->w = c->tile_w; c->h = c->tile_h;
+    }
     arrange(selmon);
 }
 
@@ -1274,6 +1380,25 @@ void focuscmd(const Arg *arg)
     if (target) {
         focus(selmon, target);
         arrange(selmon);
+        return;
+    }
+
+    {
+        Monitor *om = monitor_in_direction(selmon, orient, dir);
+        if (om) {
+            Node *n = om->ws->focus;
+            if ((!n || !n->client) && om->ws->root)
+                n = node_first_leaf(om->ws->root);
+            if (n && n->client) {
+                Monitor *prev = selmon;
+                selmon = om;
+                om->dirty = 1;
+                prev->dirty = 1;
+                focus(om, n);
+                arrange(om);
+                drawbar(prev);
+            }
+        }
     }
 }
 
@@ -1334,15 +1459,64 @@ void movecmd(const Arg *arg)
     dir    = raw & 1;
 
     target = node_in_direction(n, orient, dir);
-    if (!target || !target->is_leaf || !target->client)
+    if (target && target->is_leaf && target->client && n->client) {
+        tmpc = n->client;
+        n->client = target->client;
+        target->client = tmpc;
+        focus(selmon, target);
+        arrange(selmon);
         return;
+    }
 
-    tmpc = n->client;
-    n->client = target->client;
-    target->client = tmpc;
+    if (!n->client) return;
+    {
+        Monitor *om = monitor_in_direction(selmon, orient, dir);
+        if (om) {
+            Client *c = n->client;
+            Workspace *tws = om->ws;
 
-    focus(selmon, target);
-    arrange(selmon);
+            Node *newfocus = node_detach(n, ws);
+            ws->focus = newfocus;
+            node_free(n);
+
+            Node *nl = node_new();
+            nl->client = c;
+
+            if (!tws->root) {
+                tws->root = nl;
+                tws->focus = nl;
+            } else {
+                Node *ff = tws->focus ? tws->focus : node_first_leaf(tws->root);
+                Node *nn = node_new();
+                nn->is_leaf = 0;
+                nn->split = orient;
+                nn->first  = ff;
+                nn->second = nl;
+                nn->parent = ff->parent;
+                if (ff->parent) {
+                    if (ff->parent->first == ff)
+                        ff->parent->first = nn;
+                    else
+                        ff->parent->second = nn;
+                } else {
+                    tws->root = nn;
+                }
+                ff->parent = nn;
+                nl->parent = nn;
+                tws->focus = nl;
+            }
+
+            {
+                Monitor *prev = selmon;
+                selmon = om;
+                om->dirty = 1;
+                prev->dirty = 1;
+                focus(om, nl);
+                arrange(om);
+                arrange(prev);
+            }
+        }
+    }
 }
 
 void setlayoutcmd(const Arg *arg)
@@ -1412,6 +1586,8 @@ void setup(void)
     {
         Colormap cmap = DefaultColormap(dpy, XDefaultScreen(dpy));
         XColor c;
+        XAllocNamedColor(dpy, cmap, colors[COL_BORDER_ACTIVE], &c, &c); border_active = c.pixel;
+        XAllocNamedColor(dpy, cmap, colors[COL_BORDER_INACTIVE], &c, &c); border_inactive = c.pixel;
         XAllocNamedColor(dpy, cmap, colors[COL_BAR_BG], &c, &c); bar_bg = c.pixel;
         XAllocNamedColor(dpy, cmap, colors[COL_BAR_FG], &c, &c); bar_fg = c.pixel;
         XAllocNamedColor(dpy, cmap, colors[COL_BAR_HL], &c, &c); bar_hl = c.pixel;
@@ -1458,7 +1634,7 @@ void setup(void)
 
     selmon = mons;
     for (Monitor *m = mons; m; m = m->next)
-        { m->dirty = 1; drawbar(m); }
+        arrange(m);
 
     /* Launch autostart commands */
     for (size_t i = 0; i < LENGTH(autostart); i++) {
@@ -1513,6 +1689,8 @@ void cleanup(void)
 
     m = mons;
     while (m) {
+        if (m->barpm)
+            XFreePixmap(dpy, m->barpm);
         if (m->barwin)
             XDestroyWindow(dpy, m->barwin);
         mtmp = m->next;
