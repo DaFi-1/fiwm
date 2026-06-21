@@ -11,7 +11,7 @@
 #define MAX(A,B)            ((A) > (B) ? (A) : (B))
 #define MIN(A,B)            ((A) < (B) ? (A) : (B))
 #define CLEANMASK(mask)     (mask & ~(numlockmask|LockMask))
-#define SELCLIENT(v)        if (!selmon || !selmon->ws->focus || !(v = selmon->ws->focus->client)) return
+#define SELCLIENT(v)        if (!selmon || !selmon->ws->focus || !(v = selmon->ws->focus->u.client)) return
 
 enum { SPLIT_VERTICAL, SPLIT_HORIZONTAL };
 enum { COL_BORDER_ACTIVE, COL_BORDER_INACTIVE, COL_BAR_BG, COL_BAR_FG, COL_BAR_HL };
@@ -24,7 +24,6 @@ enum { NET_WM_STATE, NET_WM_STATE_FULLSCREEN, NET_ACTIVE_WINDOW,
 typedef union {
     int i;
     unsigned int ui;
-    float f;
     const void *v;
 } Arg;
 
@@ -42,8 +41,9 @@ typedef struct Monitor Monitor;
 
 struct Client {
     Window win;
-    int x, y, w, h;
-    int tile_x, tile_y, tile_w, tile_h;
+    unsigned short x, y, w, h;
+    unsigned short tile_x, tile_y, tile_w, tile_h;
+    short workspace;
     unsigned is_floating : 1;
     unsigned is_fullscreen : 1;
     unsigned is_dialog : 1;
@@ -52,8 +52,11 @@ struct Client {
 };
 
 struct Node {
-    Client *client;
-    Node *parent, *first, *second;
+    union {
+        Client *client;
+        struct children { Node *first, *second; } ch;
+    } u;
+    Node *parent;
     unsigned is_leaf : 1;
     unsigned split   : 1;
 };
@@ -61,6 +64,7 @@ struct Node {
 struct Workspace {
     Node *root;
     Node *focus;
+    Client *fs_client;
 };
 
 struct Monitor {
@@ -69,11 +73,12 @@ struct Monitor {
     Pixmap barpm;
     Monitor *next;
     int num, x, y, w, h;
+    int bar_width;
+    Client *fs_client;
     short curtag;
     short next_split;
     unsigned dirty : 1;
 };
-#define M_ARENA_MAX (-8)
 
 
 static void die(const char *) __attribute__((noreturn));
@@ -138,27 +143,28 @@ static void run(void);
 static void cleanup(void);
 static void mask_children(Window w);
 
-static const int gappx           = 10;
-static const int borderpx        = 2;
+static const int gappx           = 0; //10
+static const int borderpx        = 1;
 static const char *termcmd[]     = { "alacritty", NULL };
 static const char *menucmd[]     = {"/bin/sh", "-c", "/home/$USER/dotfile/dmenuscript", NULL};
 static const float default_ratio = 0.5f;
 static const char *colors[]      = {
-    "#88775F",  /* COL_BORDER_ACTIVE   — borda da janela focada (ouro miasma) */
+    "#FFFFFF",  /* COL_BORDER_ACTIVE   — borda da janela focada (ouro miasma) */
     "#2d2d2d",  /* COL_BORDER_INACTIVE — borda das janelas não focadas */
-    "#1a1a1a",  /* COL_BAR_BG          — fundo da barra */
+    "#000000",  /* COL_BAR_BG          — fundo da barra */
     "#c2c2b0",  /* COL_BAR_FG          — texto do workspace ativo na barra (bege miasma) */
     "#685742",  /* COL_BAR_HL          — texto dos workspaces inativos na barra (marrom miasma) */
 };
 static const int tagmap[WORKSPACE_COUNT] = {
+//    0, 0, 0, 0, 0, 0, 0, 0, 0
     1, 1, 1, 1, 1, 1, 1, 1, 0
 };
 static const unsigned int MODKEY = Mod1Mask;
 
 /* Autostart commands (run once at startup, before the event loop) */
 static const char *autostart[][4] = {
-    { "/bin/sh", "-c", "picom", NULL },
-    { "/bin/sh", "-c", "nitrogen --restore", NULL },
+    /* { "/bin/sh", "-c", "picom", NULL }, */
+   // { "/bin/sh", "-c", "nitrogen --restore", NULL },
     { "/bin/sh", "-c", "xset r rate 180 250", NULL },
     { "/bin/sh", "-c", "xrandr --output DP-0 --primary --mode 1920x1080 --rate 100 --pos 0x0 --output HDMI-0 --mode 1366x768 --rate 60 --right-of DP-0", NULL },
 };
@@ -218,7 +224,7 @@ static unsigned int numlockmask;
 static unsigned long border_active, border_inactive, bar_bg, bar_fg, bar_hl;
 static GC bar_gc;
 
-enum { NODEPOOL = 64 };
+enum { NODEPOOL = 32 };
 static Node  nodepool[NODEPOOL];
 static int   nodeidx;
 static Node *nodefreelist;
@@ -304,7 +310,7 @@ static int itoa(unsigned int n, char *buf, int size)
     buf[i] = '\0';
     return i;
 }
-#define HEAP_SIZE (1UL * 1024)          /* 1 KB — bump allocator */
+#define HEAP_SIZE (2UL * 1024)          /* 2 KB — bump allocator */
 static char heap[HEAP_SIZE];
 static unsigned long heap_ptr;
 
@@ -413,10 +419,10 @@ Node *node_new(void)
     }
     n->is_leaf = 1;
     n->split   = 0;
-    n->client  = NULL;
+    n->u.client  = NULL;
     n->parent  = NULL;
-    n->first   = NULL;
-    n->second  = NULL;
+    n->u.ch.first   = NULL;
+    n->u.ch.second  = NULL;
     return n;
 }
 
@@ -445,15 +451,15 @@ Node *node_detach(Node *n, Workspace *ws)
         return NULL;
     }
 
-    sibling   = (parent->first == n) ? parent->second : parent->first;
+    sibling   = (parent->u.ch.first == n) ? parent->u.ch.second : parent->u.ch.first;
     grandparent = parent->parent;
 
     sibling->parent = grandparent;
     if (grandparent) {
-        if (grandparent->first == parent)
-            grandparent->first = sibling;
+        if (grandparent->u.ch.first == parent)
+            grandparent->u.ch.first = sibling;
         else
-            grandparent->second = sibling;
+            grandparent->u.ch.second = sibling;
     } else {
         ws->root = sibling;
     }
@@ -472,7 +478,7 @@ Node *node_insert(Monitor *m, Client *c)
     Node *newnode, *newleaf;
 
     newleaf = node_new();
-    newleaf->client = c;
+    newleaf->u.client = c;
 
     if (!focus || !ws->root) {
         ws->root = newleaf;
@@ -491,16 +497,16 @@ Node *node_insert(Monitor *m, Client *c)
                          : SPLIT_VERTICAL;
     }
     newnode->parent = focus->parent;
-    newnode->first  = focus;
-    newnode->second = newleaf;
+    newnode->u.ch.first  = focus;
+    newnode->u.ch.second = newleaf;
     focus->parent   = newnode;
     newleaf->parent = newnode;
 
     if (newnode->parent) {
-        if (newnode->parent->first == focus)
-            newnode->parent->first = newnode;
+        if (newnode->parent->u.ch.first == focus)
+            newnode->parent->u.ch.first = newnode;
         else
-            newnode->parent->second = newnode;
+            newnode->parent->u.ch.second = newnode;
     } else {
         ws->root = newnode;
     }
@@ -513,9 +519,9 @@ void node_rotate(Node *n)
     Node *tmp;
     if (!n || !n->is_leaf || !n->parent) return;
     n = n->parent;
-    tmp    = n->first;
-    n->first  = n->second;
-    n->second = tmp;
+    tmp    = n->u.ch.first;
+    n->u.ch.first  = n->u.ch.second;
+    n->u.ch.second = tmp;
 }
 
 Node *node_in_direction(Node *n, int orient, int dir)
@@ -528,23 +534,23 @@ Node *node_in_direction(Node *n, int orient, int dir)
     p = n;
     while (p->parent) {
         if (p->parent->split == orient) {
-            int on_first = (p->parent->first == p);
+            int on_first = (p->parent->u.ch.first == p);
             if (on_first != want_first) {
-                c = want_first ? p->parent->first : p->parent->second;
+                c = want_first ? p->parent->u.ch.first : p->parent->u.ch.second;
 
                 int sub_pos = -1;
                 Node *q = n;
                 while (q != p->parent) {
                     if (q->parent && q->parent->split != orient)
-                        sub_pos = (q->parent->first == q) ? 0 : 1;
+                        sub_pos = (q->parent->u.ch.first == q) ? 0 : 1;
                     q = q->parent;
                 }
 
                 while (!c->is_leaf) {
                     if (c->split != orient && sub_pos >= 0)
-                        c = sub_pos ? c->second : c->first;
+                        c = sub_pos ? c->u.ch.second : c->u.ch.first;
                     else
-                        c = dir ? c->first : c->second;
+                        c = dir ? c->u.ch.first : c->u.ch.second;
                 }
                 return c;
             }
@@ -557,7 +563,7 @@ Node *node_in_direction(Node *n, int orient, int dir)
 Node *node_first_leaf(Node *n)
 {
     if (!n) return NULL;
-    while (!n->is_leaf) n = n->first;
+    while (!n->is_leaf) n = n->u.ch.first;
     return n;
 }
 
@@ -565,11 +571,11 @@ Node *node_find_client(Node *n, Client *c)
 {
     Node *f;
     if (!n) return NULL;
-    if (n->is_leaf && n->client == c)
+    if (n->is_leaf && n->u.client == c)
         return n;
     if (!n->is_leaf) {
-        f = node_find_client(n->first, c);
-        return f ? f : node_find_client(n->second, c);
+        f = node_find_client(n->u.ch.first, c);
+        return f ? f : node_find_client(n->u.ch.second, c);
     }
     return NULL;
 }
@@ -578,11 +584,11 @@ void node_hide_foreach(Node *n)
 {
     if (!n) return;
     if (n->is_leaf) {
-        if (n->client)
-            XMoveWindow(dpy, n->client->win, -9999, -9999);
+        if (n->u.client)
+            XMoveWindow(dpy, n->u.client->win, -9999, -9999);
     } else {
-        node_hide_foreach(n->first);
-        node_hide_foreach(n->second);
+        node_hide_foreach(n->u.ch.first);
+        node_hide_foreach(n->u.ch.second);
     }
 }
 
@@ -597,11 +603,19 @@ arrange_floating(Monitor *m)
     for (c = clients; c; c = c->next) {
         if (!c->is_floating) continue;
         n = node_find_client(m->ws->root, c);
-        if (!n) continue;
-        XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
-        XSetWindowBorderWidth(dpy, c->win, borderpx);
-        XSetWindowBorder(dpy, c->win,
-                         (n == m->ws->focus) ? border_active : border_inactive);
+        if (n) {
+            XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
+            if (n != m->ws->focus) {
+                XSetWindowBorderWidth(dpy, c->win, borderpx);
+                XSetWindowBorder(dpy, c->win, border_inactive);
+            }
+        } else if (c->workspace == m->curtag) {
+            XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
+            XSetWindowBorderWidth(dpy, c->win, borderpx);
+            XSetWindowBorder(dpy, c->win, border_active);
+        } else {
+            XMoveWindow(dpy, c->win, -9999, -9999);
+        }
     }
 }
 void arrange_node(Node *n, int x, int y, int w, int h, int gap)
@@ -610,7 +624,7 @@ void arrange_node(Node *n, int x, int y, int w, int h, int gap)
     if (!n) return;
 
     if (n->is_leaf) {
-        c = n->client;
+        c = n->u.client;
         if (!c || c->is_fullscreen || c->is_floating)
             return;
         XMoveResizeWindow(dpy, c->win, x + borderpx, y + borderpx,
@@ -620,46 +634,47 @@ void arrange_node(Node *n, int x, int y, int w, int h, int gap)
 
     if (n->split == SPLIT_VERTICAL) {
         int fw = MAX(1, (int)(w * default_ratio) - (gap > 0 ? gap/2 : 0));
-        arrange_node(n->first,  x, y, fw, h, gap);
-        arrange_node(n->second, x + fw + gap, y, MAX(1, w - fw - gap), h, gap);
+        arrange_node(n->u.ch.first,  x, y, fw, h, gap);
+        arrange_node(n->u.ch.second, x + fw + gap, y, MAX(1, w - fw - gap), h, gap);
     } else {
         int fh = MAX(1, (int)(h * default_ratio) - (gap > 0 ? gap/2 : 0));
-        arrange_node(n->first,  x, y, w, fh, gap);
-        arrange_node(n->second, x, y + fh + gap, w, MAX(1, h - fh - gap), gap);
+        arrange_node(n->u.ch.first,  x, y, w, fh, gap);
+        arrange_node(n->u.ch.second, x, y + fh + gap, w, MAX(1, h - fh - gap), gap);
     }
 }
 
 void arrange(Monitor *m)
 {
-    int ogap, igap;
     int wx, wy, ww, wh;
 
     if (!m) return;
 
-    ogap = (gappx > 0) ? gappx : 0;
-    igap = (gappx > 0) ? gappx : 0;
-
-    if (m->barwin && !(m->ws->focus && m->ws->focus->client &&
-        m->ws->focus->client->is_fullscreen))
+    if (m->barwin && !(m->ws->focus && m->ws->focus->u.client &&
+        m->ws->focus->u.client->is_fullscreen)) {
+        m->bar_width = m->w - 2 * gappx;
         XMoveResizeWindow(dpy, m->barwin,
-                          m->x + ogap, m->y + ogap,
-                          m->w - 2 * ogap, BAR_HEIGHT);
+                          m->x + gappx, m->y + gappx,
+                          m->bar_width, BAR_HEIGHT);
+    }
 
-    wx = m->x + ogap;
-    wy = m->y + ogap + BAR_HEIGHT + ogap;
-    ww = m->w - 2 * ogap;
-    wh = m->h - BAR_HEIGHT - 3 * ogap;
+    wx = m->x + gappx;
+    wy = m->y + gappx + BAR_HEIGHT + gappx;
+    ww = m->w - gappx - borderpx;
+    wh = m->h - BAR_HEIGHT - 2 * gappx - borderpx;
 
     if (m->ws->root)
-        arrange_node(m->ws->root, wx, wy, ww, wh, igap);
+        arrange_node(m->ws->root, wx, wy, ww, wh, gappx);
 
     arrange_floating(m);
 
-    if (m->ws->focus && m->ws->focus->client) {
-        Client *c = m->ws->focus->client;
-        if (c->is_fullscreen)
-            XMoveResizeWindow(dpy, c->win, m->x, m->y, m->w, m->h);
-        XRaiseWindow(dpy, c->win);
+    Client *fs = m->ws->fs_client;
+    if (fs) {
+        XMoveResizeWindow(dpy, fs->win, m->x, m->y, m->w, m->h);
+        XRaiseWindow(dpy, fs->win);
+    }
+
+    if (m->ws->focus && m->ws->focus->u.client && m->ws->focus->u.client != fs) {
+        XSetWindowBorder(dpy, m->ws->focus->u.client->win, border_active);
     }
 
     drawbar(m);
@@ -686,6 +701,7 @@ void manage(Window w, XWindowAttributes *wa)
     c->y   = wa->y;
     c->w   = wa->width;
     c->h   = wa->height;
+    c->workspace = selmon ? selmon->curtag : 0;
 
     if (XGetWindowProperty(dpy, w, netatom[NET_WM_WINDOW_TYPE], 0L, 2L,
                            False, XA_ATOM, &actual, &format,
@@ -718,6 +734,7 @@ void manage(Window w, XWindowAttributes *wa)
         Node *nl = node_insert(selmon, c);
         XMapWindow(dpy, w);
         if (nl) focus(selmon, nl);
+        selmon->dirty = 1;
         arrange(selmon);
         return;
     }
@@ -735,12 +752,15 @@ void unmanage(Client *c)
     for (m = mons; m; m = m->next) {
         n = node_find_client(m->ws->root, c);
         if (!n) continue;
+        if (m->ws->fs_client == c)
+            m->ws->fs_client = NULL;
         newfocus = node_detach(n, m->ws);
         if (newfocus)
             m->ws->focus = newfocus;
         else
             m->ws->focus = NULL;
         node_free(n);
+        m->dirty = 1;
         arrange(m);
         break;
     }
@@ -757,16 +777,16 @@ void unmanage(Client *c)
 
 void focus(Monitor *m, Node *n)
 {
-    if (!m || !n || !n->client) return;
-    if (m->ws->focus && m->ws->focus->client && m->ws->focus != n)
-        XSetWindowBorder(dpy, m->ws->focus->client->win, border_inactive);
+    if (!m || !n || !n->u.client) return;
+    if (m->ws->focus && m->ws->focus->u.client && m->ws->focus != n)
+        XSetWindowBorder(dpy, m->ws->focus->u.client->win, border_inactive);
     m->ws->focus = n;
-    XSetWindowBorder(dpy, n->client->win, border_active);
-    XSetInputFocus(dpy, n->client->win, RevertToPointerRoot, CurrentTime);
-    XRaiseWindow(dpy, n->client->win);
+    XSetWindowBorder(dpy, n->u.client->win, border_active);
+    XSetInputFocus(dpy, n->u.client->win, RevertToPointerRoot, CurrentTime);
+    XRaiseWindow(dpy, n->u.client->win);
     XChangeProperty(dpy, root, netatom[NET_ACTIVE_WINDOW],
                     XA_WINDOW, 32, PropModeReplace,
-                    (unsigned char *)&n->client->win, 1);
+                    (unsigned char *)&n->u.client->win, 1);
 }
 
 Client *find_client(Window w)
@@ -804,14 +824,20 @@ void movemouse(const Arg *arg)
             XMoveWindow(dpy, c->win,
                         ev.xmotion.x_root - ox,
                         ev.xmotion.y_root - oy);
+            if (selmon && selmon->barwin)
+                XRaiseWindow(dpy, selmon->barwin);
             break;
         case ButtonRelease:
-            XMoveWindow(dpy, c->win,
-                        ev.xbutton.x_root - ox,
-                        ev.xbutton.y_root - oy);
-            XUngrabPointer(dpy, CurrentTime);
             c->x = ev.xbutton.x_root - ox;
             c->y = ev.xbutton.y_root - oy;
+            if (c->x + c->w + 2 * borderpx > selmon->x + selmon->w)
+                c->x = selmon->x + selmon->w - c->w - 2 * borderpx;
+            if (c->y + c->h + 2 * borderpx > selmon->y + selmon->h)
+                c->y = selmon->y + selmon->h - c->h - 2 * borderpx;
+            if (c->x < selmon->x) c->x = selmon->x;
+            if (c->y < selmon->y) c->y = selmon->y;
+            XMoveWindow(dpy, c->win, c->x, c->y);
+            XUngrabPointer(dpy, CurrentTime);
             return;
         }
     }
@@ -843,10 +869,18 @@ void resizemouse(const Arg *arg)
             XResizeWindow(dpy, c->win,
                           MAX(1, ev.xmotion.x_root - c->x),
                           MAX(1, ev.xmotion.y_root - c->y));
+            if (selmon && selmon->barwin)
+                XRaiseWindow(dpy, selmon->barwin);
             break;
         case ButtonRelease:
             c->w = MAX(1, ev.xbutton.x_root - c->x);
             c->h = MAX(1, ev.xbutton.y_root - c->y);
+            if (c->x + c->w + 2 * borderpx > selmon->x + selmon->w)
+                c->w = selmon->x + selmon->w - c->x - 2 * borderpx;
+            if (c->y + c->h + 2 * borderpx > selmon->y + selmon->h)
+                c->h = selmon->y + selmon->h - c->y - 2 * borderpx;
+            c->w = MAX(1, c->w);
+            c->h = MAX(1, c->h);
             XResizeWindow(dpy, c->win, c->w, c->h);
             XUngrabPointer(dpy, CurrentTime);
             return;
@@ -874,6 +908,7 @@ monitor_new(int num, int x, int y, int w, int h)
     m->x = x; m->y = y; m->w = w; m->h = h;
     m->curtag = 0;
     m->ws = &workspaces[0];
+    m->bar_width = w;
     m->next_split = -1;
     return m;
 }
@@ -923,8 +958,8 @@ static void
 update_bar_visibility(Monitor *m)
 {
     if (!m || !m->barwin) return;
-    if (m->ws->focus && m->ws->focus->client &&
-        m->ws->focus->client->is_fullscreen)
+    if (m->ws->focus && m->ws->focus->u.client &&
+        m->ws->focus->u.client->is_fullscreen)
         XUnmapWindow(dpy, m->barwin);
     else
         XMapWindow(dpy, m->barwin);
@@ -987,7 +1022,7 @@ void focusworkspace(const Arg *arg)
 
     /* Already active on this monitor */
     if (m->curtag == tag) {
-        if (m->ws->focus && m->ws->focus->client)
+        if (m->ws->focus && m->ws->focus->u.client)
             focus(m, m->ws->focus);
         if (prev != m) { prev->dirty = 1; m->dirty = 1; }
         update_bar_visibility(m);
@@ -1017,10 +1052,11 @@ void focusworkspace(const Arg *arg)
         m->ws     = &workspaces[tag];
     } else {
         update_bar_visibility(om);
+        arrange(om);
     }
     m->dirty = 1;
 
-    if (m->ws->focus && m->ws->focus->client)
+    if (m->ws->focus && m->ws->focus->u.client)
         focus(m, m->ws->focus);
     else if (m->ws->root) {
         Node *first = node_first_leaf(m->ws->root);
@@ -1067,11 +1103,7 @@ void drawbar(Monitor *m)
 
     if (ntags == 0) return;
 
-    {
-        XWindowAttributes wa;
-        sw = (XGetWindowAttributes(dpy, m->barwin, &wa))
-             ? wa.width / ntags : 1;
-    }
+    sw = m->bar_width / ntags;
 
     if (!bar_gc)
         bar_gc = XCreateGC(dpy, m->barwin, 0, NULL);
@@ -1079,7 +1111,7 @@ void drawbar(Monitor *m)
     d = m->barpm ? m->barpm : m->barwin;
 
     XSetForeground(dpy, bar_gc, bar_bg);
-    XFillRectangle(dpy, d, bar_gc, 0, 0, sw * ntags, BAR_HEIGHT);
+    XFillRectangle(dpy, d, bar_gc, 0, 0, m->bar_width, BAR_HEIGHT);
 
     for (idx = 0; idx < ntags; idx++) {
         i = tags[idx];
@@ -1092,7 +1124,7 @@ void drawbar(Monitor *m)
 
     if (m->barpm)
         XCopyArea(dpy, m->barpm, m->barwin, bar_gc, 0, 0,
-                  sw * ntags, BAR_HEIGHT, 0, 0);
+                  m->bar_width, BAR_HEIGHT, 0, 0);
 }
 
 void createbars(void)
@@ -1134,6 +1166,19 @@ void buttonpress(XEvent *e)
     Client *c = find_client(e->xbutton.window);
     Monitor *m;
     Node *n;
+    Window par, *kids, w;
+    unsigned int nk;
+
+    if (!c) {
+        w = e->xbutton.window;
+        while (!c && w != root && w != None) {
+            if (!XQueryTree(dpy, w, &(Window){0}, &par, &kids, &nk)) break;
+            if (kids) XFree(kids);
+            if (par == root || par == None) break;
+            c = find_client(par);
+            w = par;
+        }
+    }
 
     for (m = mons; m; m = m->next) {
         if (e->xbutton.window == m->barwin) {
@@ -1189,13 +1234,12 @@ static void mask_children(Window w)
 void enternotify(XEvent *e)
 {
     XCrossingEvent *ev = &e->xcrossing;
-    Monitor *m, *prev;
+    Monitor *m;
     Client *c;
     Node *n;
     Window par, *kids, w;
     unsigned int nk;
 
-    /* Walk up to find a managed client under the pointer */
     c = find_client(ev->window);
     w = ev->window;
     while (!c && w != root && w != None) {
@@ -1205,9 +1249,8 @@ void enternotify(XEvent *e)
         c = find_client(par);
         w = par;
     }
-    if (!c) return;  /* not entering a managed client */
+    if (!c) return;
 
-    /* Find monitor by client, not by coordinates */
     n = NULL;
     for (m = mons; m; m = m->next) {
         n = node_find_client(m->ws->root, c);
@@ -1215,15 +1258,13 @@ void enternotify(XEvent *e)
     }
     if (!m || !n) return;
 
-    prev = selmon;
-    if (m != prev) {
+    if (m != selmon) {
+        Monitor *prev = selmon;
         selmon = m;
         if (prev) { prev->dirty = 1; drawbar(prev); }
         m->dirty = 1;
+        drawbar(m);
     }
-    if (n != m->ws->focus)
-        focus(m, n);
-    drawbar(m);
 }
 
 void createnotify(XEvent *e)
@@ -1286,10 +1327,7 @@ void configurerequest(XEvent *e)
 int xerror(Display *dpy_, XErrorEvent *ee)
 {
     (void)dpy_;
-    if (ee->error_code == BadWindow ||
-        ee->error_code == BadDrawable ||
-        ee->error_code == BadColor)
-        return 0;
+    (void)ee;
     return 0;
 }
 void quit(const Arg *arg)
@@ -1320,16 +1358,23 @@ void togglefullscreen(const Arg *arg)
 
     c->is_fullscreen = !c->is_fullscreen;
     if (c->is_fullscreen) {
+        selmon->ws->fs_client = c;
+        c->tile_x = c->x; c->tile_y = c->y;
+        c->tile_w = c->w; c->tile_h = c->h;
         XSetWindowBorderWidth(dpy, c->win, 0);
         XMoveResizeWindow(dpy, c->win, selmon->x, selmon->y,
                           selmon->w, selmon->h);
         XUnmapWindow(dpy, selmon->barwin);
         XRaiseWindow(dpy, c->win);
     } else {
+        selmon->ws->fs_client = NULL;
+        c->x = c->tile_x; c->y = c->tile_y;
+        c->w = c->tile_w; c->h = c->tile_h;
         XMapWindow(dpy, selmon->barwin);
         XSetWindowBorderWidth(dpy, c->win, borderpx);
         XSetWindowBorder(dpy, c->win,
-                         (c == selmon->ws->focus->client) ? border_active : border_inactive);
+                         (c == selmon->ws->focus->u.client) ? border_active : border_inactive);
+        selmon->dirty = 1;
         arrange(selmon);
     }
 }
@@ -1348,6 +1393,12 @@ void togglefloating(const Arg *arg)
         fh = selmon->h * 0.6f;
         c->x = selmon->x + (selmon->w - fw) / 2;
         c->y = selmon->y + (selmon->h - fh) / 2;
+        if (c->x + fw + 2 * borderpx > selmon->x + selmon->w)
+            c->x = selmon->x + selmon->w - fw - 2 * borderpx;
+        if (c->y + fh + 2 * borderpx > selmon->y + selmon->h)
+            c->y = selmon->y + selmon->h - fh - 2 * borderpx;
+        if (c->x < selmon->x) c->x = selmon->x;
+        if (c->y < selmon->y) c->y = selmon->y;
         c->w = fw; c->h = fh;
         XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
         XSetWindowBorderWidth(dpy, c->win, borderpx);
@@ -1356,6 +1407,8 @@ void togglefloating(const Arg *arg)
     } else {
         c->x = c->tile_x; c->y = c->tile_y;
         c->w = c->tile_w; c->h = c->tile_h;
+        if (!node_find_client(selmon->ws->root, c))
+            node_insert(selmon, c);
     }
     arrange(selmon);
 }
@@ -1387,9 +1440,9 @@ void focuscmd(const Arg *arg)
         Monitor *om = monitor_in_direction(selmon, orient, dir);
         if (om) {
             Node *n = om->ws->focus;
-            if ((!n || !n->client) && om->ws->root)
+            if ((!n || !n->u.client) && om->ws->root)
                 n = node_first_leaf(om->ws->root);
-            if (n && n->client) {
+            if (n && n->u.client) {
                 Monitor *prev = selmon;
                 selmon = om;
                 om->dirty = 1;
@@ -1400,6 +1453,37 @@ void focuscmd(const Arg *arg)
             }
         }
     }
+}
+
+static Node *workspace_insert(Workspace *ws, Client *c, int split)
+{
+    Node *nl = node_new();
+    nl->u.client = c;
+
+    if (!ws->root) {
+        ws->root = nl;
+        ws->focus = nl;
+    } else {
+        Node *ff = ws->focus ? ws->focus : node_first_leaf(ws->root);
+        Node *nn = node_new();
+        nn->is_leaf = 0;
+        nn->split = split;
+        nn->u.ch.first  = ff;
+        nn->u.ch.second = nl;
+        nn->parent = ff->parent;
+        if (ff->parent) {
+            if (ff->parent->u.ch.first == ff)
+                ff->parent->u.ch.first = nn;
+            else
+                ff->parent->u.ch.second = nn;
+        } else {
+            ws->root = nn;
+        }
+        ff->parent = nn;
+        nl->parent = nn;
+        ws->focus = nl;
+    }
+    return nl;
 }
 
 void movecmd(const Arg *arg)
@@ -1415,7 +1499,7 @@ void movecmd(const Arg *arg)
     raw = arg->i;
 
     if (raw >= 0 && raw < WORKSPACE_COUNT) {
-        Client *c = n->client;
+        Client *c = n->u.client;
         int tag = raw;
         if (!c) return;
 
@@ -1423,33 +1507,8 @@ void movecmd(const Arg *arg)
         ws->focus = newfocus;
         node_free(n);
 
-        Workspace *tws = &workspaces[tag];
-        Node *nl = node_new();
-        nl->client = c;
-
-        if (!tws->root) {
-            tws->root = nl;
-            tws->focus = nl;
-        } else {
-            Node *ff = tws->focus ? tws->focus : node_first_leaf(tws->root);
-            Node *nn = node_new();
-            nn->is_leaf = 0;
-            nn->split = SPLIT_VERTICAL;
-            nn->first  = ff;
-            nn->second = nl;
-            nn->parent = ff->parent;
-            if (ff->parent) {
-                if (ff->parent->first == ff)
-                    ff->parent->first = nn;
-                else
-                    ff->parent->second = nn;
-            } else {
-                tws->root = nn;
-            }
-            ff->parent = nn;
-            nl->parent = nn;
-            tws->focus = nl;
-        }
+        c->workspace = tag;
+        workspace_insert(&workspaces[tag], c, SPLIT_VERTICAL);
         arrange(selmon);
         return;
     }
@@ -1459,52 +1518,26 @@ void movecmd(const Arg *arg)
     dir    = raw & 1;
 
     target = node_in_direction(n, orient, dir);
-    if (target && target->is_leaf && target->client && n->client) {
-        tmpc = n->client;
-        n->client = target->client;
-        target->client = tmpc;
+    if (target && target->is_leaf && target->u.client && n->u.client) {
+        tmpc = n->u.client;
+        n->u.client = target->u.client;
+        target->u.client = tmpc;
         focus(selmon, target);
         arrange(selmon);
         return;
     }
 
-    if (!n->client) return;
+    if (!n->u.client) return;
     {
         Monitor *om = monitor_in_direction(selmon, orient, dir);
         if (om) {
-            Client *c = n->client;
-            Workspace *tws = om->ws;
+            Client *c = n->u.client;
 
             Node *newfocus = node_detach(n, ws);
             ws->focus = newfocus;
             node_free(n);
 
-            Node *nl = node_new();
-            nl->client = c;
-
-            if (!tws->root) {
-                tws->root = nl;
-                tws->focus = nl;
-            } else {
-                Node *ff = tws->focus ? tws->focus : node_first_leaf(tws->root);
-                Node *nn = node_new();
-                nn->is_leaf = 0;
-                nn->split = orient;
-                nn->first  = ff;
-                nn->second = nl;
-                nn->parent = ff->parent;
-                if (ff->parent) {
-                    if (ff->parent->first == ff)
-                        ff->parent->first = nn;
-                    else
-                        ff->parent->second = nn;
-                } else {
-                    tws->root = nn;
-                }
-                ff->parent = nn;
-                nl->parent = nn;
-                tws->focus = nl;
-            }
+            Node *nl = workspace_insert(om->ws, c, orient);
 
             {
                 Monitor *prev = selmon;
