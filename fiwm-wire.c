@@ -517,7 +517,7 @@ static inline Display *XOpenDisplay(const char *name) {
     }
 
     unsigned short add_len = *(unsigned short *)&rep_hdr[6];
-    unsigned int total_body = (unsigned int)add_len * 4;
+    unsigned int total_body = (unsigned int)add_len << 2;
     unsigned char body[2048];
     unsigned int first_chunk = total_body > sizeof(body) ? sizeof(body) : total_body;
     unsigned int read_bytes = 0;
@@ -592,7 +592,7 @@ static inline Window XCreateWindow(Display *d, Window parent, int x, int y, unsi
     if (valmask & (1 << 9)) p[idx++] = (unsigned int)a->override_redirect;
     if (valmask & (1 << 11)) p[idx++] = (unsigned int)a->event_mask;
     p[0] = (idx << 16) | (depth << 8) | 1;
-    _xwire_write(d->fd, p, idx * 4);
+    _xwire_write(d->fd, p, idx << 2);
     return wid;
 }
 
@@ -615,7 +615,7 @@ static inline void XConfigureWindow(Display *d, Window w, unsigned long valmask,
     if (valmask & 32) p[idx++] = (unsigned int)wc->sibling;
     if (valmask & 64) p[idx++] = (unsigned int)wc->stack_mode;
     p[0] = (idx << 16) | 12;
-    _xwire_write(d->fd, p, idx * 4);
+    _xwire_write(d->fd, p, idx << 2);
 }
 
 static inline void XSelectInput(Display *d, Window w, long mask) {
@@ -641,7 +641,7 @@ static inline void XChangeWindowAttributes(Display *d, Window w, unsigned long v
     if (mask & (1 << 11)) p[idx++] = (unsigned int)a->event_mask;
     if (mask & (1 << 14)) p[idx++] = (unsigned int)a->cursor;
     p[0] = (idx << 16) | 2;
-    _xwire_write(d->fd, p, idx * 4);
+    _xwire_write(d->fd, p, idx << 2);
 }
 
 static inline void XSetWindowBorderWidth(Display *d, Window w, unsigned int bw) {
@@ -990,8 +990,8 @@ static inline void XFillRectangle(Display *d, Drawable dr, GC gc, int x, int y, 
 static inline void XDrawString(Display *d, Drawable dr, GC gc, int x, int y, const char *s, int len) {
     if (!d || !dr || !gc || !s || len <= 0 || len > 200) return;
     unsigned int p[64];
-    int total_bytes = 16 + 2 + len;
-    int pad = (4 - (total_bytes & 3)) & 3;
+    int total_bytes = 18 + len;
+    int pad = (-total_bytes) & 3;
     total_bytes += pad;
     int words = total_bytes >> 2;
 
@@ -1006,7 +1006,7 @@ static inline void XDrawString(Display *d, Drawable dr, GC gc, int x, int y, con
     for (int i = 0; i < len; i++) bp[2 + i] = s[i];
     for (int i = 0; i < pad; i++) bp[2 + len + i] = 0;
 
-    _xwire_write(d->fd, p, words * 4);
+    _xwire_write(d->fd, p, words << 2);
 }
 
 static inline Pixmap XCreatePixmap(Display *d, Drawable dr, unsigned int w, unsigned int h, unsigned int depth) {
@@ -1082,9 +1082,8 @@ static inline int XGetWindowProperty(Display *d, Window w, Atom prop, long off, 
 
 static inline void XChangeProperty(Display *d, Window w, Atom prop, Atom type, int fmt, int mode, const unsigned char *data, int nelem) {
     if (!d || !w || !prop || !data || nelem <= 0) return;
-    int bytes_per_elem = (fmt == 32) ? 4 : ((fmt == 16) ? 2 : 1);
-    int data_bytes = nelem * bytes_per_elem;
-    int pad = (4 - (data_bytes & 3)) & 3;
+    int data_bytes = (fmt == 32) ? (nelem << 2) : ((fmt == 16) ? (nelem << 1) : nelem);
+    int pad = (-data_bytes) & 3;
     int total_bytes = 24 + data_bytes + pad;
     int words = total_bytes >> 2;
 
@@ -1151,7 +1150,7 @@ static inline void XSendEvent(Display *d, Window w, int prop, long mask, XEvent 
         *(unsigned int *)&ep[4] = (unsigned int)ev->xclient.window;
         *(unsigned int *)&ep[8] = (unsigned int)ev->xclient.message_type;
         for (int i = 0; i < 5; i++)
-            *(unsigned int *)&ep[12 + i * 4] = (unsigned int)ev->xclient.data.l[i];
+            *(unsigned int *)&ep[12 + (i << 2)] = (unsigned int)ev->xclient.data.l[i];
     } else {
         unsigned char *ep = (unsigned char *)&p[3];
         const unsigned char *src = (const unsigned char *)ev;
@@ -1524,21 +1523,7 @@ static void *memset(void *s, int c, size_t n)
     return s;
 }
 
-static int itoa(unsigned int n, char *buf, int size)
-{
-    char tmp[12];
-    int i = 0, j = 0;
 
-    if (n == 0) tmp[j++] = '0';
-    while (n > 0 && j < 12) {
-        tmp[j++] = '0' + (n % 10);
-        n /= 10;
-    }
-    while (j > 0 && i < size - 1)
-        buf[i++] = tmp[--j];
-    buf[i] = '\0';
-    return i;
-}
 #define HEAP_SIZE (2UL * 1024)          /* 2 KB — bump allocator */
 static char heap[HEAP_SIZE];
 static unsigned long heap_ptr;
@@ -1881,7 +1866,7 @@ void arrange(Monitor *m)
 
     if (m->barwin && !(m->ws->focus && m->ws->focus->u.client &&
         (m->ws->focus->u.client->flags & FLAG_FULLSCREEN))) {
-        m->bar_width = m->w - 2 * gappx;
+        m->bar_width = m->w - (gappx << 1);
         XMoveResizeWindow(dpy, m->barwin,
                           m->x + gappx, m->y + gappx,
                           m->bar_width, BAR_HEIGHT);
@@ -1890,7 +1875,7 @@ void arrange(Monitor *m)
     wx = m->x + gappx;
     wy = m->y + gappx + BAR_HEIGHT + gappx;
     ww = m->w - gappx - borderpx;
-    wh = m->h - BAR_HEIGHT - 2 * gappx - borderpx;
+    wh = m->h - BAR_HEIGHT - (gappx << 1) - borderpx;
 
     if (m->ws->root)
         arrange_node(m->ws->root, wx, wy, ww, wh, gappx);
@@ -2311,7 +2296,8 @@ void focusworkspace(const Arg *arg)
 void focusworkspace_next(const Arg *arg)
 {
     if (!selmon) return;
-    int tag = (selmon->curtag + 1) % WORKSPACE_COUNT;
+    int tag = selmon->curtag + 1;
+    if (tag >= WORKSPACE_COUNT) tag = 0;
     Arg a = {.i = tag};
     focusworkspace(&a);
 }
@@ -2319,13 +2305,14 @@ void focusworkspace_next(const Arg *arg)
 void focusworkspace_prev(const Arg *arg)
 {
     if (!selmon) return;
-    int tag = (selmon->curtag - 1 + WORKSPACE_COUNT) % WORKSPACE_COUNT;
+    int tag = selmon->curtag - 1;
+    if (tag < 0) tag = WORKSPACE_COUNT - 1;
     Arg a = {.i = tag};
     focusworkspace(&a);
 }
 void drawbar(Monitor *m)
 {
-    char buf[8];
+    char buf[4];
     int i, x, sw, ntags, idx;
     Drawable d;
     int tags[WORKSPACE_COUNT];
@@ -2354,10 +2341,11 @@ void drawbar(Monitor *m)
     for (idx = 0; idx < ntags; idx++) {
         i = tags[idx];
         x = idx * sw;
-        itoa(i + 1, buf, sizeof(buf));
+        buf[0] = (char)('1' + i);
+        buf[1] = '\0';
         XSetForeground(dpy, bar_gc, (m == selmon && m->curtag == i) ? bar_fg : bar_hl);
         XDrawString(dpy, d, bar_gc, x + (sw >> 1) - 4,
-                    (BAR_HEIGHT >> 1) + 5, buf, strlen(buf));
+                    (BAR_HEIGHT >> 1) + 5, buf, 1);
     }
 
     if (m->barpm)
@@ -2426,11 +2414,14 @@ void buttonpress(XEvent *e)
                     tags[ntags++] = i;
             if (ntags > 0) {
                 int sw = m->w / ntags;
-                int clicked = e->xbutton.x_root / sw;
-                if (clicked >= 0 && clicked < ntags) {
-                    Arg a = {.i = tags[clicked]};
-                    focusworkspace(&a);
+                int xpos = e->xbutton.x_root;
+                int clicked = 0;
+                while (xpos >= sw && clicked < ntags - 1) {
+                    xpos -= sw;
+                    clicked++;
                 }
+                Arg a = {.i = tags[clicked]};
+                focusworkspace(&a);
             }
             return;
         }
@@ -2623,8 +2614,8 @@ void togglefloating(const Arg *arg)
     if (c->flags & FLAG_FLOATING) {
         c->tile_x = c->x; c->tile_y = c->y;
         c->tile_w = c->w; c->tile_h = c->h;
-        fw = (selmon->w * 3) / 5;
-        fh = (selmon->h * 3) / 5;
+        fw = ((unsigned int)selmon->w * 39322U) >> 16;
+        fh = ((unsigned int)selmon->h * 39322U) >> 16;
         c->x = selmon->x + ((selmon->w - fw) >> 1);
         c->y = selmon->y + ((selmon->h - fh) >> 1);
         if (c->x + fw + (borderpx << 1) > selmon->x + selmon->w)
