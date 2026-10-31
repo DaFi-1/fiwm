@@ -859,22 +859,19 @@ static inline int XNextEvent(Display *d, XEvent *e) {
 
 #define XFree(p) ((void)0)
 
-static inline Atom XInternAtom(Display *d, const char *name, int only_if_exists) {
+static inline Atom intern_atom(Display *d, const char *name) {
     if (!d || !name) return 0;
     int nbytes = 0;
     while (name[nbytes]) nbytes++;
 
-    int pad = (4 - (nbytes & 3)) & 3;
-    int total_bytes = 8 + nbytes + pad;
-    int words = total_bytes >> 2;
-
+    int words = (11 + nbytes) >> 2;
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, words << 2);
-    p[0] = (words << 16) | ((only_if_exists ? 1 : 0) << 8) | 16; /* X_InternAtom */
+    p[0] = (words << 16) | 16; /* X_InternAtom */
     p[1] = (unsigned int)nbytes;
+    p[words - 1] = 0;
 
     unsigned char *bp = (unsigned char *)&p[2];
-    for (int i = 0; i < nbytes; i++) bp[i] = name[i];
-    for (int i = 0; i < pad; i++) bp[nbytes + i] = 0;
+    for (int i = 0; i < nbytes; i++) bp[i] = (unsigned char)name[i];
     _xwire_flush(d->fd);
 
     unsigned char rep[32];
@@ -889,6 +886,7 @@ static inline Atom XInternAtom(Display *d, const char *name, int only_if_exists)
     }
     return 0;
 }
+#define XInternAtom(d, name, b) intern_atom(d, name)
 
 static inline unsigned long parse_color(const char *name) {
     unsigned long val = 0;
@@ -2840,7 +2838,6 @@ void scan(void)
 
 void setup(void)
 {
-    unsigned int i;
     XSetWindowAttributes wa;
     Atom supported[] = {
         netatom[NET_WM_STATE],
@@ -2870,10 +2867,6 @@ void setup(void)
     bar_fg          = parse_color(colors[COL_BAR_FG]);
     bar_hl          = parse_color(colors[COL_BAR_HL]);
 
-    for (i = 0; i < WORKSPACE_COUNT; i++) {
-        workspaces[i].root  = NULL;
-        workspaces[i].focus = NULL;
-    }
 
     wmatom[WM_PROTOCOLS]              = XInternAtom(dpy, "WM_PROTOCOLS", False);
     wmatom[WM_DELETE_WINDOW]          = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
