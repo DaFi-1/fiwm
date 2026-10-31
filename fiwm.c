@@ -39,14 +39,18 @@ typedef struct Node Node;
 typedef struct Workspace Workspace;
 typedef struct Monitor Monitor;
 
+enum {
+    FLAG_FLOATING   = 1 << 0,
+    FLAG_FULLSCREEN = 1 << 1,
+    FLAG_DIALOG     = 1 << 2,
+};
+
 struct Client {
     Window win;
     unsigned short x, y, w, h;
     unsigned short tile_x, tile_y, tile_w, tile_h;
     short workspace;
-    unsigned is_floating : 1;
-    unsigned is_fullscreen : 1;
-    unsigned is_dialog : 1;
+    unsigned short flags;
     Client *next;
     Client *prev;
 };
@@ -147,7 +151,7 @@ static const int gappx           = 0; //10
 static const int borderpx        = 1;
 static const char *termcmd[]     = { "alacritty", NULL };
 static const char *menucmd[]     = {"/bin/sh", "-c", "/home/$USER/dotfile/dmenuscript", NULL};
-static const float default_ratio = 0.5f;
+/* static const float default_ratio = 0.5f; */
 static const char *colors[]      = {
     "#FFFFFF",  /* COL_BORDER_ACTIVE   — borda da janela focada (ouro miasma) */
     "#2d2d2d",  /* COL_BORDER_INACTIVE — borda das janelas não focadas */
@@ -155,10 +159,12 @@ static const char *colors[]      = {
     "#c2c2b0",  /* COL_BAR_FG          — texto do workspace ativo na barra (bege miasma) */
     "#685742",  /* COL_BAR_HL          — texto dos workspaces inativos na barra (marrom miasma) */
 };
+/*
 static const int tagmap[WORKSPACE_COUNT] = {
-//    0, 0, 0, 0, 0, 0, 0, 0, 0
     1, 1, 1, 1, 1, 1, 1, 1, 0
 };
+*/
+static int tagmap[WORKSPACE_COUNT];
 static const unsigned int MODKEY = Mod1Mask;
 
 /* Autostart commands (run once at startup, before the event loop) */
@@ -224,7 +230,7 @@ static unsigned int numlockmask;
 static unsigned long border_active, border_inactive, bar_bg, bar_fg, bar_hl;
 static GC bar_gc;
 
-enum { NODEPOOL = 32 };
+enum { NODEPOOL = 256 };
 static Node  nodepool[NODEPOOL];
 static int   nodeidx;
 static Node *nodefreelist;
@@ -291,7 +297,18 @@ static int strcmp(const char *a, const char *b)
 static void *memset(void *s, int c, size_t n)
 {
     unsigned char *p = s;
-    for (size_t i = 0; i < n; i++) p[i] = (unsigned char)c;
+    unsigned long val = (unsigned char)c;
+    if (n >= 8) {
+        val |= val << 8;
+        val |= val << 16;
+        val |= val << 32;
+        while (n >= 8) {
+            *(unsigned long *)p = val;
+            p += 8;
+            n -= 8;
+        }
+    }
+    while (n--) *p++ = (unsigned char)c;
     return s;
 }
 
@@ -316,7 +333,7 @@ static unsigned long heap_ptr;
 
 static void *bump_calloc(size_t nmemb, size_t size)
 {
-    size_t total = nmemb * size;
+    size_t total = (nmemb * size + 7UL) & ~7UL;
     if (heap_ptr + total > HEAP_SIZE)
         return NULL;
     void *ptr = heap + heap_ptr;
@@ -601,7 +618,7 @@ arrange_floating(Monitor *m)
     if (!m) return;
 
     for (c = clients; c; c = c->next) {
-        if (!c->is_floating) continue;
+        if (!(c->flags & FLAG_FLOATING)) continue;
         n = node_find_client(m->ws->root, c);
         if (n) {
             XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
@@ -625,19 +642,20 @@ void arrange_node(Node *n, int x, int y, int w, int h, int gap)
 
     if (n->is_leaf) {
         c = n->u.client;
-        if (!c || c->is_fullscreen || c->is_floating)
+        if (!c || (c->flags & (FLAG_FULLSCREEN | FLAG_FLOATING)))
             return;
         XMoveResizeWindow(dpy, c->win, x + borderpx, y + borderpx,
-                          MAX(1, w - 2 * borderpx), MAX(1, h - 2 * borderpx));
+                          MAX(1, w - (borderpx << 1)), MAX(1, h - (borderpx << 1)));
         return;
     }
 
+    int half_gap = gap > 0 ? (gap >> 1) : 0;
     if (n->split == SPLIT_VERTICAL) {
-        int fw = MAX(1, (int)(w * default_ratio) - (gap > 0 ? gap/2 : 0));
+        int fw = MAX(1, (w >> 1) - half_gap);
         arrange_node(n->u.ch.first,  x, y, fw, h, gap);
         arrange_node(n->u.ch.second, x + fw + gap, y, MAX(1, w - fw - gap), h, gap);
     } else {
-        int fh = MAX(1, (int)(h * default_ratio) - (gap > 0 ? gap/2 : 0));
+        int fh = MAX(1, (h >> 1) - half_gap);
         arrange_node(n->u.ch.first,  x, y, w, fh, gap);
         arrange_node(n->u.ch.second, x, y + fh + gap, w, MAX(1, h - fh - gap), gap);
     }
@@ -650,7 +668,7 @@ void arrange(Monitor *m)
     if (!m) return;
 
     if (m->barwin && !(m->ws->focus && m->ws->focus->u.client &&
-        m->ws->focus->u.client->is_fullscreen)) {
+        (m->ws->focus->u.client->flags & FLAG_FULLSCREEN))) {
         m->bar_width = m->w - 2 * gappx;
         XMoveResizeWindow(dpy, m->barwin,
                           m->x + gappx, m->y + gappx,
@@ -709,7 +727,7 @@ void manage(Window w, XWindowAttributes *wa)
         atoms = (Atom *)data;
         for (unsigned long i = 0; i < n; i++)
             if (atoms[i] == netatom[NET_WM_WINDOW_TYPE_DIALOG])
-                c->is_dialog = c->is_floating = 1;
+                c->flags |= FLAG_DIALOG | FLAG_FLOATING;
         XFree(data);
     }
 
@@ -720,9 +738,10 @@ void manage(Window w, XWindowAttributes *wa)
 
     swa.event_mask = EnterWindowMask | FocusChangeMask | PropertyChangeMask |
                      ButtonPressMask | SubstructureNotifyMask;
+    swa.background_pixel = bar_bg;
     XSetWindowBorderWidth(dpy, w, borderpx);
     XSetWindowBorder(dpy, w, border_inactive);
-    XChangeWindowAttributes(dpy, w, CWEventMask, &swa);
+    XChangeWindowAttributes(dpy, w, CWEventMask | CWBackPixel, &swa);
     mask_children(w);
 
     XGrabButton(dpy, Button1, MODKEY, w, False, ButtonPressMask,
@@ -730,12 +749,12 @@ void manage(Window w, XWindowAttributes *wa)
     XGrabButton(dpy, Button3, MODKEY, w, False, ButtonPressMask,
                 GrabModeAsync, GrabModeAsync, None, None);
 
-    if (!c->is_floating) {
+    if (!(c->flags & FLAG_FLOATING)) {
         Node *nl = node_insert(selmon, c);
-        XMapWindow(dpy, w);
-        if (nl) focus(selmon, nl);
         selmon->dirty = 1;
         arrange(selmon);
+        XMapWindow(dpy, w);
+        if (nl) focus(selmon, nl);
         return;
     }
 
@@ -806,7 +825,7 @@ void movemouse(const Arg *arg)
     XEvent ev;
 
     SELCLIENT(c);
-    if (!c->is_floating) return;
+    if (!(c->flags & FLAG_FLOATING)) return;
 
     if (XGrabPointer(dpy, root, False,
                      PointerMotionMask | ButtonReleaseMask,
@@ -830,10 +849,10 @@ void movemouse(const Arg *arg)
         case ButtonRelease:
             c->x = ev.xbutton.x_root - ox;
             c->y = ev.xbutton.y_root - oy;
-            if (c->x + c->w + 2 * borderpx > selmon->x + selmon->w)
-                c->x = selmon->x + selmon->w - c->w - 2 * borderpx;
-            if (c->y + c->h + 2 * borderpx > selmon->y + selmon->h)
-                c->y = selmon->y + selmon->h - c->h - 2 * borderpx;
+            if (c->x + c->w + (borderpx << 1) > selmon->x + selmon->w)
+                c->x = selmon->x + selmon->w - c->w - (borderpx << 1);
+            if (c->y + c->h + (borderpx << 1) > selmon->y + selmon->h)
+                c->y = selmon->y + selmon->h - c->h - (borderpx << 1);
             if (c->x < selmon->x) c->x = selmon->x;
             if (c->y < selmon->y) c->y = selmon->y;
             XMoveWindow(dpy, c->win, c->x, c->y);
@@ -852,7 +871,7 @@ void resizemouse(const Arg *arg)
     XEvent ev;
 
     SELCLIENT(c);
-    if (!c->is_floating) return;
+    if (!(c->flags & FLAG_FLOATING)) return;
 
     if (XGrabPointer(dpy, root, False,
                      PointerMotionMask | ButtonReleaseMask,
@@ -875,10 +894,10 @@ void resizemouse(const Arg *arg)
         case ButtonRelease:
             c->w = MAX(1, ev.xbutton.x_root - c->x);
             c->h = MAX(1, ev.xbutton.y_root - c->y);
-            if (c->x + c->w + 2 * borderpx > selmon->x + selmon->w)
-                c->w = selmon->x + selmon->w - c->x - 2 * borderpx;
-            if (c->y + c->h + 2 * borderpx > selmon->y + selmon->h)
-                c->h = selmon->y + selmon->h - c->y - 2 * borderpx;
+            if (c->x + c->w + (borderpx << 1) > selmon->x + selmon->w)
+                c->w = selmon->x + selmon->w - c->x - (borderpx << 1);
+            if (c->y + c->h + (borderpx << 1) > selmon->y + selmon->h)
+                c->h = selmon->y + selmon->h - c->y - (borderpx << 1);
             c->w = MAX(1, c->w);
             c->h = MAX(1, c->h);
             XResizeWindow(dpy, c->win, c->w, c->h);
@@ -952,6 +971,11 @@ void updategeom(void)
     }
 
     selmon = mons;
+
+    int nmon = 0;
+    for (Monitor *tm = mons; tm; tm = tm->next) nmon++;
+    for (int i = 0; i < WORKSPACE_COUNT; i++)
+        tagmap[i] = (nmon > 1 && i != WORKSPACE_COUNT - 1) ? 1 : 0;
 }
 
 static void
@@ -959,7 +983,7 @@ update_bar_visibility(Monitor *m)
 {
     if (!m || !m->barwin) return;
     if (m->ws->focus && m->ws->focus->u.client &&
-        m->ws->focus->u.client->is_fullscreen)
+        (m->ws->focus->u.client->flags & FLAG_FULLSCREEN))
         XUnmapWindow(dpy, m->barwin);
     else
         XMapWindow(dpy, m->barwin);
@@ -1118,8 +1142,8 @@ void drawbar(Monitor *m)
         x = idx * sw;
         itoa(i + 1, buf, sizeof(buf));
         XSetForeground(dpy, bar_gc, (m == selmon && m->curtag == i) ? bar_fg : bar_hl);
-        XDrawString(dpy, d, bar_gc, x + sw/2 - 4,
-                    (BAR_HEIGHT / 2) + 5, buf, strlen(buf));
+        XDrawString(dpy, d, bar_gc, x + (sw >> 1) - 4,
+                    (BAR_HEIGHT >> 1) + 5, buf, strlen(buf));
     }
 
     if (m->barpm)
@@ -1316,7 +1340,7 @@ void configurerequest(XEvent *e)
     wc.sibling     = ev->above;
     wc.stack_mode  = ev->detail;
 
-    if (c && c->is_floating) {
+    if (c && (c->flags & FLAG_FLOATING)) {
         c->x = ev->x; c->y = ev->y;
         c->w = ev->width; c->h = ev->height;
         XConfigureWindow(dpy, ev->window, ev->value_mask, &wc);
@@ -1356,8 +1380,8 @@ void togglefullscreen(const Arg *arg)
     Client *c;
     SELCLIENT(c);
 
-    c->is_fullscreen = !c->is_fullscreen;
-    if (c->is_fullscreen) {
+    c->flags ^= FLAG_FULLSCREEN;
+    if (c->flags & FLAG_FULLSCREEN) {
         selmon->ws->fs_client = c;
         c->tile_x = c->x; c->tile_y = c->y;
         c->tile_w = c->w; c->tile_h = c->h;
@@ -1385,18 +1409,18 @@ void togglefloating(const Arg *arg)
     int fw, fh;
     SELCLIENT(c);
 
-    c->is_floating = !c->is_floating;
-    if (c->is_floating) {
+    c->flags ^= FLAG_FLOATING;
+    if (c->flags & FLAG_FLOATING) {
         c->tile_x = c->x; c->tile_y = c->y;
         c->tile_w = c->w; c->tile_h = c->h;
-        fw = selmon->w * 0.6f;
-        fh = selmon->h * 0.6f;
-        c->x = selmon->x + (selmon->w - fw) / 2;
-        c->y = selmon->y + (selmon->h - fh) / 2;
-        if (c->x + fw + 2 * borderpx > selmon->x + selmon->w)
-            c->x = selmon->x + selmon->w - fw - 2 * borderpx;
-        if (c->y + fh + 2 * borderpx > selmon->y + selmon->h)
-            c->y = selmon->y + selmon->h - fh - 2 * borderpx;
+        fw = (selmon->w * 3) / 5;
+        fh = (selmon->h * 3) / 5;
+        c->x = selmon->x + ((selmon->w - fw) >> 1);
+        c->y = selmon->y + ((selmon->h - fh) >> 1);
+        if (c->x + fw + (borderpx << 1) > selmon->x + selmon->w)
+            c->x = selmon->x + selmon->w - fw - (borderpx << 1);
+        if (c->y + fh + (borderpx << 1) > selmon->y + selmon->h)
+            c->y = selmon->y + selmon->h - fh - (borderpx << 1);
         if (c->x < selmon->x) c->x = selmon->x;
         if (c->y < selmon->y) c->y = selmon->y;
         c->w = fw; c->h = fh;
