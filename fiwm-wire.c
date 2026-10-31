@@ -1125,14 +1125,24 @@ static inline void XUngrabPointer(Display *d, Time time) {
 }
 
 static inline int XQueryPointer(Display *d, Window w, Window *r, Window *c, int *rx, int *ry, int *wx, int *wy, unsigned int *mask) {
-    (void)d; (void)w;
-    if (r) *r = d ? d->root : 0;
-    if (c) *c = 0;
-    if (rx) *rx = 0;
-    if (ry) *ry = 0;
-    if (wx) *wx = 0;
-    if (wy) *wy = 0;
-    if (mask) *mask = 0;
+    if (!d) return 0;
+    unsigned int p[2];
+    p[0] = (2 << 16) | 38;
+    p[1] = (unsigned int)w;
+    _xwire_write(d->fd, p, 8);
+    _xwire_flush(d->fd);
+
+    unsigned char rep[32];
+    if (_xwire_read(d->fd, rep, 32) != 32 || rep[0] != 1)
+        return 0;
+
+    if (r) *r = *(unsigned int *)&rep[8];
+    if (c) *c = *(unsigned int *)&rep[12];
+    if (rx) *rx = *(short *)&rep[16];
+    if (ry) *ry = *(short *)&rep[18];
+    if (wx) *wx = *(short *)&rep[20];
+    if (wy) *wy = *(short *)&rep[22];
+    if (mask) *mask = *(unsigned short *)&rep[24];
     return 1;
 }
 
@@ -1376,7 +1386,7 @@ static const char *colors[]      = {
     "#685742",  /* COL_BAR_HL          — texto dos workspaces inativos na barra (marrom miasma) */
 };
 static int tagmap[WORKSPACE_COUNT] = {
-    1, 1, 1, 1, 1, 1, 1, 1, 0
+    0, 0, 0, 0, 0, 0, 0, 0, 1
 };
 static const unsigned int MODKEY = Mod1Mask;
 
@@ -2018,7 +2028,7 @@ Client *find_client(Window w)
 void movemouse(const Arg *arg)
 {
     Client *c;
-    int di, ox, oy;
+    int di, ox = 0, oy = 0;
     unsigned int du;
     Window dw;
     XEvent ev;
@@ -2048,12 +2058,31 @@ void movemouse(const Arg *arg)
         case ButtonRelease:
             c->x = ev.xbutton.x_root - ox;
             c->y = ev.xbutton.y_root - oy;
-            if (c->x + c->w + (borderpx << 1) > selmon->x + selmon->w)
-                c->x = selmon->x + selmon->w - c->w - (borderpx << 1);
-            if (c->y + c->h + (borderpx << 1) > selmon->y + selmon->h)
-                c->y = selmon->y + selmon->h - c->h - (borderpx << 1);
-            if (c->x < selmon->x) c->x = selmon->x;
-            if (c->y < selmon->y) c->y = selmon->y;
+            {
+                int midx = c->x + (c->w >> 1);
+                int midy = c->y + (c->h >> 1);
+                Monitor *target_mon = selmon;
+                for (Monitor *tm = mons; tm; tm = tm->next) {
+                    if (midx >= tm->x && midx < tm->x + tm->w &&
+                        midy >= tm->y && midy < tm->y + tm->h) {
+                        target_mon = tm;
+                        break;
+                    }
+                }
+                if (target_mon) {
+                    if (target_mon != selmon) {
+                        selmon->dirty = 1;
+                        selmon = target_mon;
+                        selmon->dirty = 1;
+                    }
+                    if (c->x + c->w + (borderpx << 1) > target_mon->x + target_mon->w)
+                        c->x = target_mon->x + target_mon->w - c->w - (borderpx << 1);
+                    if (c->y + c->h + (borderpx << 1) > target_mon->y + target_mon->h)
+                        c->y = target_mon->y + target_mon->h - c->h - (borderpx << 1);
+                    if (c->x < target_mon->x) c->x = target_mon->x;
+                    if (c->y < target_mon->y) c->y = target_mon->y;
+                }
+            }
             XMoveWindow(dpy, c->win, c->x, c->y);
             XUngrabPointer(dpy, CurrentTime);
             focus(selmon, selmon->ws->focus);
@@ -2235,7 +2264,7 @@ void updategeom(void)
                 unique[nunique++] = info[i];
 
         if (nunique > 1) {
-            static const int default_dual_tagmap[WORKSPACE_COUNT] = { 1, 1, 1, 1, 1, 1, 1, 1, 0 };
+            static const int default_dual_tagmap[WORKSPACE_COUNT] = { 0, 0, 0, 0, 0, 0, 0, 0, 1 };
             for (int i = 0; i < WORKSPACE_COUNT; i++)
                 tagmap[i] = default_dual_tagmap[i];
         } else {
@@ -2258,6 +2287,12 @@ void updategeom(void)
     }
 
     selmon = mons;
+    for (Monitor *tm = mons; tm; tm = tm->next) {
+        if (tm->num == 0) {
+            selmon = tm;
+            break;
+        }
+    }
 }
 
 static void
@@ -2305,7 +2340,7 @@ monitor_in_direction(Monitor *m, int orient, int dir)
 
 void focusworkspace(const Arg *arg)
 {
-    Monitor *m, *om, *prev;
+    Monitor *m, *prev;
     Workspace *oldws;
     int tag = arg->i;
 
@@ -2318,7 +2353,7 @@ void focusworkspace(const Arg *arg)
     /* Redirect to pinned monitor if this workspace has a home */
     if (tagmap[tag] >= 0) {
         for (Monitor *tm = mons; tm; tm = tm->next) {
-            if (tm->num == tagmap[tag] && tm != m) {
+            if (tm->num == tagmap[tag]) {
                 m = tm;
                 selmon = tm;
                 break;
@@ -2333,34 +2368,21 @@ void focusworkspace(const Arg *arg)
         if (prev != m) { prev->dirty = 1; m->dirty = 1; }
         update_bar_visibility(m);
         arrange(m);
-        if (prev != m) drawbar(prev);
+        drawbar(m);
+        if (prev != m) {
+            update_bar_visibility(prev);
+            arrange(prev);
+            drawbar(prev);
+        }
         return;
     }
 
     oldws = m->ws;
     node_hide_foreach(oldws->root);
 
-    om = NULL;
-    for (om = mons; om; om = om->next) {
-        if (om != m && om->curtag == tag) {
-            Workspace *tmpws = m->ws;
-            int tmptag = m->curtag;
-            m->curtag = tag;
-            m->ws     = &workspaces[tag];
-            om->curtag = tmptag;
-            om->ws     = tmpws;
-            om->dirty = 1;
-            break;
-        }
-    }
-    if (!om) {
-        m->curtag = tag;
-        m->ws     = &workspaces[tag];
-    } else {
-        update_bar_visibility(om);
-        arrange(om);
-    }
-    m->dirty = 1;
+    m->curtag = tag;
+    m->ws     = &workspaces[tag];
+    m->dirty  = 1;
 
     if (m->ws->focus && m->ws->focus->u.client)
         focus(m, m->ws->focus);
@@ -2368,12 +2390,23 @@ void focusworkspace(const Arg *arg)
         Node *first = node_first_leaf(m->ws->root);
         if (first)
             focus(m, first);
+    } else {
+        XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
+        XChangeProperty(dpy, root, netatom[NET_ACTIVE_WINDOW],
+                        XA_WINDOW, 32, PropModeReplace,
+                        (unsigned char *)&(Window){0}, 1);
     }
 
-    if (prev != m) prev->dirty = 1;
     update_bar_visibility(m);
     arrange(m);
-    if (prev != m) drawbar(prev);
+    drawbar(m);
+
+    if (prev != m) {
+        prev->dirty = 1;
+        update_bar_visibility(prev);
+        arrange(prev);
+        drawbar(prev);
+    }
 }
 
 void focusworkspace_next(const Arg *arg)
@@ -2497,7 +2530,8 @@ void buttonpress(XEvent *e)
                     tags[ntags++] = i;
             if (ntags > 0) {
                 int sw = m->w / ntags;
-                int xpos = e->xbutton.x_root;
+                int xpos = e->xbutton.x_root - m->x;
+                if (xpos < 0) xpos = 0;
                 int clicked = 0;
                 while (xpos >= sw && clicked < ntags - 1) {
                     xpos -= sw;
@@ -2817,16 +2851,27 @@ void movecmd(const Arg *arg)
 
         c->workspace = tag;
         workspace_insert(&workspaces[tag], c, SPLIT_VERTICAL);
-        if (tag != selmon->curtag) {
-            XMoveWindow(dpy, c->win, -9999, -9999);
-            if (!newfocus) {
-                XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
-                XChangeProperty(dpy, root, netatom[NET_ACTIVE_WINDOW],
-                                XA_WINDOW, 32, PropModeReplace,
-                                (unsigned char *)&(Window){0}, 1);
+        Monitor *target_m = NULL;
+        for (Monitor *tm = mons; tm; tm = tm->next) {
+            if (tm->curtag == tag) {
+                target_m = tm;
+                break;
             }
         }
+        if (target_m) {
+            arrange(target_m);
+            drawbar(target_m);
+        } else {
+            XMoveWindow(dpy, c->win, -9999, -9999);
+        }
+        if (!newfocus) {
+            XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
+            XChangeProperty(dpy, root, netatom[NET_ACTIVE_WINDOW],
+                            XA_WINDOW, 32, PropModeReplace,
+                            (unsigned char *)&(Window){0}, 1);
+        }
         arrange(selmon);
+        drawbar(selmon);
         return;
     }
 
