@@ -889,7 +889,7 @@ static inline int XNextEvent(Display *d, XEvent *e) {
     }
 }
 
-static inline void XFree(void *p) { (void)p; }
+#define XFree(p) ((void)0)
 
 static inline Atom XInternAtom(Display *d, const char *name, int only_if_exists) {
     if (!d || !name) return 0;
@@ -929,10 +929,9 @@ static inline int XAllocNamedColor(Display *d, Colormap m, const char *name, XCo
         const char *p = name + 1;
         while (*p) {
             val <<= 4;
-            if (*p >= '0' && *p <= '9') val |= (*p - '0');
-            else if (*p >= 'a' && *p <= 'f') val |= (*p - 'a' + 10);
-            else if (*p >= 'A' && *p <= 'F') val |= (*p - 'A' + 10);
-            p++;
+            unsigned char c = (unsigned char)*p++;
+            if (c >= '0' && c <= '9') val |= (c - '0');
+            else if ((c | 0x20) >= 'a' && (c | 0x20) <= 'f') val |= ((c | 0x20) - 'a' + 10);
         }
     }
     scr->pixel = val;
@@ -1420,30 +1419,14 @@ static size_t strlen(const char *s)
     return n;
 }
 
-static int strcmp(const char *a, const char *b)
-{
-    while (*a && *a == *b) { a++; b++; }
-    return (unsigned char)*a - (unsigned char)*b;
-}
+#define free(p) ((void)0)
 
 static void *memset(void *s, int c, size_t n)
 {
-    unsigned char *p = s;
-    unsigned long val = (unsigned char)c;
-    if (n >= 8) {
-        val |= val << 8;
-        val |= val << 16;
-        val |= val << 32;
-        while (n >= 8) {
-            *(unsigned long *)p = val;
-            p += 8;
-            n -= 8;
-        }
-    }
+    unsigned char *p = (unsigned char *)s;
     while (n--) *p++ = (unsigned char)c;
     return s;
 }
-
 
 #define HEAP_SIZE (1UL * 1024)          /* 1 KB — bump allocator */
 static char heap[HEAP_SIZE];
@@ -1456,11 +1439,8 @@ static void *bump_calloc(size_t nmemb, size_t size)
         return NULL;
     void *ptr = heap + heap_ptr;
     heap_ptr += total;
-    memset(ptr, 0, total);
     return ptr;
 }
-
-static void free(void *p) { (void)p; }
 static char *strchrnul(const char *s, int c)
 {
     while (*s && *s != (char)c) s++;
@@ -3104,7 +3084,7 @@ int wm_main(int argc, char **argv, char **envp)
 
     setup_environ(envp);
 
-    if (argc == 2 && strcmp(argv[1], "-v") == 0) {
+    if (argc == 2 && argv[1][0] == '-' && argv[1][1] == 'v' && !argv[1][2]) {
         sys_write(1, "fiwm 0.1\n", 9);
         return 0;
     }
