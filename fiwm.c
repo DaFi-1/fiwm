@@ -650,8 +650,11 @@ static inline Window XCreateWindow(Display *d, Window parent, int x, int y, unsi
 
 static inline void XLowerWindow(Display *d, Window w) {
     /* Opcode 12: ConfigureWindow (CWStackMode = 64, Below = 1) */
-    unsigned int p[4] = { (4 << 16) | 12, (unsigned int)w, 64, 1 };
-    _xwire_write(d->fd, p, sizeof(p));
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
+    p[0] = (4 << 16) | 12;
+    p[1] = (unsigned int)w;
+    p[2] = 64;
+    p[3] = 1;
 }
 
 static inline void XConfigureWindow(Display *d, Window w, unsigned long valmask, XWindowChanges *wc) {
@@ -671,12 +674,11 @@ static inline void XConfigureWindow(Display *d, Window w, unsigned long valmask,
 }
 
 static inline void XSelectInput(Display *d, Window w, long mask) {
-    unsigned int p[4];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 2;
     p[1] = (unsigned int)w;
     p[2] = 0x800;
     p[3] = (unsigned int)mask;
-    _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline void XChangeWindowAttributes(Display *d, Window w, unsigned long valmask, XSetWindowAttributes *a) {
@@ -771,37 +773,36 @@ static inline void XSetInputFocus(Display *d, Window w, int revert, Time t) {
 
 static inline void XGrabKey(Display *d, int keycode, unsigned int mod, Window w, int owner, int sync_p, int sync_k) {
     (void)owner; (void)sync_p; (void)sync_k;
-    unsigned int p[4];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | (1 << 8) | 33; /* X_GrabKey: reqType=33, ownerEvents=1, length=4 */
     p[1] = (unsigned int)w;
-    p[2] = (1 << 24) | (((unsigned int)(keycode & 0xFF)) << 16) | (mod & 0xFFFF); /* modifiers (0..15), key (16..23), pointerMode=1 (24..31) */
-    p[3] = 1; /* keyboardMode=1 (0..7), pad (8..31) */
-    _xwire_write(d->fd, p, sizeof(p));
+    p[2] = (1 << 24) | (((unsigned int)(keycode & 0xFF)) << 16) | (mod & 0xFFFF);
+    p[3] = 1;
 }
 
 static inline void XUngrabKey(Display *d, int keycode, unsigned int mod, Window w) {
-    unsigned int p[3];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 12);
     p[0] = (3 << 16) | ((keycode & 0xFF) << 8) | 34; /* X_UngrabKey: reqType=34, key=keycode, length=3 */
     p[1] = (unsigned int)w;
     p[2] = mod & 0xFFFF;
-    _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline void XGrabButton(Display *d, unsigned int btn, unsigned int mod, Window w, int owner, unsigned int mask, int sync_p, int sync_k, Window confine, unsigned long cursor) {
     (void)owner; (void)sync_p; (void)sync_k; (void)confine; (void)cursor;
-    unsigned int p[6];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 24);
     p[0] = (6 << 16) | 28; /* X_GrabButton: reqType=28, ownerEvents=0, length=6 */
     p[1] = (unsigned int)w;
-    p[2] = (1 << 24) | (1 << 16) | (mask & 0xFFFF); /* eventMask (0..15), pointerMode=1 (16..23), keyboardMode=1 (24..31) */
+    p[2] = (1 << 24) | (1 << 16) | (mask & 0xFFFF);
     p[3] = (unsigned int)confine;
     p[4] = (unsigned int)cursor;
-    p[5] = ((mod & 0xFFFF) << 16) | (btn & 0xFF); /* button (0..7), pad (8..15), modifiers (16..31) */
-    _xwire_write(d->fd, p, sizeof(p));
+    p[5] = ((mod & 0xFFFF) << 16) | (btn & 0xFF);
 }
 
 static inline void XUngrabButton(Display *d, unsigned int btn, unsigned int mod, Window w) {
-    unsigned int p[3] = { (3 << 16) | (btn << 8) | 29, (unsigned int)w, mod };
-    _xwire_write(d->fd, p, sizeof(p));
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 12);
+    p[0] = (3 << 16) | (btn << 8) | 29;
+    p[1] = (unsigned int)w;
+    p[2] = mod;
 }
 
 static inline void XFlush(Display *d) {
@@ -1092,30 +1093,29 @@ static inline void XChangeProperty(Display *d, Window w, Atom prop, Atom type, i
 static inline int XGrabPointer(Display *d, Window grab_w, int owner, unsigned int mask, int sync_p, int sync_k, Window confine, unsigned long cursor, Time time) {
     (void)owner; (void)sync_p; (void)sync_k; (void)confine; (void)cursor; (void)time;
     if (!d) return 1;
-    unsigned int p[6];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 24);
     p[0] = (6 << 16) | 26; /* X_GrabPointer: reqType=26, length=6 */
     p[1] = (unsigned int)grab_w;
     p[2] = (1 << 24) | (1 << 16) | (mask & 0xFFFF);
     p[3] = (unsigned int)confine;
     p[4] = (unsigned int)cursor;
     p[5] = 0;
-    _xwire_write(d->fd, p, sizeof(p));
     _xwire_flush(d->fd);
     return 0; /* GrabSuccess == 0 */
 }
 
 static inline void XUngrabPointer(Display *d, Time time) {
     if (!d) return;
-    unsigned int p[2] = { (2 << 16) | 27, (unsigned int)time }; /* X_UngrabPointer */
-    _xwire_write(d->fd, p, sizeof(p));
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
+    p[0] = (2 << 16) | 27; /* X_UngrabPointer */
+    p[1] = (unsigned int)time;
 }
 
 static inline int XQueryPointer(Display *d, Window w, Window *r, Window *c, int *rx, int *ry, int *wx, int *wy, unsigned int *mask) {
     if (!d) return 0;
-    unsigned int p[2];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
     p[0] = (2 << 16) | 38;
     p[1] = (unsigned int)w;
-    _xwire_write(d->fd, p, 8);
     _xwire_flush(d->fd);
 
     unsigned char rep[32];
@@ -1134,7 +1134,7 @@ static inline int XQueryPointer(Display *d, Window w, Window *r, Window *c, int 
 
 static inline void XSendEvent(Display *d, Window w, int prop, long mask, XEvent *ev) {
     if (!d || !ev) return;
-    unsigned int p[11];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 44);
     p[0] = (11 << 16) | ((prop & 0xFF) << 8) | 25; /* X_SendEvent: reqType=25, length=11 */
     p[1] = (unsigned int)w;
     p[2] = (unsigned int)mask;
@@ -1152,7 +1152,6 @@ static inline void XSendEvent(Display *d, Window w, int prop, long mask, XEvent 
         const unsigned char *src = (const unsigned char *)ev;
         for (int i = 0; i < 32; i++) ep[i] = src[i];
     }
-    _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline XModifierKeymap *XGetModifierMapping(Display *d) {
@@ -1563,7 +1562,6 @@ Node *node_new(void)
     }
     n->is_leaf = 1;
     n->split   = 0;
-    n->u.client  = NULL;
     n->parent  = NULL;
     n->u.ch.first   = NULL;
     n->u.ch.second  = NULL;
