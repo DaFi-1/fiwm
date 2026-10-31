@@ -1819,6 +1819,13 @@ void unmanage(Client *c)
     client_freelist = c;
 }
 
+static void set_active_window(Window w)
+{
+    XChangeProperty(dpy, root, netatom[NET_ACTIVE_WINDOW],
+                    XA_WINDOW, 32, PropModeReplace,
+                    (unsigned char *)&w, 1);
+}
+
 void focus(Monitor *m, Node *n)
 {
     if (!m || !n || !n->u.client) return;
@@ -1830,9 +1837,7 @@ void focus(Monitor *m, Node *n)
     XSetWindowBorder(dpy, w, border_active);
     XSetInputFocus(dpy, w, RevertToPointerRoot, CurrentTime);
     XRaiseWindow(dpy, w);
-    XChangeProperty(dpy, root, netatom[NET_ACTIVE_WINDOW],
-                    XA_WINDOW, 32, PropModeReplace,
-                    (unsigned char *)&w, 1);
+    set_active_window(w);
 }
 
 Client *find_client(Window w)
@@ -2181,10 +2186,7 @@ monitor_in_direction(Monitor *m, int orient, int dir)
 
 static inline void reset_root_focus(void) {
     set_input_focus(dpy, root);
-    Window w = 0;
-    XChangeProperty(dpy, root, netatom[NET_ACTIVE_WINDOW],
-                    XA_WINDOW, 32, PropModeReplace,
-                    (unsigned char *)&w, 1);
+    set_active_window(0);
 }
 
 void focusworkspace(const Arg *arg)
