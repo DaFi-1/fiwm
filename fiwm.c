@@ -1442,7 +1442,7 @@ void node_pool_reset(void)
 
 Node *node_detach(Node *n, Workspace *ws)
 {
-    Node *parent, *sibling, *grandparent;
+    Node *parent, *sibling, *grandparent, *newfocus = NULL;
 
     if (!n || !n->is_leaf) return NULL;
     if (n->u.client && n->u.client->node == n)
@@ -1451,27 +1451,26 @@ Node *node_detach(Node *n, Workspace *ws)
     parent = n->parent;
     if (!parent) {
         ws->root = NULL;
-        return NULL;
-    }
-
-    sibling   = (parent->u.ch.first == n) ? parent->u.ch.second : parent->u.ch.first;
-    grandparent = parent->parent;
-
-    sibling->parent = grandparent;
-    if (grandparent) {
-        if (grandparent->u.ch.first == parent)
-            grandparent->u.ch.first = sibling;
-        else
-            grandparent->u.ch.second = sibling;
     } else {
-        ws->root = sibling;
+        sibling   = (parent->u.ch.first == n) ? parent->u.ch.second : parent->u.ch.first;
+        grandparent = parent->parent;
+
+        sibling->parent = grandparent;
+        if (grandparent) {
+            if (grandparent->u.ch.first == parent)
+                grandparent->u.ch.first = sibling;
+            else
+                grandparent->u.ch.second = sibling;
+        } else {
+            ws->root = sibling;
+        }
+
+        node_free(parent);
+        newfocus = sibling->is_leaf ? sibling : node_first_leaf(sibling);
     }
-
-    node_free(parent);
-
-    if (sibling->is_leaf)
-        return sibling;
-    return node_first_leaf(sibling);
+    node_free(n);
+    ws->focus = newfocus;
+    return newfocus;
 }
 
 Node *node_insert(Monitor *m, Client *c)
@@ -1720,7 +1719,6 @@ void manage(Window w, XWindowAttributes *wa)
 void unmanage(Client *c)
 {
     Monitor *m;
-    Node *newfocus;
 
     if (!c) return;
 
@@ -1732,11 +1730,8 @@ void unmanage(Client *c)
     if (m) {
         if (m->ws->fs_client == c)
             m->ws->fs_client = NULL;
-        if (c->node) {
-            newfocus = node_detach(c->node, m->ws);
-            m->ws->focus = newfocus;
-            node_free(c->node);
-        }
+        if (c->node)
+            node_detach(c->node, m->ws);
         m->dirty = 1;
         arrange(m);
     }
@@ -2559,8 +2554,6 @@ void movecmd(const Arg *arg)
         if (!c) return;
 
         Node *newfocus = node_detach(n, ws);
-        ws->focus = newfocus;
-        node_free(n);
 
         c->workspace = tag;
         workspace_insert(&workspaces[tag], c, SPLIT_VERTICAL);
@@ -2604,9 +2597,7 @@ void movecmd(const Arg *arg)
         if (om) {
             Client *c = n->u.client;
 
-            Node *newfocus = node_detach(n, ws);
-            ws->focus = newfocus;
-            node_free(n);
+            node_detach(n, ws);
 
             Node *nl = workspace_insert(om->ws, c, orient);
 
