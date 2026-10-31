@@ -1412,22 +1412,18 @@ void *ecalloc(size_t nmemb, size_t size)
 static void try_exec(const char *file, char *const argv[])
 {
     char buf[1024];
-    const char *path;
+    const char *path = NULL;
     const char *p;
-    int has_slash;
 
-    has_slash = (strchrnul(file, '/') - file) < (int)strlen(file);
-    if (has_slash) {
+    if (*strchrnul(file, '/') == '/') {
         sys_execve(file, argv, envp_global);
         return;
     }
 
-    path = NULL;
     if (envp_global) {
         for (char **ep = envp_global; *ep; ep++) {
-            if ((*ep)[0] == 'P' && (*ep)[1] == 'A' &&
-                (*ep)[2] == 'T' && (*ep)[3] == 'H' &&
-                (*ep)[4] == '=') {
+            const unsigned char *s = (const unsigned char *)*ep;
+            if (*(const unsigned int *)s == 0x48544150 && s[4] == '=') {
                 path = *ep + 5;
                 break;
             }
@@ -1438,15 +1434,11 @@ static void try_exec(const char *file, char *const argv[])
     p = path;
     while (*p) {
         const char *next = strchrnul(p, ':');
-        int len = (int)(next - p);
-        int i;
-        for (i = 0; i < len && i < (int)sizeof(buf) - 2; i++)
-            buf[i] = p[i];
-        buf[i] = '/';
-        i++;
-        for (int j = 0; file[j] && i < (int)sizeof(buf) - 1; j++, i++)
-            buf[i] = file[j];
-        buf[i] = '\0';
+        char *d = buf;
+        while (p < next && d < buf + sizeof(buf) - 2) *d++ = *p++;
+        *d++ = '/';
+        for (const char *s = file; *s && d < buf + sizeof(buf) - 1; ) *d++ = *s++;
+        *d = '\0';
         sys_execve(buf, argv, envp_global);
         p = *next ? next + 1 : next;
     }
