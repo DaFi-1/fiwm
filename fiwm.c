@@ -51,12 +51,14 @@ enum {
 
 struct Client {
     Window win;
+    Node *node;
+    Client *hnext;
+    Client *next;
+    Client *prev;
     unsigned short x, y, w, h;
     unsigned short tile_x, tile_y, tile_w, tile_h;
     short workspace;
     unsigned short flags;
-    Client *next;
-    Client *prev;
 };
 
 struct Node {
@@ -235,6 +237,35 @@ static Node  nodepool[NODEPOOL];
 static int   nodeidx;
 static Node *nodefreelist;
 static Client *client_freelist;
+
+enum { CLIENT_HASH_SIZE = 64 };
+static Client *client_hash[CLIENT_HASH_SIZE];
+
+static inline unsigned int client_hash_idx(Window w)
+{
+    return (unsigned int)(w ^ (w >> 6)) & (CLIENT_HASH_SIZE - 1);
+}
+
+static inline void hash_insert(Client *c)
+{
+    unsigned int h = client_hash_idx(c->win);
+    c->hnext = client_hash[h];
+    client_hash[h] = c;
+}
+
+static inline void hash_remove(Client *c)
+{
+    unsigned int h = client_hash_idx(c->win);
+    Client **pp = &client_hash[h];
+    while (*pp) {
+        if (*pp == c) {
+            *pp = c->hnext;
+            break;
+        }
+        pp = &(*pp)->hnext;
+    }
+    c->hnext = NULL;
+}
 
 char **envp_global;
 #define SYS_READ      0
@@ -499,6 +530,8 @@ Node *node_new(void)
 static void node_free(Node *n)
 {
     if (!n) return;
+    if (n->is_leaf && n->u.client && n->u.client->node == n)
+        n->u.client->node = NULL;
     n->parent = nodefreelist;
     nodefreelist = n;
 }
@@ -514,6 +547,8 @@ Node *node_detach(Node *n, Workspace *ws)
     Node *parent, *sibling, *grandparent;
 
     if (!n || !n->is_leaf) return NULL;
+    if (n->u.client && n->u.client->node == n)
+        n->u.client->node = NULL;
 
     parent = n->parent;
     if (!parent) {
@@ -549,6 +584,7 @@ Node *node_insert(Monitor *m, Client *c)
 
     newleaf = node_new();
     newleaf->u.client = c;
+    c->node = newleaf;
 
     if (!focus || !ws->root) {
         ws->root = newleaf;
@@ -639,15 +675,8 @@ Node *node_first_leaf(Node *n)
 
 Node *node_find_client(Node *n, Client *c)
 {
-    Node *f;
-    if (!n) return NULL;
-    if (n->is_leaf && n->u.client == c)
-        return n;
-    if (!n->is_leaf) {
-        f = node_find_client(n->u.ch.first, c);
-        return f ? f : node_find_client(n->u.ch.second, c);
-    }
-    return NULL;
+    (void)n;
+    return c ? c->node : NULL;
 }
 
 void node_hide_foreach(Node *n)
@@ -675,7 +704,7 @@ arrange_floating(Monitor *m)
         if (c->workspace != m->curtag) continue;
 
         XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
-        n = node_find_client(m->ws->root, c);
+        n = c->node;
         if (n && n != m->ws->focus) {
             XSetWindowBorderWidth(dpy, c->win, borderpx);
             XSetWindowBorder(dpy, c->win, border_inactive);
@@ -768,11 +797,14 @@ void manage(Window w, XWindowAttributes *wa)
         c = ecalloc(1, sizeof(Client));
     }
     c->win = w;
+    c->node = NULL;
+    c->hnext = NULL;
     c->x   = wa->x;
     c->y   = wa->y;
     c->w   = wa->width;
     c->h   = wa->height;
     c->workspace = selmon ? selmon->curtag : 0;
+    hash_insert(c);
 
     if (XGetWindowProperty(dpy, w, netatom[NET_WM_WINDOW_TYPE], 0L, 2L,
                            False, XA_ATOM, &actual, &format,
@@ -825,8 +857,10 @@ void unmanage(Client *c)
 
     if (!c) return;
 
+    hash_remove(c);
+
     for (m = mons; m; m = m->next) {
-        n = node_find_client(m->ws->root, c);
+        n = c->node;
         if (!n) continue;
         if (m->ws->fs_client == c)
             m->ws->fs_client = NULL;
@@ -848,6 +882,7 @@ void unmanage(Client *c)
     XUngrabButton(dpy, AnyButton, AnyModifier, c->win);
     c->next = client_freelist;
     c->prev = NULL;
+    c->node = NULL;
     client_freelist = c;
 }
 
@@ -867,8 +902,8 @@ void focus(Monitor *m, Node *n)
 
 Client *find_client(Window w)
 {
-    Client *c;
-    for (c = clients; c; c = c->next)
+    unsigned int h = client_hash_idx(w);
+    for (Client *c = client_hash[h]; c; c = c->hnext)
         if (c->win == w) return c;
     return NULL;
 }
@@ -1621,6 +1656,7 @@ static Node *workspace_insert(Workspace *ws, Client *c, int split)
 {
     Node *nl = node_new();
     nl->u.client = c;
+    c->node = nl;
 
     if (!ws->root) {
         ws->root = nl;
@@ -1704,6 +1740,8 @@ void movecmd(const Arg *arg)
         tmpc = n->u.client;
         n->u.client = target->u.client;
         target->u.client = tmpc;
+        n->u.client->node = n;
+        target->u.client->node = target;
         focus(selmon, target);
         arrange(selmon);
         return;
@@ -1914,6 +1952,7 @@ void cleanup(void)
 
     while (clients) {
         c = clients;
+        hash_remove(c);
         XSelectInput(dpy, c->win, NoEventMask);
         XUngrabButton(dpy, AnyButton, AnyModifier, c->win);
         clients = c->next;
