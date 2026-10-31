@@ -1669,7 +1669,6 @@ arrange_floating(Monitor *m)
         if (c->workspace != m->curtag) continue;
 
         XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
-        XSetWindowBorderWidth(dpy, c->win, borderpx);
         XSetWindowBorder(dpy, c->win, (c->node && c->node != m->ws->focus) ? border_inactive : border_active);
     }
 }
@@ -2581,7 +2580,6 @@ void togglefloating(const Arg *arg)
         c->w = fw; c->h = fh;
         c->workspace = selmon->curtag;
         XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
-        XSetWindowBorderWidth(dpy, c->win, borderpx);
         XSetWindowBorder(dpy, c->win, border_active);
         XRaiseWindow(dpy, c->win);
     } else {
