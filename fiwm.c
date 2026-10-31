@@ -809,25 +809,12 @@ static inline void XFlush(Display *d) {
 }
 static inline void XSync(Display *d, int discard) { (void)discard; if (d) _xwire_flush(d->fd); }
 
-struct pollfd {
-    int fd;
-    short events;
-    short revents;
-};
-
 static inline int XNextEvent(Display *d, XEvent *e) {
     for (;;) {
         if (_xwire_in_pos + 32 > _xwire_in_len) {
             _xwire_flush(d->fd);
             _xwire_in_pos = 0;
             _xwire_in_len = 0;
-
-            struct pollfd pfd;
-            pfd.fd = d->fd;
-            pfd.events = 1; /* POLLIN */
-            pfd.revents = 0;
-            int pr = (int)_xwire_sys3(SYS_POLL, (long)&pfd, 1, -1);
-            if (pr <= 0) { e->type = 0; return 1; }
 
             int n = (int)_xwire_sys3(SYS_READ, d->fd, (long)_xwire_inbuf, sizeof(_xwire_inbuf));
             if (n <= 0) { e->type = 0; return 1; }
@@ -841,6 +828,22 @@ static inline int XNextEvent(Display *d, XEvent *e) {
         unsigned char code = buf[0] & 0x7F;
         e->type = (int)code;
         switch (code) {
+        case 2: /* KeyPress */
+        case 3: /* KeyRelease */
+        case 4: /* ButtonPress */
+        case 5: /* ButtonRelease */
+        case 6: /* MotionNotify */
+            e->xkey.window = *(const unsigned int *)&buf[12];
+            e->xkey.root = *(const unsigned int *)&buf[8];
+            e->xkey.subwindow = *(const unsigned int *)&buf[16];
+            e->xkey.time = *(const unsigned int *)&buf[4];
+            e->xkey.x_root = *(const short *)&buf[20];
+            e->xkey.y_root = *(const short *)&buf[22];
+            e->xkey.x = *(const short *)&buf[24];
+            e->xkey.y = *(const short *)&buf[26];
+            e->xkey.keycode = buf[1];
+            e->xkey.state = *(const unsigned short *)&buf[28];
+            return 0;
         case 20: /* MapRequest */
             e->xmaprequest.window = *(const unsigned int *)&buf[8];
             e->xmaprequest.parent = *(const unsigned int *)&buf[4];
@@ -878,46 +881,6 @@ static inline int XNextEvent(Display *d, XEvent *e) {
             e->xcrossing.y = *(const short *)&buf[26];
             e->xcrossing.mode = (int)buf[30];
             e->xcrossing.detail = (int)buf[1];
-            return 0;
-        case 6: /* MotionNotify */
-            e->xmotion.window = *(const unsigned int *)&buf[12];
-            e->xmotion.root = *(const unsigned int *)&buf[8];
-            e->xmotion.subwindow = *(const unsigned int *)&buf[16];
-            e->xmotion.time = *(const unsigned int *)&buf[4];
-            e->xmotion.x_root = *(const short *)&buf[20];
-            e->xmotion.y_root = *(const short *)&buf[22];
-            e->xmotion.x = *(const short *)&buf[24];
-            e->xmotion.y = *(const short *)&buf[26];
-            e->xmotion.state = *(const unsigned short *)&buf[28];
-            return 0;
-        case 5: /* ButtonRelease */
-            e->xbutton.window = *(const unsigned int *)&buf[12];
-            e->xbutton.root = *(const unsigned int *)&buf[8];
-            e->xbutton.subwindow = *(const unsigned int *)&buf[16];
-            e->xbutton.time = *(const unsigned int *)&buf[4];
-            e->xbutton.x_root = *(const short *)&buf[20];
-            e->xbutton.y_root = *(const short *)&buf[22];
-            e->xbutton.x = *(const short *)&buf[24];
-            e->xbutton.y = *(const short *)&buf[26];
-            e->xbutton.button = buf[1];
-            e->xbutton.state = *(const unsigned short *)&buf[28];
-            return 0;
-        case 4: /* ButtonPress */
-            e->xbutton.window = *(const unsigned int *)&buf[12];
-            e->xbutton.root = *(const unsigned int *)&buf[8];
-            e->xbutton.subwindow = *(const unsigned int *)&buf[16];
-            e->xbutton.time = *(const unsigned int *)&buf[4];
-            e->xbutton.x_root = *(const short *)&buf[20];
-            e->xbutton.y_root = *(const short *)&buf[22];
-            e->xbutton.x = *(const short *)&buf[24];
-            e->xbutton.y = *(const short *)&buf[26];
-            e->xbutton.button = buf[1];
-            e->xbutton.state = *(const unsigned short *)&buf[28];
-            return 0;
-        case 2: /* KeyPress */
-            e->xkey.window = *(const unsigned int *)&buf[12];
-            e->xkey.keycode = buf[1];
-            e->xkey.state = *(const unsigned short *)&buf[28];
             return 0;
         default:
             return 0;
