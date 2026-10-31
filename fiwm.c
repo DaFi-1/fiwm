@@ -795,13 +795,9 @@ static inline int XNextEvent(Display *d, XEvent *e) {
         case 5: /* ButtonRelease */
         case 6: /* MotionNotify */
             e->xkey.window = *(const unsigned int *)&buf[12];
-            e->xkey.root = *(const unsigned int *)&buf[8];
             e->xkey.subwindow = *(const unsigned int *)&buf[16];
-            e->xkey.time = *(const unsigned int *)&buf[4];
             e->xkey.x_root = *(const short *)&buf[20];
             e->xkey.y_root = *(const short *)&buf[22];
-            e->xkey.x = *(const short *)&buf[24];
-            e->xkey.y = *(const short *)&buf[26];
             e->xkey.keycode = buf[1];
             e->xkey.state = *(const unsigned short *)&buf[28];
             return 0;
@@ -828,12 +824,6 @@ static inline int XNextEvent(Display *d, XEvent *e) {
             return 0;
         case 7: /* EnterNotify */
             e->xcrossing.window = *(const unsigned int *)&buf[12];
-            e->xcrossing.root = *(const unsigned int *)&buf[8];
-            e->xcrossing.subwindow = *(const unsigned int *)&buf[16];
-            e->xcrossing.x_root = *(const short *)&buf[20];
-            e->xcrossing.y_root = *(const short *)&buf[22];
-            e->xcrossing.x = *(const short *)&buf[24];
-            e->xcrossing.y = *(const short *)&buf[26];
             e->xcrossing.mode = (int)buf[30];
             e->xcrossing.detail = (int)buf[1];
             return 0;
