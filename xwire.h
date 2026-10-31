@@ -783,9 +783,39 @@ static inline int XNextEvent(Display *d, XEvent *e) {
             e->xcrossing.mode = 0;
             e->xcrossing.detail = 0;
             return 0;
+        } else if (code == 6) {
+            e->type = MotionNotify;
+            e->xmotion.window = *(unsigned int *)&buf[12];
+            e->xmotion.root = *(unsigned int *)&buf[8];
+            e->xmotion.subwindow = *(unsigned int *)&buf[16];
+            e->xmotion.time = *(unsigned int *)&buf[4];
+            e->xmotion.x_root = *(short *)&buf[20];
+            e->xmotion.y_root = *(short *)&buf[22];
+            e->xmotion.x = *(short *)&buf[24];
+            e->xmotion.y = *(short *)&buf[26];
+            e->xmotion.state = *(unsigned short *)&buf[28];
+            return 0;
+        } else if (code == 5) {
+            e->type = ButtonRelease;
+            e->xbutton.window = *(unsigned int *)&buf[12];
+            e->xbutton.root = *(unsigned int *)&buf[8];
+            e->xbutton.subwindow = *(unsigned int *)&buf[16];
+            e->xbutton.time = *(unsigned int *)&buf[4];
+            e->xbutton.x_root = *(short *)&buf[20];
+            e->xbutton.y_root = *(short *)&buf[22];
+            e->xbutton.x = *(short *)&buf[24];
+            e->xbutton.y = *(short *)&buf[26];
+            e->xbutton.button = buf[1];
+            e->xbutton.state = *(unsigned short *)&buf[28];
+            return 0;
         } else if (code == 4) {
             e->type = ButtonPress;
             e->xbutton.window = *(unsigned int *)&buf[12];
+            e->xbutton.root = *(unsigned int *)&buf[8];
+            e->xbutton.subwindow = *(unsigned int *)&buf[16];
+            e->xbutton.time = *(unsigned int *)&buf[4];
+            e->xbutton.x_root = *(short *)&buf[20];
+            e->xbutton.y_root = *(short *)&buf[22];
             e->xbutton.x = *(short *)&buf[24];
             e->xbutton.y = *(short *)&buf[26];
             e->xbutton.button = buf[1];
@@ -969,6 +999,7 @@ static inline void XCopyArea(Display *d, Drawable src, Drawable dst, GC gc, int 
 
 static inline int XGetWindowAttributes(Display *d, Window w, XWindowAttributes *attr) {
     (void)d; (void)w;
+    if (!attr) return 0;
     attr->x = 0; attr->y = 0;
     attr->width = 640; attr->height = 480;
     attr->border_width = 1;
@@ -981,19 +1012,76 @@ static inline int XQueryTree(Display *d, Window w, Window *root_return, Window *
     (void)d; (void)w;
     if (root_return) *root_return = d ? d->root : 0;
     if (parent_return) *parent_return = d ? d->root : 0;
-    if (children_return) *children_return = (void *)0;
+    if (children_return) *children_return = NULL;
     if (nchildren_return) *nchildren_return = 0;
     return 1;
 }
 
 static inline int XGetWindowProperty(Display *d, Window w, Atom prop, long off, long len, int del, Atom req_t, Atom *act_t, int *act_f, unsigned long *nitems, unsigned long *bytes_after, unsigned char **prop_ret) {
-    (void)d; (void)w; (void)prop; (void)off; (void)len; (void)del; (void)req_t; (void)act_t; (void)act_f; (void)nitems; (void)bytes_after;
-    *prop_ret = (void *)0;
-    return 0;
+    (void)d; (void)w; (void)prop; (void)off; (void)len; (void)del; (void)req_t;
+    if (act_t) *act_t = 0;
+    if (act_f) *act_f = 0;
+    if (nitems) *nitems = 0;
+    if (bytes_after) *bytes_after = 0;
+    if (prop_ret) *prop_ret = NULL;
+    return 1;
 }
 
 static inline void XChangeProperty(Display *d, Window w, Atom prop, Atom type, int fmt, int mode, const unsigned char *data, int nelem) {
-    (void)d; (void)w; (void)prop; (void)type; (void)fmt; (void)mode; (void)data; (void)nelem;
+    if (!d || !w || !prop || !data || nelem <= 0) return;
+    int bytes_per_elem = (fmt == 32) ? 4 : ((fmt == 16) ? 2 : 1);
+    int data_bytes = nelem * bytes_per_elem;
+    int pad = (4 - (data_bytes & 3)) & 3;
+    int total_bytes = 24 + data_bytes + pad;
+    int words = total_bytes >> 2;
+
+    unsigned int p[128];
+    if (words > (int)(sizeof(p) / sizeof(p[0]))) return;
+
+    p[0] = (words << 16) | ((mode & 0xFF) << 8) | 18; /* X_ChangeProperty */
+    p[1] = (unsigned int)w;
+    p[2] = (unsigned int)prop;
+    p[3] = (unsigned int)type;
+    p[4] = ((unsigned int)fmt) & 0xFF;
+    p[5] = (unsigned int)nelem;
+
+    unsigned char *dp = (unsigned char *)&p[6];
+    for (int i = 0; i < data_bytes; i++) dp[i] = data[i];
+    for (int i = 0; i < pad; i++) dp[data_bytes + i] = 0;
+
+    _xwire_write(d->fd, p, total_bytes);
+}
+
+static inline int XGrabPointer(Display *d, Window grab_w, int owner, unsigned int mask, int sync_p, int sync_k, Window confine, unsigned long cursor, Time time) {
+    (void)owner; (void)sync_p; (void)sync_k; (void)confine; (void)cursor; (void)time;
+    if (!d) return 1;
+    unsigned int p[6];
+    p[0] = (6 << 16) | 26; /* X_GrabPointer: reqType=26, length=6 */
+    p[1] = (unsigned int)grab_w;
+    p[2] = (1 << 24) | (1 << 16) | (mask & 0xFFFF);
+    p[3] = (unsigned int)confine;
+    p[4] = (unsigned int)cursor;
+    p[5] = 0;
+    _xwire_write(d->fd, p, sizeof(p));
+    return 0; /* GrabSuccess */
+}
+
+static inline void XUngrabPointer(Display *d, Time time) {
+    if (!d) return;
+    unsigned int p[2] = { (2 << 16) | 27, (unsigned int)time }; /* X_UngrabPointer */
+    _xwire_write(d->fd, p, sizeof(p));
+}
+
+static inline int XQueryPointer(Display *d, Window w, Window *r, Window *c, int *rx, int *ry, int *wx, int *wy, unsigned int *mask) {
+    (void)d; (void)w;
+    if (r) *r = d ? d->root : 0;
+    if (c) *c = 0;
+    if (rx) *rx = 0;
+    if (ry) *ry = 0;
+    if (wx) *wx = 0;
+    if (wy) *wy = 0;
+    if (mask) *mask = 0;
+    return 1;
 }
 
 static inline void XSendEvent(Display *d, Window w, int prop, long mask, XEvent *ev) {
@@ -1017,16 +1105,6 @@ static inline void XSendEvent(Display *d, Window w, int prop, long mask, XEvent 
         for (int i = 0; i < 32; i++) ep[i] = src[i];
     }
     _xwire_write(d->fd, p, sizeof(p));
-}
-
-static inline int XGrabPointer(Display *d, Window grab_w, int owner, unsigned int mask, int sync_p, int sync_k, Window confine, unsigned long cursor, Time time) {
-    (void)d; (void)grab_w; (void)owner; (void)mask; (void)sync_p; (void)sync_k; (void)confine; (void)cursor; (void)time;
-    return 0;
-}
-static inline void XUngrabPointer(Display *d, Time time) { (void)d; (void)time; }
-static inline int XQueryPointer(Display *d, Window w, Window *r, Window *c, int *rx, int *ry, int *wx, int *wy, unsigned int *mask) {
-    (void)d; (void)w; (void)r; (void)c; (void)rx; (void)ry; (void)wx; (void)wy; (void)mask;
-    return 1;
 }
 
 static inline XModifierKeymap *XGetModifierMapping(Display *d) {
