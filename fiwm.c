@@ -1830,12 +1830,9 @@ void unmanage(Client *c)
             newfocus = node_detach(c->node, m->ws);
             m->ws->focus = newfocus;
             node_free(c->node);
-            m->dirty = 1;
-            arrange(m);
-        } else if (c->flags & FLAG_FLOATING) {
-            m->dirty = 1;
-            arrange(m);
         }
+        m->dirty = 1;
+        arrange(m);
     }
 
     if (c->next) c->next->prev = c->prev;
