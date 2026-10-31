@@ -1481,9 +1481,8 @@ void spawn(const Arg *arg)
 }
 Node *node_new(void)
 {
-    Node *n;
-    if (nodefreelist) {
-        n = nodefreelist;
+    Node *n = nodefreelist;
+    if (n) {
         nodefreelist = n->parent;
     } else if (nodeidx < NODEPOOL) {
         n = &nodepool[nodeidx++];
@@ -1493,8 +1492,7 @@ Node *node_new(void)
     n->is_leaf = 1;
     n->split   = 0;
     n->parent  = NULL;
-    n->u.ch.first   = NULL;
-    n->u.ch.second  = NULL;
+    n->u.client = NULL;
     return n;
 }
 
