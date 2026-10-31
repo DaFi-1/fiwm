@@ -945,23 +945,18 @@ static inline void XFillRectangle(Display *d, Drawable dr, GC gc, int x, int y, 
 }
 
 static inline void XDrawString(Display *d, Drawable dr, GC gc, int x, int y, const char *s, int len) {
-    if (!d || !dr || !gc || !s || len <= 0 || len > 200) return;
-    int total_bytes = 18 + len;
-    int pad = (-total_bytes) & 3;
-    total_bytes += pad;
-    int words = total_bytes >> 2;
-
+    if (!d || !dr || !gc || !s) return;
+    int words = (21 + len) >> 2;
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, words << 2);
     p[0] = (words << 16) | 74; /* X_PolyText8: reqType=74 */
     p[1] = (unsigned int)dr;
     p[2] = (unsigned int)(unsigned long)gc;
     p[3] = ((int)y << 16) | ((int)x & 0xFFFF);
-
+    p[words - 1] = 0;
     unsigned char *bp = (unsigned char *)&p[4];
     bp[0] = (unsigned char)len;
-    bp[1] = 0; /* delta */
-    for (int i = 0; i < len; i++) bp[2 + i] = s[i];
-    for (int i = 0; i < pad; i++) bp[2 + len + i] = 0;
+    bp[1] = 0;
+    for (int i = 0; i < len; i++) bp[2 + i] = (unsigned char)s[i];
 }
 
 static inline Pixmap XCreatePixmap(Display *d, Drawable dr, unsigned int w, unsigned int h, unsigned int depth) {
@@ -2344,7 +2339,6 @@ void focusworkspace_prev(const Arg *arg)
 }
 void drawbar(Monitor *m)
 {
-    char buf[4];
     int i, x, sw, idx;
     Drawable d;
 
@@ -2365,18 +2359,17 @@ void drawbar(Monitor *m)
     XFillRectangle(dpy, d, bar_gc, 0, 0, m->bar_width, BAR_HEIGHT);
 
     unsigned long cur_fg = bar_bg;
-    for (idx = 0; idx < m->ntags; idx++) {
+    int half_sw = (sw >> 1) - 4;
+    int ypos = (BAR_HEIGHT >> 1) + 5;
+    for (idx = 0, x = 0; idx < m->ntags; idx++, x += sw) {
         i = m->tags[idx];
-        x = idx * sw;
-        buf[0] = (char)('1' + i);
-        buf[1] = '\0';
+        char ch = (char)('1' + i);
         unsigned long fg = (m == selmon && m->curtag == i) ? bar_fg : bar_hl;
         if (fg != cur_fg) {
             XSetForeground(dpy, bar_gc, fg);
             cur_fg = fg;
         }
-        XDrawString(dpy, d, bar_gc, x + (sw >> 1) - 4,
-                    (BAR_HEIGHT >> 1) + 5, buf, 1);
+        XDrawString(dpy, d, bar_gc, x + half_sw, ypos, &ch, 1);
     }
 
     if (m->barpm)
