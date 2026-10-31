@@ -738,11 +738,10 @@ static inline void set_input_focus(Display *d, Window w) {
 }
 #define XSetInputFocus(d, w, r, t) set_input_focus(d, w)
 
-static inline void XGrabKey(Display *d, int keycode, unsigned int mod, Window w, int owner, int sync_p, int sync_k) {
-    (void)owner; (void)sync_p; (void)sync_k;
+static inline void XGrabKey(Display *d, int keycode, unsigned int mod) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | (1 << 8) | 33; /* X_GrabKey: reqType=33, ownerEvents=1, length=4 */
-    p[1] = (unsigned int)w;
+    p[1] = (unsigned int)d->root;
     p[2] = (1 << 24) | (((unsigned int)(keycode & 0xFF)) << 16) | (mod & 0xFFFF);
     p[3] = 1;
 }
@@ -754,14 +753,13 @@ static inline void XUngrabKey(Display *d, int keycode, unsigned int mod, Window 
     p[2] = mod & 0xFFFF;
 }
 
-static inline void XGrabButton(Display *d, unsigned int btn, unsigned int mod, Window w, int owner, unsigned int mask, int sync_p, int sync_k, Window confine, unsigned long cursor) {
-    (void)owner; (void)sync_p; (void)sync_k; (void)confine; (void)cursor;
+static inline void XGrabButton(Display *d, unsigned int btn, unsigned int mod, Window w) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 24);
-    p[0] = (6 << 16) | 28; /* X_GrabButton: reqType=28, ownerEvents=0, length=6 */
+    p[0] = (6 << 16) | 28;
     p[1] = (unsigned int)w;
-    p[2] = (1 << 24) | (1 << 16) | (mask & 0xFFFF);
-    p[3] = (unsigned int)confine;
-    p[4] = (unsigned int)cursor;
+    p[2] = (1 << 24) | (1 << 16) | (ButtonPressMask | ButtonReleaseMask | PointerMotionMask);
+    p[3] = 0;
+    p[4] = 0;
     p[5] = ((mod & 0xFFFF) << 16) | (btn & 0xFF);
 }
 
@@ -1757,12 +1755,8 @@ void manage(Window w, XWindowAttributes *wa)
 
     unsigned int modifiers[] = { 0, LockMask, numlockmask, numlockmask | LockMask };
     for (int i = 0; i < 4; i++) {
-        XGrabButton(dpy, Button1, MODKEY | modifiers[i], w, False,
-                    ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
-                    GrabModeAsync, GrabModeAsync, None, None);
-        XGrabButton(dpy, Button3, MODKEY | modifiers[i], w, False,
-                    ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
-                    GrabModeAsync, GrabModeAsync, None, None);
+        XGrabButton(dpy, Button1, MODKEY | modifiers[i], w);
+        XGrabButton(dpy, Button3, MODKEY | modifiers[i], w);
     }
 
     if (!(c->flags & FLAG_FLOATING)) {
@@ -2725,14 +2719,8 @@ void grabkeys(void)
         keysym = XKeysymToKeycode(dpy, keys[i].keysym);
         key_keycodes[i] = (KeyCode)keysym;
         for (j = 0; j < LENGTH(modifiers); j++)
-            XGrabKey(dpy, keysym, keys[i].mod | modifiers[j], root, True,
-                     GrabModeAsync, GrabModeAsync);
+            XGrabKey(dpy, keysym, keys[i].mod | modifiers[j]);
     }
-}
-
-void scan(void)
-{
-    if (0) manage(0, NULL);
 }
 
 void setup(void)
@@ -2796,7 +2784,6 @@ void setup(void)
     updategeom();
     createbars();
     grabkeys();
-    scan();
 
     selmon = mons;
     for (Monitor *m = mons; m; m = m->next)
