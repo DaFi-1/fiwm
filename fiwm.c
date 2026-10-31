@@ -1952,17 +1952,14 @@ void movemouse(const Arg *arg)
                         c->y = target_mon->y + target_mon->h - c->h - (borderpx << 1);
                     if (c->x < target_mon->x) c->x = target_mon->x;
                     if (c->y < target_mon->y) c->y = target_mon->y;
-                    if (old_m != target_mon) {
+                    if (old_m != target_mon)
                         arrange(old_m);
-                        drawbar(old_m);
-                    }
                 }
             }
             XMoveWindow(dpy, c->win, c->x, c->y);
             XUngrabPointer(dpy, CurrentTime);
             focus(selmon, selmon->ws->focus);
             arrange(selmon);
-            drawbar(selmon);
             return;
         }
     }
@@ -2026,7 +2023,6 @@ void resizemouse(const Arg *arg)
             XUngrabPointer(dpy, CurrentTime);
             focus(selmon, selmon->ws->focus);
             arrange(selmon);
-            drawbar(selmon);
             return;
         }
     }
@@ -2244,11 +2240,9 @@ void focusworkspace(const Arg *arg)
         if (prev != m) { prev->dirty = 1; m->dirty = 1; }
         update_bar_visibility(m);
         arrange(m);
-        drawbar(m);
         if (prev != m) {
             update_bar_visibility(prev);
             arrange(prev);
-            drawbar(prev);
         }
         return;
     }
@@ -2284,13 +2278,10 @@ void focusworkspace(const Arg *arg)
         }
     }
 
-    drawbar(m);
-
     if (prev != m) {
         prev->dirty = 1;
         update_bar_visibility(prev);
         arrange(prev);
-        drawbar(prev);
     }
 }
 
@@ -2432,8 +2423,7 @@ void buttonpress(XEvent *e)
         return;
     }
 
-    if (!c) return;
-    if (c->node) {
+    if (c && c->node) {
         for (m = mons; m; m = m->next) {
             if (m->curtag == c->workspace) {
                 focus(m, c->node);
@@ -2467,13 +2457,12 @@ void enternotify(XEvent *e)
         selmon = m;
         if (prev) { prev->dirty = 1; drawbar(prev); }
         m->dirty = 1;
-        drawbar(m);
     }
     if (n != m->ws->focus) {
         focus(m, n);
         m->dirty = 1;
-        drawbar(m);
     }
+    drawbar(m);
 }
 
 void maprequest(XEvent *e)
@@ -2710,7 +2699,6 @@ void movecmd(const Arg *arg)
         }
         if (target_m) {
             arrange(target_m);
-            drawbar(target_m);
         } else {
             XMoveWindow(dpy, c->win, -9999, -9999);
         }
@@ -2721,7 +2709,6 @@ void movecmd(const Arg *arg)
                             (unsigned char *)&(Window){0}, 1);
         }
         arrange(selmon);
-        drawbar(selmon);
         return;
     }
 
