@@ -1793,12 +1793,6 @@ Node *node_first_leaf(Node *n)
     return n;
 }
 
-Node *node_find_client(Node *n, Client *c)
-{
-    (void)n;
-    return c ? c->node : NULL;
-}
-
 void node_hide_foreach(Node *n)
 {
     if (!n) return;
@@ -2560,7 +2554,6 @@ void buttonpress(XEvent *e)
 {
     Client *c = find_client(e->xbutton.window);
     Monitor *m;
-    Node *n;
     Window par, *kids, w;
     unsigned int nk;
 
@@ -2599,10 +2592,9 @@ void buttonpress(XEvent *e)
                 break;
             }
         }
-        for (m = mons; m; m = m->next) {
-            n = node_find_client(m->ws->root, c);
-            if (n) { focus(m, n); break; }
-        }
+        if (c->node)
+            focus(selmon, c->node);
+
         if (e->xbutton.button == Button1) {
             Arg a = {.v = e};
             movemouse(&a);
@@ -2614,9 +2606,14 @@ void buttonpress(XEvent *e)
     }
 
     if (!c) return;
-    for (m = mons; m; m = m->next) {
-        n = node_find_client(m->ws->root, c);
-        if (n) { focus(m, n); arrange(m); return; }
+    if (c->node) {
+        for (m = mons; m; m = m->next) {
+            if (m->curtag == c->workspace) {
+                focus(m, c->node);
+                arrange(m);
+                return;
+            }
+        }
     }
 }
 
@@ -2630,14 +2627,13 @@ void enternotify(XEvent *e)
     if (ev->mode != NotifyNormal || ev->detail == NotifyInferior)
         return;
     c = find_client(ev->window);
-    if (!c) return;
+    if (!c || !c->node) return;
 
-    n = NULL;
+    n = c->node;
     for (m = mons; m; m = m->next) {
-        n = node_find_client(m->ws->root, c);
-        if (n) break;
+        if (m->curtag == c->workspace) break;
     }
-    if (!m || !n) return;
+    if (!m) return;
 
     if (m != selmon) {
         Monitor *prev = selmon;
@@ -2782,7 +2778,7 @@ void togglefloating(const Arg *arg)
     } else {
         c->x = c->tile_x; c->y = c->tile_y;
         c->w = c->tile_w; c->h = c->tile_h;
-        if (!node_find_client(selmon->ws->root, c))
+        if (!c->node)
             node_insert(selmon, c);
     }
     arrange(selmon);
