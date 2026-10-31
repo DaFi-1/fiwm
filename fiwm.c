@@ -1583,12 +1583,12 @@ Node *node_insert(Monitor *m, Client *c)
 
 void node_rotate(Node *n)
 {
-    Node *tmp;
-    if (!n || !n->is_leaf || !n->parent) return;
-    n = n->parent;
-    tmp    = n->u.ch.first;
-    n->u.ch.first  = n->u.ch.second;
-    n->u.ch.second = tmp;
+    if (n && n->parent) {
+        Node *p = n->parent;
+        Node *tmp = p->u.ch.first;
+        p->u.ch.first  = p->u.ch.second;
+        p->u.ch.second = tmp;
+    }
 }
 
 Node *node_in_direction(Node *n, int orient, int dir)
@@ -2617,7 +2617,6 @@ static Node *workspace_insert(Workspace *ws, Client *c, int split)
 
     if (!ws->root) {
         ws->root = nl;
-        ws->focus = nl;
     } else {
         Node *ff = ws->focus ? ws->focus : node_first_leaf(ws->root);
         Node *nn = node_new();
@@ -2636,8 +2635,8 @@ static Node *workspace_insert(Workspace *ws, Client *c, int split)
         }
         ff->parent = nn;
         nl->parent = nn;
-        ws->focus = nl;
     }
+    ws->focus = nl;
     return nl;
 }
 
