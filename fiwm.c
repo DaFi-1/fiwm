@@ -1186,8 +1186,7 @@ static void togglefullscreen(const Arg *);
 static void togglefloating(const Arg *);
 static void rotatecmd(const Arg *);
 static void focusworkspace(const Arg *);
-static void focusworkspace_next(const Arg *);
-static void focusworkspace_prev(const Arg *);
+static void focusworkspace_step(const Arg *);
 static void focuscmd(const Arg *);
 static void movecmd(const Arg *);
 static void setlayoutcmd(const Arg *);
@@ -1230,8 +1229,8 @@ static const Key keys[] = {
     { MODKEY,              XK_r,      rotatecmd,      {0} },
     { MODKEY,              XK_b,      setlayoutcmd,   {.i = SPLIT_VERTICAL} },
     { MODKEY,              XK_v,      setlayoutcmd,   {.i = SPLIT_HORIZONTAL} },
-    { MODKEY,              XK_a,      focusworkspace_prev, {0} },
-    { MODKEY,              XK_s,      focusworkspace_next, {0} },
+    { MODKEY,              XK_a,      focusworkspace_step, {.i = -1} },
+    { MODKEY,              XK_s,      focusworkspace_step, {.i = +1} },
     { MODKEY,              XK_h,      focuscmd,       {.i = (SPLIT_VERTICAL<<1)|0} },
     { MODKEY,              XK_l,      focuscmd,       {.i = (SPLIT_VERTICAL<<1)|1} },
     { MODKEY,              XK_k,      focuscmd,       {.i = (SPLIT_HORIZONTAL<<1)|0} },
@@ -2178,20 +2177,10 @@ void focusworkspace(const Arg *arg)
     }
 }
 
-void focusworkspace_next(const Arg *arg)
+void focusworkspace_step(const Arg *arg)
 {
     if (!selmon) return;
-    int tag = selmon->curtag + 1;
-    if (tag >= WORKSPACE_COUNT) tag = 0;
-    Arg a = {.i = tag};
-    focusworkspace(&a);
-}
-
-void focusworkspace_prev(const Arg *arg)
-{
-    if (!selmon) return;
-    int tag = selmon->curtag - 1;
-    if (tag < 0) tag = WORKSPACE_COUNT - 1;
+    int tag = (selmon->curtag + arg->i + WORKSPACE_COUNT) % WORKSPACE_COUNT;
     Arg a = {.i = tag};
     focusworkspace(&a);
 }
