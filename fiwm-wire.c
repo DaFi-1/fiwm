@@ -1375,12 +1375,9 @@ static const char *colors[]      = {
     "#c2c2b0",  /* COL_BAR_FG          — texto do workspace ativo na barra (bege miasma) */
     "#685742",  /* COL_BAR_HL          — texto dos workspaces inativos na barra (marrom miasma) */
 };
-/*
-static const int tagmap[WORKSPACE_COUNT] = {
+static int tagmap[WORKSPACE_COUNT] = {
     1, 1, 1, 1, 1, 1, 1, 1, 0
 };
-*/
-static int tagmap[WORKSPACE_COUNT];
 static const unsigned int MODKEY = Mod1Mask;
 
 /* Autostart commands (run once at startup, before the event loop) */
@@ -2117,9 +2114,10 @@ static inline int _xwire_query_xinerama(Display *d) {
     if (_xinerama_opcode > 0) return _xinerama_opcode;
     if (_xinerama_opcode < 0) return 0;
     unsigned int p[4];
-    p[0] = (4 << 16) | (8 << 8) | 98;
+    p[0] = (4 << 16) | 98;
+    p[1] = 8;
     const char *xname = "XINERAMA";
-    for (int i = 0; i < 8; i++) ((char *)&p[1])[i] = xname[i];
+    for (int i = 0; i < 8; i++) ((char *)&p[2])[i] = xname[i];
     _xwire_write(d->fd, p, 16);
     _xwire_flush(d->fd);
 
@@ -2197,8 +2195,15 @@ monitor_new(int num, int x, int y, int w, int h)
     Monitor *m = ecalloc(1, sizeof(Monitor));
     m->num = num;
     m->x = x; m->y = y; m->w = w; m->h = h;
-    m->curtag = 0;
-    m->ws = &workspaces[0];
+    int initial_tag = 0;
+    for (int t = 0; t < WORKSPACE_COUNT; t++) {
+        if (tagmap[t] == num) {
+            initial_tag = t;
+            break;
+        }
+    }
+    m->curtag = initial_tag;
+    m->ws = &workspaces[initial_tag];
     m->bar_width = w;
     m->next_split = -1;
     return m;
@@ -2229,6 +2234,15 @@ void updategeom(void)
             if (isuniquegeom(unique, nunique, &info[i]))
                 unique[nunique++] = info[i];
 
+        if (nunique > 1) {
+            static const int default_dual_tagmap[WORKSPACE_COUNT] = { 1, 1, 1, 1, 1, 1, 1, 1, 0 };
+            for (int i = 0; i < WORKSPACE_COUNT; i++)
+                tagmap[i] = default_dual_tagmap[i];
+        } else {
+            for (int i = 0; i < WORKSPACE_COUNT; i++)
+                tagmap[i] = 0;
+        }
+
         for (int i = 0; i < nunique; i++) {
             m = monitor_new(i, unique[i].x_org, unique[i].y_org,
                             unique[i].width, unique[i].height);
@@ -2236,17 +2250,14 @@ void updategeom(void)
             mons = m;
         }
     } else {
+        for (int i = 0; i < WORKSPACE_COUNT; i++)
+            tagmap[i] = 0;
         mons = monitor_new(0, 0, 0,
                            DisplayWidth(dpy, XDefaultScreen(dpy)),
                            DisplayHeight(dpy, XDefaultScreen(dpy)));
     }
 
     selmon = mons;
-
-    int nmon = 0;
-    for (Monitor *tm = mons; tm; tm = tm->next) nmon++;
-    for (int i = 0; i < WORKSPACE_COUNT; i++)
-        tagmap[i] = (nmon > 1 && i != WORKSPACE_COUNT - 1) ? 1 : 0;
 }
 
 static void
