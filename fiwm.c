@@ -149,7 +149,6 @@ static void scan(void);
 static void grabkeys(void);
 static void run(void);
 static void cleanup(void);
-static void mask_children(Window w);
 
 static const int gappx           = 0; //10
 static const int borderpx        = 1;
@@ -735,12 +734,11 @@ void manage(Window w, XWindowAttributes *wa)
     clients = c;
 
     swa.event_mask = EnterWindowMask | FocusChangeMask | PropertyChangeMask |
-                     ButtonPressMask | SubstructureNotifyMask;
+                     StructureNotifyMask;
     swa.background_pixel = bar_bg;
     XSetWindowBorderWidth(dpy, w, borderpx);
     XSetWindowBorder(dpy, w, border_inactive);
     XChangeWindowAttributes(dpy, w, CWEventMask | CWBackPixel, &swa);
-    mask_children(w);
 
     XGrabButton(dpy, Button1, MODKEY, w, False, ButtonPressMask,
                 GrabModeAsync, GrabModeAsync, None, None);
@@ -1332,34 +1330,16 @@ void buttonpress(XEvent *e)
     }
 }
 
-static void mask_children(Window w)
-{
-    Window r, par, *kids;
-    unsigned int nk;
-    if (!XQueryTree(dpy, w, &r, &par, &kids, &nk)) return;
-    for (unsigned int i = 0; i < nk; i++)
-        XSelectInput(dpy, kids[i], EnterWindowMask);
-    XFree(kids);
-}
-
 void enternotify(XEvent *e)
 {
     XCrossingEvent *ev = &e->xcrossing;
     Monitor *m;
     Client *c;
     Node *n;
-    Window par, *kids, w;
-    unsigned int nk;
 
+    if (ev->mode != NotifyNormal || ev->detail == NotifyInferior)
+        return;
     c = find_client(ev->window);
-    w = ev->window;
-    while (!c && w != root && w != None) {
-        if (!XQueryTree(dpy, w, &(Window){0}, &par, &kids, &nk)) break;
-        if (kids) XFree(kids);
-        if (par == root || par == None) break;
-        c = find_client(par);
-        w = par;
-    }
     if (!c) return;
 
     n = NULL;
@@ -1376,12 +1356,11 @@ void enternotify(XEvent *e)
         m->dirty = 1;
         drawbar(m);
     }
-}
-
-void createnotify(XEvent *e)
-{
-    XCreateWindowEvent *ev = &e->xcreatewindow;
-    XSelectInput(dpy, ev->window, EnterWindowMask);
+    if (n != m->ws->focus) {
+        focus(m, n);
+        m->dirty = 1;
+        drawbar(m);
+    }
 }
 
 void maprequest(XEvent *e)
@@ -1818,7 +1797,6 @@ void run(void)
         case KeyPress:         keypress(&ev);       break;
         case ButtonPress:      buttonpress(&ev);    break;
         case EnterNotify:      enternotify(&ev);    break;
-        case CreateNotify:     createnotify(&ev);   break;
         case MapRequest:       maprequest(&ev);     break;
         case UnmapNotify:      unmapnotify(&ev);    break;
         case DestroyNotify:    destroywindow(&ev);  break;
