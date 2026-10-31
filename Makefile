@@ -64,4 +64,7 @@ check-elf:
 	@echo "=== Symbol check (should NOT show libc symbols) ==="
 	nm fiwm | grep -i " U " | head -20 || echo "  (no undefined symbols from our code)"
 
-.PHONY: all clean install uninstall check-elf
+test: fiwm-wire
+	./test_wire.sh
+
+.PHONY: all clean install uninstall check-elf test

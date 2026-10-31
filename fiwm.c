@@ -153,7 +153,7 @@ static void mask_children(Window w);
 
 static const int gappx           = 0; //10
 static const int borderpx        = 1;
-static const char *termcmd[]     = { "alacritty", NULL };
+static const char *termcmd[]     = { "st", NULL };
 static const char *menucmd[]     = {"/bin/sh", "-c", "/home/$USER/dotfile/dmenuscript", NULL};
 /* static const float default_ratio = 0.5f; */
 static const char *colors[]      = {
