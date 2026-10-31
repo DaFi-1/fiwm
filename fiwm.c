@@ -599,26 +599,19 @@ static inline void XCloseDisplay(Display *d) {
 #define DefaultColormap(d, s) 0
 #define DefaultDepth(d, s) 24
 
-static inline Window XCreateWindow(Display *d, Window parent, int x, int y, unsigned int width, unsigned int height, unsigned int border_width, int depth, unsigned int class_type, VisualID visual, unsigned long valmask, XSetWindowAttributes *a) {
-    (void)class_type; (void)visual;
+static inline Window create_bar_window(Display *d, Window parent, int x, int y, unsigned int width, unsigned int height) {
     unsigned int wid = d->next_rid++;
-    if (__builtin_expect(_xwire_outlen + 64 > sizeof(_xwire_outbuf), 0))
-        _xwire_flush(d->fd);
-    unsigned int *p = (unsigned int *)(_xwire_outbuf + _xwire_outlen);
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 40);
+    p[0] = (10 << 16) | 1; /* Opcode 1: CreateWindow, depth=0, length=10 words */
     p[1] = wid;
     p[2] = (unsigned int)parent;
     p[3] = ((int)y << 16) | ((int)x & 0xFFFF);
     p[4] = (height << 16) | (width & 0xFFFF);
-    p[5] = (1 << 16) | (border_width & 0xFFFF);
-    p[6] = 0;
-    p[7] = (unsigned int)valmask;
-    int idx = 8;
-    if (valmask & (1 << 1)) p[idx++] = (unsigned int)a->background_pixel;
-    if (valmask & (1 << 3)) p[idx++] = (unsigned int)a->border_pixel;
-    if (valmask & (1 << 9)) p[idx++] = (unsigned int)a->override_redirect;
-    if (valmask & (1 << 11)) p[idx++] = (unsigned int)a->event_mask;
-    p[0] = (idx << 16) | (depth << 8) | 1;
-    _xwire_outlen += (unsigned long)(idx << 2);
+    p[5] = 1 << 16;        /* border_width=0, class=InputOutput (1) */
+    p[6] = 0;              /* visual = CopyFromParent */
+    p[7] = CWOverrideRedirect | CWEventMask;
+    p[8] = 1;              /* override_redirect = True */
+    p[9] = ExposureMask | ButtonPressMask;
     return wid;
 }
 
@@ -2319,24 +2312,12 @@ void drawbar(Monitor *m)
 
 void createbars(void)
 {
-    Monitor *m;
-    XSetWindowAttributes wa;
-
-    for (m = mons; m; m = m->next) {
+    for (Monitor *m = mons; m; m = m->next) {
         m->bar_width = m->w - (gappx << 1);
-        wa.override_redirect = True;
-        wa.background_pixel = 0;
-        wa.event_mask = ExposureMask | ButtonPressMask;
-
-        m->barwin = XCreateWindow(dpy, root,
-                                  m->x + gappx, m->y + gappx,
-                                  m->bar_width, BAR_HEIGHT, 0,
-                                  CopyFromParent, InputOutput,
-                                  CopyFromParent,
-                                  CWOverrideRedirect | CWEventMask,
-                                  &wa);
-        m->barpm = XCreatePixmap(dpy, root, m->w, BAR_HEIGHT,
-                                 DefaultDepth(dpy, XDefaultScreen(dpy)));
+        m->barwin = create_bar_window(dpy, root,
+                                      m->x + gappx, m->y + gappx,
+                                      m->bar_width, BAR_HEIGHT);
+        m->barpm = XCreatePixmap(dpy, root, m->w, BAR_HEIGHT, 24);
 
         XMapWindow(dpy, m->barwin);
         XLowerWindow(dpy, m->barwin);
