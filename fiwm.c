@@ -2418,21 +2418,16 @@ void togglefullscreen(const Arg *arg)
         c->tile_x = c->x; c->tile_y = c->y;
         c->tile_w = c->w; c->tile_h = c->h;
         XSetWindowBorderWidth(dpy, c->win, 0);
-        XMoveResizeWindow(dpy, c->win, selmon->x, selmon->y,
-                          selmon->w, selmon->h);
         XUnmapWindow(dpy, selmon->barwin);
-        XRaiseWindow(dpy, c->win);
     } else {
         selmon->ws->fs_client = NULL;
         c->x = c->tile_x; c->y = c->tile_y;
         c->w = c->tile_w; c->h = c->tile_h;
-        XMapWindow(dpy, selmon->barwin);
         XSetWindowBorderWidth(dpy, c->win, borderpx);
-        XSetWindowBorder(dpy, c->win,
-                         (c == selmon->ws->focus->u.client) ? border_active : border_inactive);
-        selmon->dirty = 1;
-        arrange(selmon);
+        XMapWindow(dpy, selmon->barwin);
     }
+    selmon->dirty = 1;
+    arrange(selmon);
 }
 
 void togglefloating(const Arg *arg)
