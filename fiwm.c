@@ -2174,23 +2174,21 @@ monitor_in_direction(Monitor *m, int orient, int dir)
     for (tm = mons; tm; tm = tm->next) {
         if (tm == m) continue;
         if (orient == SPLIT_VERTICAL) {
-            if (dir == 0 && tm->x + tm->w <= m->x &&
-                tm->y < m->y + m->h && tm->y + tm->h > m->y) {
-                if (!target || tm->x + tm->w > target->x + target->w)
+            if (tm->y >= m->y + m->h || tm->y + tm->h <= m->y) continue;
+            if (dir == 0) {
+                if (tm->x + tm->w <= m->x && (!target || tm->x + tm->w > target->x + target->w))
                     target = tm;
-            } else if (dir == 1 && tm->x >= m->x + m->w &&
-                tm->y < m->y + m->h && tm->y + tm->h > m->y) {
-                if (!target || tm->x < target->x)
+            } else {
+                if (tm->x >= m->x + m->w && (!target || tm->x < target->x))
                     target = tm;
             }
         } else {
-            if (dir == 0 && tm->y + tm->h <= m->y &&
-                tm->x < m->x + m->w && tm->x + tm->w > m->x) {
-                if (!target || tm->y + tm->h > target->y + target->h)
+            if (tm->x >= m->x + m->w || tm->x + tm->w <= m->x) continue;
+            if (dir == 0) {
+                if (tm->y + tm->h <= m->y && (!target || tm->y + tm->h > target->y + target->h))
                     target = tm;
-            } else if (dir == 1 && tm->y >= m->y + m->h &&
-                tm->x < m->x + m->w && tm->x + tm->w > m->x) {
-                if (!target || tm->y < target->y)
+            } else {
+                if (tm->y >= m->y + m->h && (!target || tm->y < target->y))
                     target = tm;
             }
         }
