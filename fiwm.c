@@ -237,6 +237,7 @@ static Node *nodefreelist;
 static Client *client_freelist;
 
 char **envp_global;
+#define SYS_RT_SIGACTION 13
 #define SYS_READ      0
 #define SYS_WRITE     1
 #define SYS_CLOSE     3
@@ -252,6 +253,17 @@ static inline long syscall3(long nr, long a1, long a2, long a3)
     __asm__ __volatile__("syscall"
                  : "=a"(ret)
                  : "a"(nr), "D"(a1), "S"(a2), "d"(a3)
+                 : "rcx", "r11", "memory");
+    return ret;
+}
+
+static inline long syscall4(long nr, long a1, long a2, long a3, long a4)
+{
+    long ret;
+    register long r10 __asm__("r10") = a4;
+    __asm__ __volatile__("syscall"
+                 : "=a"(ret)
+                 : "a"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10)
                  : "rcx", "r11", "memory");
     return ret;
 }
@@ -273,13 +285,7 @@ static inline __attribute__((noreturn)) void sys_exit(int code)
 
 static inline long sys_wait4(long pid, int *wstatus, int options, void *rusage)
 {
-    long ret;
-    register long r10 __asm__("r10") = options;
-    __asm__ __volatile__("syscall"
-                 : "=a"(ret)
-                 : "a"(SYS_WAIT4), "D"(pid), "S"(wstatus), "d"(rusage), "r"(r10)
-                 : "rcx", "r11", "memory");
-    return ret;
+    return syscall4(SYS_WAIT4, pid, (long)wstatus, (long)options, (long)rusage);
 }
 static size_t strlen(const char *s)
 {
@@ -410,7 +416,8 @@ void spawn(const Arg *arg)
     const char **argv = (const char **)arg->v;
     if (!argv || !argv[0])
         return;
-    if (sys_fork() == 0) {
+    long pid = sys_fork();
+    if (pid == 0) {
         if (sys_fork() == 0) {
             if (dpy)
                 sys_close(ConnectionNumber(dpy));
@@ -421,7 +428,8 @@ void spawn(const Arg *arg)
         }
         sys_exit(0);
     }
-    sys_wait4(-1, NULL, 0, NULL);
+    if (pid > 0)
+        sys_wait4(pid, NULL, 0, NULL);
 }
 Node *node_new(void)
 {
@@ -1741,6 +1749,19 @@ void setup(void)
         netatom[NET_WM_STATE_FULLSCREEN],
         netatom[NET_ACTIVE_WINDOW],
     };
+
+    /* Ignore SIGCHLD and set SA_NOCLDWAIT to prevent any child zombies */
+    struct {
+        void *sa_handler;
+        unsigned long sa_flags;
+        void *sa_restorer;
+        unsigned long sa_mask;
+    } sa;
+    sa.sa_handler = (void *)1; /* SIG_IGN */
+    sa.sa_flags = 2 | 1;       /* SA_NOCLDWAIT (2) | SA_NOCLDSTOP (1) */
+    sa.sa_restorer = NULL;
+    sa.sa_mask = 0;
+    syscall4(SYS_RT_SIGACTION, 17, (long)&sa, 0, 8);
 
     dpy = XOpenDisplay(NULL);
     if (!dpy) die("fiwm: cannot open display\n");
