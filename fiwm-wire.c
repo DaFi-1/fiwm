@@ -505,10 +505,7 @@ static inline int _xwire_write(int fd, const void *b, unsigned long n) {
     if (_xwire_outlen + n > sizeof(_xwire_outbuf)) {
         _xwire_flush(fd);
     }
-    char *dst = _xwire_outbuf + _xwire_outlen;
-    const char *src = (const char *)b;
-    unsigned long count = n;
-    while (count--) *dst++ = *src++;
+    __builtin_memcpy(_xwire_outbuf + _xwire_outlen, b, n);
     _xwire_outlen += n;
     return (int)n;
 }
@@ -879,7 +876,6 @@ struct pollfd {
 };
 
 static inline int XNextEvent(Display *d, XEvent *e) {
-    unsigned char buf[32];
     for (;;) {
         if (_xwire_in_pos + 32 > _xwire_in_len) {
             _xwire_flush(d->fd);
@@ -899,101 +895,101 @@ static inline int XNextEvent(Display *d, XEvent *e) {
             if (_xwire_in_len < 32) continue;
         }
 
-        const unsigned char *src = _xwire_inbuf + _xwire_in_pos;
-        for (int i = 0; i < 32; i++) buf[i] = src[i];
+        const unsigned char *buf = _xwire_inbuf + _xwire_in_pos;
         _xwire_in_pos += 32;
 
         unsigned char code = buf[0] & 0x7F;
-        if (code == 20) {
+        switch (code) {
+        case 20: /* MapRequest */
             e->type = MapRequest;
-            e->xmaprequest.window = *(unsigned int *)&buf[8];
-            e->xmaprequest.parent = *(unsigned int *)&buf[4];
+            e->xmaprequest.window = *(const unsigned int *)&buf[8];
+            e->xmaprequest.parent = *(const unsigned int *)&buf[4];
             return 0;
-        } else if (code == 23) {
+        case 23: /* ConfigureRequest */
             e->type = ConfigureRequest;
-            e->xconfigurerequest.window = *(unsigned int *)&buf[8];
-            e->xconfigurerequest.x = *(short *)&buf[16];
-            e->xconfigurerequest.y = *(short *)&buf[18];
-            e->xconfigurerequest.width = *(unsigned short *)&buf[20];
-            e->xconfigurerequest.height = *(unsigned short *)&buf[22];
-            e->xconfigurerequest.border_width = *(unsigned short *)&buf[24];
-            e->xconfigurerequest.value_mask = *(unsigned short *)&buf[28];
+            e->xconfigurerequest.window = *(const unsigned int *)&buf[8];
+            e->xconfigurerequest.x = *(const short *)&buf[16];
+            e->xconfigurerequest.y = *(const short *)&buf[18];
+            e->xconfigurerequest.width = *(const unsigned short *)&buf[20];
+            e->xconfigurerequest.height = *(const unsigned short *)&buf[22];
+            e->xconfigurerequest.border_width = *(const unsigned short *)&buf[24];
+            e->xconfigurerequest.value_mask = *(const unsigned short *)&buf[28];
             return 0;
-        } else if (code == 18) {
+        case 18: /* UnmapNotify */
             e->type = UnmapNotify;
-            e->xunmap.window = *(unsigned int *)&buf[8];
+            e->xunmap.window = *(const unsigned int *)&buf[8];
             e->xunmap.send_event = 0;
             return 0;
-        } else if (code == 17) {
+        case 17: /* DestroyNotify */
             e->type = DestroyNotify;
-            e->xdestroywindow.window = *(unsigned int *)&buf[8];
+            e->xdestroywindow.window = *(const unsigned int *)&buf[8];
             return 0;
-        } else if (code == 16) {
+        case 16: /* CreateNotify */
             e->type = CreateNotify;
-            e->xcreatewindow.window = *(unsigned int *)&buf[8];
-            e->xcreatewindow.parent = *(unsigned int *)&buf[4];
+            e->xcreatewindow.window = *(const unsigned int *)&buf[8];
+            e->xcreatewindow.parent = *(const unsigned int *)&buf[4];
             return 0;
-        } else if (code == 12) {
+        case 12: /* Expose */
             e->type = Expose;
-            e->xexpose.window = *(unsigned int *)&buf[4];
+            e->xexpose.window = *(const unsigned int *)&buf[4];
             return 0;
-        } else if (code == 7) {
+        case 7: /* EnterNotify */
             e->type = EnterNotify;
-            e->xcrossing.window = *(unsigned int *)&buf[12];
-            e->xcrossing.root = *(unsigned int *)&buf[8];
-            e->xcrossing.subwindow = *(unsigned int *)&buf[16];
-            e->xcrossing.x_root = *(short *)&buf[20];
-            e->xcrossing.y_root = *(short *)&buf[22];
-            e->xcrossing.x = *(short *)&buf[24];
-            e->xcrossing.y = *(short *)&buf[26];
+            e->xcrossing.window = *(const unsigned int *)&buf[12];
+            e->xcrossing.root = *(const unsigned int *)&buf[8];
+            e->xcrossing.subwindow = *(const unsigned int *)&buf[16];
+            e->xcrossing.x_root = *(const short *)&buf[20];
+            e->xcrossing.y_root = *(const short *)&buf[22];
+            e->xcrossing.x = *(const short *)&buf[24];
+            e->xcrossing.y = *(const short *)&buf[26];
             e->xcrossing.mode = (int)buf[30];
             e->xcrossing.detail = (int)buf[1];
             return 0;
-        } else if (code == 6) {
+        case 6: /* MotionNotify */
             e->type = MotionNotify;
-            e->xmotion.window = *(unsigned int *)&buf[12];
-            e->xmotion.root = *(unsigned int *)&buf[8];
-            e->xmotion.subwindow = *(unsigned int *)&buf[16];
-            e->xmotion.time = *(unsigned int *)&buf[4];
-            e->xmotion.x_root = *(short *)&buf[20];
-            e->xmotion.y_root = *(short *)&buf[22];
-            e->xmotion.x = *(short *)&buf[24];
-            e->xmotion.y = *(short *)&buf[26];
-            e->xmotion.state = *(unsigned short *)&buf[28];
+            e->xmotion.window = *(const unsigned int *)&buf[12];
+            e->xmotion.root = *(const unsigned int *)&buf[8];
+            e->xmotion.subwindow = *(const unsigned int *)&buf[16];
+            e->xmotion.time = *(const unsigned int *)&buf[4];
+            e->xmotion.x_root = *(const short *)&buf[20];
+            e->xmotion.y_root = *(const short *)&buf[22];
+            e->xmotion.x = *(const short *)&buf[24];
+            e->xmotion.y = *(const short *)&buf[26];
+            e->xmotion.state = *(const unsigned short *)&buf[28];
             return 0;
-        } else if (code == 5) {
+        case 5: /* ButtonRelease */
             e->type = ButtonRelease;
-            e->xbutton.window = *(unsigned int *)&buf[12];
-            e->xbutton.root = *(unsigned int *)&buf[8];
-            e->xbutton.subwindow = *(unsigned int *)&buf[16];
-            e->xbutton.time = *(unsigned int *)&buf[4];
-            e->xbutton.x_root = *(short *)&buf[20];
-            e->xbutton.y_root = *(short *)&buf[22];
-            e->xbutton.x = *(short *)&buf[24];
-            e->xbutton.y = *(short *)&buf[26];
+            e->xbutton.window = *(const unsigned int *)&buf[12];
+            e->xbutton.root = *(const unsigned int *)&buf[8];
+            e->xbutton.subwindow = *(const unsigned int *)&buf[16];
+            e->xbutton.time = *(const unsigned int *)&buf[4];
+            e->xbutton.x_root = *(const short *)&buf[20];
+            e->xbutton.y_root = *(const short *)&buf[22];
+            e->xbutton.x = *(const short *)&buf[24];
+            e->xbutton.y = *(const short *)&buf[26];
             e->xbutton.button = buf[1];
-            e->xbutton.state = *(unsigned short *)&buf[28];
+            e->xbutton.state = *(const unsigned short *)&buf[28];
             return 0;
-        } else if (code == 4) {
+        case 4: /* ButtonPress */
             e->type = ButtonPress;
-            e->xbutton.window = *(unsigned int *)&buf[12];
-            e->xbutton.root = *(unsigned int *)&buf[8];
-            e->xbutton.subwindow = *(unsigned int *)&buf[16];
-            e->xbutton.time = *(unsigned int *)&buf[4];
-            e->xbutton.x_root = *(short *)&buf[20];
-            e->xbutton.y_root = *(short *)&buf[22];
-            e->xbutton.x = *(short *)&buf[24];
-            e->xbutton.y = *(short *)&buf[26];
+            e->xbutton.window = *(const unsigned int *)&buf[12];
+            e->xbutton.root = *(const unsigned int *)&buf[8];
+            e->xbutton.subwindow = *(const unsigned int *)&buf[16];
+            e->xbutton.time = *(const unsigned int *)&buf[4];
+            e->xbutton.x_root = *(const short *)&buf[20];
+            e->xbutton.y_root = *(const short *)&buf[22];
+            e->xbutton.x = *(const short *)&buf[24];
+            e->xbutton.y = *(const short *)&buf[26];
             e->xbutton.button = buf[1];
-            e->xbutton.state = *(unsigned short *)&buf[28];
+            e->xbutton.state = *(const unsigned short *)&buf[28];
             return 0;
-        } else if (code == 2) {
+        case 2: /* KeyPress */
             e->type = KeyPress;
-            e->xkey.window = *(unsigned int *)&buf[12];
+            e->xkey.window = *(const unsigned int *)&buf[12];
             e->xkey.keycode = buf[1];
-            e->xkey.state = *(unsigned short *)&buf[28];
+            e->xkey.state = *(const unsigned short *)&buf[28];
             return 0;
-        } else {
+        default:
             e->type = code;
             return 0;
         }
@@ -1342,6 +1338,8 @@ static inline KeySym XkbKeycodeToKeysym(Display *d, KeyCode kc, unsigned int gro
 /* Core Window Manager Implementation                                       */
 /* ========================================================================= */
 
+#define likely(x)           __builtin_expect(!!(x), 1)
+#define unlikely(x)         __builtin_expect(!!(x), 0)
 #define LENGTH(X)           (sizeof(X) / sizeof(X)[0])
 #define MAX(A,B)            ((A) > (B) ? (A) : (B))
 #define MIN(A,B)            ((A) < (B) ? (A) : (B))
@@ -1425,6 +1423,8 @@ struct Monitor {
     Client *fs_client;
     short curtag;
     short next_split;
+    short ntags;
+    short tags[WORKSPACE_COUNT];
     unsigned dirty : 1;
 };
 
@@ -1569,13 +1569,13 @@ static unsigned long border_active, border_inactive, bar_bg, bar_fg, bar_hl;
 static GC bar_gc;
 
 enum { NODEPOOL = 64 };
-static Node  nodepool[NODEPOOL];
+static Node  nodepool[NODEPOOL] __attribute__((aligned(64)));
 static int   nodeidx;
 static Node *nodefreelist;
 static Client *client_freelist;
 
 enum { CLIENT_HASH_SIZE = 64 };
-static Client *client_hash[CLIENT_HASH_SIZE];
+static Client *client_hash[CLIENT_HASH_SIZE] __attribute__((aligned(64)));
 
 static inline unsigned int client_hash_idx(Window w)
 {
@@ -2380,10 +2380,11 @@ monitor_new(int num, int x, int y, int w, int h)
     m->num = num;
     m->x = x; m->y = y; m->w = w; m->h = h;
     int initial_tag = 0;
+    m->ntags = 0;
     for (int t = 0; t < WORKSPACE_COUNT; t++) {
         if (tagmap[t] == num) {
-            initial_tag = t;
-            break;
+            if (m->ntags == 0) initial_tag = t;
+            m->tags[m->ntags++] = t;
         }
     }
     m->curtag = initial_tag;
@@ -2593,22 +2594,16 @@ void focusworkspace_prev(const Arg *arg)
 void drawbar(Monitor *m)
 {
     char buf[4];
-    int i, x, sw, ntags, idx;
+    int i, x, sw, idx;
     Drawable d;
-    int tags[WORKSPACE_COUNT];
 
     if (!m || !m->barwin) return;
     if (!m->dirty) return;
     m->dirty = 0;
 
-    ntags = 0;
-    for (i = 0; i < WORKSPACE_COUNT; i++)
-        if (tagmap[i] == m->num)
-            tags[ntags++] = i;
+    if (m->ntags == 0) return;
 
-    if (ntags == 0) return;
-
-    sw = m->bar_width / ntags;
+    sw = m->bar_width / m->ntags;
 
     if (!bar_gc)
         bar_gc = XCreateGC(dpy, m->barwin, 0, NULL);
@@ -2618,8 +2613,8 @@ void drawbar(Monitor *m)
     XSetForeground(dpy, bar_gc, bar_bg);
     XFillRectangle(dpy, d, bar_gc, 0, 0, m->bar_width, BAR_HEIGHT);
 
-    for (idx = 0; idx < ntags; idx++) {
-        i = tags[idx];
+    for (idx = 0; idx < m->ntags; idx++) {
+        i = m->tags[idx];
         x = idx * sw;
         buf[0] = (char)('1' + i);
         buf[1] = '\0';
@@ -2660,10 +2655,11 @@ void keypress(XEvent *e)
 {
     XKeyEvent *ev = &e->xkey;
     KeySym keysym = XkbKeycodeToKeysym(dpy, ev->keycode, 0, 0);
+    unsigned int state = CLEANMASK(ev->state);
 
     for (size_t i = 0; i < LENGTH(keys); i++)
         if (keysym == keys[i].keysym &&
-            CLEANMASK(keys[i].mod) == CLEANMASK(ev->state))
+            keys[i].mod == state)
             { keys[i].func(&keys[i].arg); return; }
 }
 
@@ -2688,20 +2684,13 @@ void buttonpress(XEvent *e)
 
     for (m = mons; m; m = m->next) {
         if (e->xbutton.window == m->barwin || e->xbutton.subwindow == m->barwin) {
-            int i, ntags = 0, tags[WORKSPACE_COUNT];
-            for (i = 0; i < WORKSPACE_COUNT; i++)
-                if (tagmap[i] == m->num)
-                    tags[ntags++] = i;
-            if (ntags > 0) {
-                int sw = m->w / ntags;
+            if (m->ntags > 0) {
+                int sw = m->w / m->ntags;
                 int xpos = e->xbutton.x_root - m->x;
                 if (xpos < 0) xpos = 0;
-                int clicked = 0;
-                while (xpos >= sw && clicked < ntags - 1) {
-                    xpos -= sw;
-                    clicked++;
-                }
-                Arg a = {.i = tags[clicked]};
+                int clicked = xpos / sw;
+                if (clicked >= m->ntags) clicked = m->ntags - 1;
+                Arg a = {.i = m->tags[clicked]};
                 focusworkspace(&a);
             }
             return;

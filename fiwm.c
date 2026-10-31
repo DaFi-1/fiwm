@@ -11,6 +11,8 @@
 #include <X11/extensions/Xinerama.h>
 #endif
 #endif
+#define likely(x)           __builtin_expect(!!(x), 1)
+#define unlikely(x)         __builtin_expect(!!(x), 0)
 #define LENGTH(X)           (sizeof(X) / sizeof(X)[0])
 #define MAX(A,B)            ((A) > (B) ? (A) : (B))
 #define MIN(A,B)            ((A) < (B) ? (A) : (B))
@@ -87,6 +89,8 @@ struct Monitor {
     Client *fs_client;
     short curtag;
     short next_split;
+    short ntags;
+    short tags[WORKSPACE_COUNT];
     unsigned dirty : 1;
 };
 
@@ -233,13 +237,13 @@ static unsigned long border_active, border_inactive, bar_bg, bar_fg, bar_hl;
 static GC bar_gc;
 
 enum { NODEPOOL = 64 };
-static Node  nodepool[NODEPOOL];
+static Node  nodepool[NODEPOOL] __attribute__((aligned(64)));
 static int   nodeidx;
 static Node *nodefreelist;
 static Client *client_freelist;
 
 enum { CLIENT_HASH_SIZE = 64 };
-static Client *client_hash[CLIENT_HASH_SIZE];
+static Client *client_hash[CLIENT_HASH_SIZE] __attribute__((aligned(64)));
 
 static inline unsigned int client_hash_idx(Window w)
 {
@@ -1084,10 +1088,11 @@ monitor_new(int num, int x, int y, int w, int h)
     m->num = num;
     m->x = x; m->y = y; m->w = w; m->h = h;
     int initial_tag = 0;
+    m->ntags = 0;
     for (int t = 0; t < WORKSPACE_COUNT; t++) {
         if (tagmap[t] == num) {
-            initial_tag = t;
-            break;
+            if (m->ntags == 0) initial_tag = t;
+            m->tags[m->ntags++] = t;
         }
     }
     m->curtag = initial_tag;
@@ -1296,22 +1301,16 @@ void focusworkspace_prev(const Arg *arg)
 void drawbar(Monitor *m)
 {
     char buf[8];
-    int i, x, sw, ntags, idx;
+    int i, x, sw, idx;
     Drawable d;
-    int tags[WORKSPACE_COUNT];
 
     if (!m || !m->barwin) return;
     if (!m->dirty) return;
     m->dirty = 0;
 
-    ntags = 0;
-    for (i = 0; i < WORKSPACE_COUNT; i++)
-        if (tagmap[i] == m->num)
-            tags[ntags++] = i;
+    if (m->ntags == 0) return;
 
-    if (ntags == 0) return;
-
-    sw = m->bar_width / ntags;
+    sw = m->bar_width / m->ntags;
 
     if (!bar_gc)
         bar_gc = XCreateGC(dpy, m->barwin, 0, NULL);
@@ -1321,8 +1320,8 @@ void drawbar(Monitor *m)
     XSetForeground(dpy, bar_gc, bar_bg);
     XFillRectangle(dpy, d, bar_gc, 0, 0, m->bar_width, BAR_HEIGHT);
 
-    for (idx = 0; idx < ntags; idx++) {
-        i = tags[idx];
+    for (idx = 0; idx < m->ntags; idx++) {
+        i = m->tags[idx];
         x = idx * sw;
         itoa(i + 1, buf, sizeof(buf));
         XSetForeground(dpy, bar_gc, (m == selmon && m->curtag == i) ? bar_fg : bar_hl);
@@ -1362,10 +1361,11 @@ void keypress(XEvent *e)
 {
     XKeyEvent *ev = &e->xkey;
     KeySym keysym = XkbKeycodeToKeysym(dpy, ev->keycode, 0, 0);
+    unsigned int state = CLEANMASK(ev->state);
 
     for (size_t i = 0; i < LENGTH(keys); i++)
         if (keysym == keys[i].keysym &&
-            CLEANMASK(keys[i].mod) == CLEANMASK(ev->state))
+            keys[i].mod == state)
             { keys[i].func(&keys[i].arg); return; }
 }
 
@@ -1390,15 +1390,11 @@ void buttonpress(XEvent *e)
 
     for (m = mons; m; m = m->next) {
         if (e->xbutton.window == m->barwin || e->xbutton.subwindow == m->barwin) {
-            int i, ntags = 0, tags[WORKSPACE_COUNT];
-            for (i = 0; i < WORKSPACE_COUNT; i++)
-                if (tagmap[i] == m->num)
-                    tags[ntags++] = i;
-            if (ntags > 0) {
-                int sw = m->w / ntags;
+            if (m->ntags > 0) {
+                int sw = m->w / m->ntags;
                 int clicked = e->xbutton.x_root / sw;
-                if (clicked >= 0 && clicked < ntags) {
-                    Arg a = {.i = tags[clicked]};
+                if (clicked >= 0 && clicked < m->ntags) {
+                    Arg a = {.i = m->tags[clicked]};
                     focusworkspace(&a);
                 }
             }
