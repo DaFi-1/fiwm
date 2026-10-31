@@ -483,9 +483,24 @@ static inline Display *XOpenDisplay(const char *name) {
     }
 
     unsigned short add_len = *(unsigned short *)&rep_hdr[6];
+    unsigned int total_body = (unsigned int)add_len * 4;
     unsigned char body[2048];
-    unsigned int to_read = (add_len * 4) > sizeof(body) ? sizeof(body) : (add_len * 4);
-    _xwire_read(fd, body, to_read);
+    unsigned int first_chunk = total_body > sizeof(body) ? sizeof(body) : total_body;
+    unsigned int read_bytes = 0;
+    while (read_bytes < first_chunk) {
+        int r = _xwire_read(fd, body + read_bytes, first_chunk - read_bytes);
+        if (r <= 0) break;
+        read_bytes += (unsigned int)r;
+    }
+
+    /* Drain the rest of the setup reply data so socket is 100% clean */
+    while (read_bytes < total_body) {
+        char discard[512];
+        unsigned int want = (total_body - read_bytes) > sizeof(discard) ? sizeof(discard) : (total_body - read_bytes);
+        int r = _xwire_read(fd, discard, want);
+        if (r <= 0) break;
+        read_bytes += (unsigned int)r;
+    }
 
     _global_display.fd = fd;
     _global_display.rid_base = *(unsigned int *)&body[4];
@@ -496,7 +511,7 @@ static inline Display *XOpenDisplay(const char *name) {
     unsigned char num_formats = body[21];
     int screen_offset = 32 + ((vendor_len + 3) & ~3) + (num_formats * 8);
 
-    if (screen_offset + 40 <= (int)to_read) {
+    if (screen_offset + 40 <= (int)first_chunk) {
         _global_display.root   = *(unsigned int *)&body[screen_offset];
         _global_display.width  = *(unsigned short *)&body[screen_offset + 20];
         _global_display.height = *(unsigned short *)&body[screen_offset + 22];
@@ -534,7 +549,7 @@ static inline Window XCreateWindow(Display *d, Window parent, int x, int y, unsi
     p[2] = (unsigned int)parent;
     p[3] = ((int)y << 16) | ((int)x & 0xFFFF);
     p[4] = (height << 16) | (width & 0xFFFF);
-    p[5] = (border_width << 16) | 1; /* class = InputOutput */
+    p[5] = (1 << 16) | (border_width & 0xFFFF); /* class = InputOutput (1) in high 16, border_width in low 16 */
     p[6] = 0; /* visual = CopyFromParent */
     p[7] = (unsigned int)valmask;
     int idx = 8;
@@ -669,26 +684,30 @@ static inline void XSetInputFocus(Display *d, Window w, int revert, Time t) {
 static inline void XGrabKey(Display *d, int keycode, unsigned int mod, Window w, int owner, int sync_p, int sync_k) {
     (void)owner; (void)sync_p; (void)sync_k;
     unsigned int p[4];
-    p[0] = (4 << 16) | (1 << 8) | 33;
+    p[0] = (4 << 16) | (1 << 8) | 33; /* X_GrabKey: reqType=33, ownerEvents=1, length=4 */
     p[1] = (unsigned int)w;
-    p[2] = (mod << 16) | (keycode & 0xFF);
-    p[3] = 0;
+    p[2] = (1 << 24) | (((unsigned int)(keycode & 0xFF)) << 16) | (mod & 0xFFFF); /* modifiers (0..15), key (16..23), pointerMode=1 (24..31) */
+    p[3] = 1; /* keyboardMode=1 (0..7), pad (8..31) */
     _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline void XUngrabKey(Display *d, int keycode, unsigned int mod, Window w) {
-    (void)d; (void)keycode; (void)mod; (void)w;
+    unsigned int p[3];
+    p[0] = (3 << 16) | ((keycode & 0xFF) << 8) | 34; /* X_UngrabKey: reqType=34, key=keycode, length=3 */
+    p[1] = (unsigned int)w;
+    p[2] = mod & 0xFFFF;
+    _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline void XGrabButton(Display *d, unsigned int btn, unsigned int mod, Window w, int owner, unsigned int mask, int sync_p, int sync_k, Window confine, unsigned long cursor) {
     (void)owner; (void)sync_p; (void)sync_k; (void)confine; (void)cursor;
     unsigned int p[6];
-    p[0] = (6 << 16) | (owner << 8) | 28;
+    p[0] = (6 << 16) | 28; /* X_GrabButton: reqType=28, ownerEvents=0, length=6 */
     p[1] = (unsigned int)w;
-    p[2] = (mod << 16) | (mask & 0xFFFF);
-    p[3] = (btn & 0xFF);
-    p[4] = 0;
-    p[5] = 0;
+    p[2] = (1 << 24) | (1 << 16) | (mask & 0xFFFF); /* eventMask (0..15), pointerMode=1 (16..23), keyboardMode=1 (24..31) */
+    p[3] = (unsigned int)confine;
+    p[4] = (unsigned int)cursor;
+    p[5] = ((mod & 0xFFFF) << 16) | (btn & 0xFF); /* button (0..7), pad (8..15), modifiers (16..31) */
     _xwire_write(d->fd, p, sizeof(p));
 }
 
@@ -716,8 +735,12 @@ static inline int XNextEvent(Display *d, XEvent *e) {
         int pr = (int)_xwire_sys3(SYS_POLL, (long)&pfd, 1, -1);
         if (pr <= 0) { e->type = 0; return 1; }
 
-        int n = _xwire_read(d->fd, buf, 32);
-        if (n <= 0) { e->type = 0; return 1; }
+        int total_n = 0;
+        while (total_n < 32) {
+            int n = _xwire_read(d->fd, buf + total_n, 32 - total_n);
+            if (n <= 0) { e->type = 0; return 1; }
+            total_n += n;
+        }
 
         unsigned char code = buf[0] & 0x7F;
         if (code == 20) {
@@ -735,6 +758,11 @@ static inline int XNextEvent(Display *d, XEvent *e) {
             e->xconfigurerequest.border_width = *(unsigned short *)&buf[24];
             e->xconfigurerequest.value_mask = *(unsigned short *)&buf[28];
             return 0;
+        } else if (code == 18) {
+            e->type = UnmapNotify;
+            e->xunmap.window = *(unsigned int *)&buf[8];
+            e->xunmap.send_event = 0;
+            return 0;
         } else if (code == 17) {
             e->type = DestroyNotify;
             e->xdestroywindow.window = *(unsigned int *)&buf[8];
@@ -742,6 +770,18 @@ static inline int XNextEvent(Display *d, XEvent *e) {
         } else if (code == 12) {
             e->type = Expose;
             e->xexpose.window = *(unsigned int *)&buf[4];
+            return 0;
+        } else if (code == 7) {
+            e->type = EnterNotify;
+            e->xcrossing.window = *(unsigned int *)&buf[12];
+            e->xcrossing.root = *(unsigned int *)&buf[8];
+            e->xcrossing.subwindow = *(unsigned int *)&buf[16];
+            e->xcrossing.x_root = *(short *)&buf[20];
+            e->xcrossing.y_root = *(short *)&buf[22];
+            e->xcrossing.x = *(short *)&buf[24];
+            e->xcrossing.y = *(short *)&buf[26];
+            e->xcrossing.mode = 0;
+            e->xcrossing.detail = 0;
             return 0;
         } else if (code == 4) {
             e->type = ButtonPress;
@@ -774,10 +814,35 @@ static inline void XFree(void *p) { (void)p; }
 static inline int (*XSetErrorHandler(int (*handler)(Display *, XErrorEvent *)))(Display *, XErrorEvent *) { return handler; }
 
 static inline Atom XInternAtom(Display *d, const char *name, int only_if_exists) {
-    (void)d; (void)only_if_exists;
-    unsigned long h = 5381;
-    while (*name) h = ((h << 5) + h) + (unsigned char)*name++;
-    return (Atom)h;
+    if (!d || !name) return 0;
+    int nbytes = 0;
+    while (name[nbytes]) nbytes++;
+
+    int pad = (4 - (nbytes & 3)) & 3;
+    int total_bytes = 8 + nbytes + pad;
+    int words = total_bytes >> 2;
+
+    unsigned int p[64];
+    p[0] = (words << 16) | ((only_if_exists ? 1 : 0) << 8) | 16; /* X_InternAtom */
+    p[1] = (unsigned int)nbytes;
+
+    unsigned char *bp = (unsigned char *)&p[2];
+    for (int i = 0; i < nbytes; i++) bp[i] = name[i];
+    for (int i = 0; i < pad; i++) bp[nbytes + i] = 0;
+
+    _xwire_write(d->fd, p, total_bytes);
+
+    unsigned char rep[32];
+    int rep_read = 0;
+    while (rep_read < 32) {
+        int r = _xwire_read(d->fd, rep + rep_read, 32 - rep_read);
+        if (r <= 0) break;
+        rep_read += r;
+    }
+    if (rep_read == 32 && rep[0] == 1) {
+        return (Atom)*(unsigned int *)&rep[8];
+    }
+    return 0;
 }
 
 static inline int XAllocNamedColor(Display *d, Colormap m, const char *name, XColor *scr, XColor *exact) {
@@ -797,15 +862,110 @@ static inline int XAllocNamedColor(Display *d, Colormap m, const char *name, XCo
     return 1;
 }
 
-static inline GC XCreateGC(Display *d, Drawable dr, unsigned long valmask, void *val) { (void)d; (void)dr; (void)valmask; (void)val; return (GC)1; }
-static inline void XFreeGC(Display *d, GC gc) { (void)d; (void)gc; }
-static inline void XSetForeground(Display *d, GC gc, unsigned long pixel) { (void)d; (void)gc; (void)pixel; }
-static inline void XFillRectangle(Display *d, Drawable dr, GC gc, int x, int y, unsigned int w, unsigned int h) { (void)d; (void)dr; (void)gc; (void)x; (void)y; (void)w; (void)h; }
-static inline void XDrawString(Display *d, Drawable dr, GC gc, int x, int y, const char *s, int len) { (void)d; (void)dr; (void)gc; (void)x; (void)y; (void)s; (void)len; }
-static inline Pixmap XCreatePixmap(Display *d, Drawable dr, unsigned int w, unsigned int h, unsigned int depth) { (void)d; (void)dr; (void)w; (void)h; (void)depth; return 0; }
-static inline void XFreePixmap(Display *d, Pixmap p) { (void)d; (void)p; }
-static inline void XDestroyWindow(Display *d, Window w) { (void)d; (void)w; }
-static inline void XCopyArea(Display *d, Drawable src, Drawable dst, GC gc, int sx, int sy, unsigned int w, unsigned int h, int dx, int dy) { (void)d; (void)src; (void)dst; (void)gc; (void)sx; (void)sy; (void)w; (void)h; (void)dx; (void)dy; }
+static inline GC XCreateGC(Display *d, Drawable dr, unsigned long valmask, void *val) {
+    (void)valmask; (void)val;
+    if (!d || !dr) return (GC)0;
+    unsigned int gcid = d->next_rid++;
+    unsigned int p[4];
+    p[0] = (4 << 16) | 55; /* X_CreateGC: reqType=55, length=4 */
+    p[1] = gcid;
+    p[2] = (unsigned int)dr;
+    p[3] = 0; /* mask = 0 */
+    _xwire_write(d->fd, p, sizeof(p));
+    return (GC)(unsigned long)gcid;
+}
+
+static inline void XFreeGC(Display *d, GC gc) {
+    if (!d || !gc) return;
+    unsigned int p[2];
+    p[0] = (2 << 16) | 60; /* X_FreeGC: reqType=60, length=2 */
+    p[1] = (unsigned int)(unsigned long)gc;
+    _xwire_write(d->fd, p, sizeof(p));
+}
+
+static inline void XSetForeground(Display *d, GC gc, unsigned long pixel) {
+    if (!d || !gc) return;
+    unsigned int p[4];
+    p[0] = (4 << 16) | 56; /* X_ChangeGC: reqType=56, length=4 */
+    p[1] = (unsigned int)(unsigned long)gc;
+    p[2] = 4; /* GCForeground = (1L<<2) */
+    p[3] = (unsigned int)pixel;
+    _xwire_write(d->fd, p, sizeof(p));
+}
+
+static inline void XFillRectangle(Display *d, Drawable dr, GC gc, int x, int y, unsigned int w, unsigned int h) {
+    if (!d || !gc || !dr) return;
+    unsigned int p[5];
+    p[0] = (5 << 16) | 70; /* X_PolyFillRectangle: reqType=70, length=5 */
+    p[1] = (unsigned int)dr;
+    p[2] = (unsigned int)(unsigned long)gc;
+    p[3] = ((int)y << 16) | ((int)x & 0xFFFF);
+    p[4] = ((unsigned int)h << 16) | (w & 0xFFFF);
+    _xwire_write(d->fd, p, sizeof(p));
+}
+
+static inline void XDrawString(Display *d, Drawable dr, GC gc, int x, int y, const char *s, int len) {
+    if (!d || !dr || !gc || !s || len <= 0 || len > 200) return;
+    unsigned int p[64];
+    int total_bytes = 16 + 2 + len;
+    int pad = (4 - (total_bytes & 3)) & 3;
+    total_bytes += pad;
+    int words = total_bytes >> 2;
+
+    p[0] = (words << 16) | 74; /* X_PolyText8: reqType=74 */
+    p[1] = (unsigned int)dr;
+    p[2] = (unsigned int)(unsigned long)gc;
+    p[3] = ((int)y << 16) | ((int)x & 0xFFFF);
+
+    unsigned char *bp = (unsigned char *)&p[4];
+    bp[0] = (unsigned char)len;
+    bp[1] = 0; /* delta */
+    for (int i = 0; i < len; i++) bp[2 + i] = s[i];
+    for (int i = 0; i < pad; i++) bp[2 + len + i] = 0;
+
+    _xwire_write(d->fd, p, words * 4);
+}
+
+static inline Pixmap XCreatePixmap(Display *d, Drawable dr, unsigned int w, unsigned int h, unsigned int depth) {
+    if (!d || !dr) return 0;
+    unsigned int pid = d->next_rid++;
+    unsigned int p[4];
+    p[0] = (4 << 16) | (depth << 8) | 53; /* X_CreatePixmap: reqType=53, length=4 */
+    p[1] = pid;
+    p[2] = (unsigned int)dr;
+    p[3] = ((unsigned int)h << 16) | (w & 0xFFFF);
+    _xwire_write(d->fd, p, sizeof(p));
+    return (Pixmap)pid;
+}
+
+static inline void XFreePixmap(Display *d, Pixmap p) {
+    if (!d || !p) return;
+    unsigned int req[2];
+    req[0] = (2 << 16) | 54; /* X_FreePixmap: reqType=54, length=2 */
+    req[1] = (unsigned int)p;
+    _xwire_write(d->fd, req, sizeof(req));
+}
+
+static inline void XDestroyWindow(Display *d, Window w) {
+    if (!d || !w) return;
+    unsigned int p[2];
+    p[0] = (2 << 16) | 4; /* X_DestroyWindow: reqType=4, length=2 */
+    p[1] = (unsigned int)w;
+    _xwire_write(d->fd, p, sizeof(p));
+}
+
+static inline void XCopyArea(Display *d, Drawable src, Drawable dst, GC gc, int sx, int sy, unsigned int w, unsigned int h, int dx, int dy) {
+    if (!d || !src || !dst || !gc) return;
+    unsigned int p[7];
+    p[0] = (7 << 16) | 62; /* X_CopyArea: reqType=62, length=7 */
+    p[1] = (unsigned int)src;
+    p[2] = (unsigned int)dst;
+    p[3] = (unsigned int)(unsigned long)gc;
+    p[4] = ((int)sy << 16) | ((int)sx & 0xFFFF);
+    p[5] = ((int)dy << 16) | ((int)dx & 0xFFFF);
+    p[6] = ((unsigned int)h << 16) | (w & 0xFFFF);
+    _xwire_write(d->fd, p, sizeof(p));
+}
 
 static inline int XGetWindowAttributes(Display *d, Window w, XWindowAttributes *attr) {
     (void)d; (void)w;
@@ -837,7 +997,26 @@ static inline void XChangeProperty(Display *d, Window w, Atom prop, Atom type, i
 }
 
 static inline void XSendEvent(Display *d, Window w, int prop, long mask, XEvent *ev) {
-    (void)d; (void)w; (void)prop; (void)mask; (void)ev;
+    if (!d || !ev) return;
+    unsigned int p[11];
+    p[0] = (11 << 16) | ((prop & 0xFF) << 8) | 25; /* X_SendEvent: reqType=25, length=11 */
+    p[1] = (unsigned int)w;
+    p[2] = (unsigned int)mask;
+    if (ev->type == ClientMessage) {
+        unsigned char *ep = (unsigned char *)&p[3];
+        for (int i = 0; i < 32; i++) ep[i] = 0;
+        ep[0] = 33; /* ClientMessage */
+        ep[1] = (unsigned char)ev->xclient.format;
+        *(unsigned int *)&ep[4] = (unsigned int)ev->xclient.window;
+        *(unsigned int *)&ep[8] = (unsigned int)ev->xclient.message_type;
+        for (int i = 0; i < 5; i++)
+            *(unsigned int *)&ep[12 + i * 4] = (unsigned int)ev->xclient.data.l[i];
+    } else {
+        unsigned char *ep = (unsigned char *)&p[3];
+        const unsigned char *src = (const unsigned char *)ev;
+        for (int i = 0; i < 32; i++) ep[i] = src[i];
+    }
+    _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline int XGrabPointer(Display *d, Window grab_w, int owner, unsigned int mask, int sync_p, int sync_k, Window confine, unsigned long cursor, Time time) {
@@ -852,12 +1031,36 @@ static inline int XQueryPointer(Display *d, Window w, Window *r, Window *c, int 
 
 static inline XModifierKeymap *XGetModifierMapping(Display *d) {
     (void)d;
-    static KeyCode dummy[8] = { 0 };
+    static KeyCode dummy[8] = { 0, 0, 0, 0, 77 /* Mod2 = NumLock */, 0, 0, 0 };
     static XModifierKeymap m = { 1, dummy };
     return &m;
 }
 static inline void XFreeModifiermap(XModifierKeymap *m) { (void)m; }
-static inline KeyCode XKeysymToKeycode(Display *d, KeySym ks) { (void)d; (void)ks; return 0; }
+
+static inline KeyCode XKeysymToKeycode(Display *d, KeySym ks) {
+    (void)d;
+    if (ks >= XK_1 && ks <= XK_9) return (KeyCode)(10 + (ks - XK_1));
+    switch (ks) {
+    case XK_Num_Lock: return 77;
+    case XK_Return:   return 36;
+    case XK_space:    return 65;
+    case XK_q:        return 24;
+    case XK_w:        return 25;
+    case XK_d:        return 40;
+    case XK_c:        return 54;
+    case XK_h:        return 43;
+    case XK_j:        return 44;
+    case XK_k:        return 45;
+    case XK_l:        return 46;
+    case XK_r:        return 27;
+    case XK_b:        return 56;
+    case XK_v:        return 55;
+    case XK_a:        return 38;
+    case XK_s:        return 39;
+    case XK_f:        return 41;
+    default:          return 0;
+    }
+}
 
 static inline KeySym XkbKeycodeToKeysym(Display *d, KeyCode kc, unsigned int group, unsigned int level) {
     (void)d; (void)group; (void)level;
