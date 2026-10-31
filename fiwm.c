@@ -427,6 +427,15 @@ static inline void _xwire_flush(int fd) {
     }
 }
 
+static inline void *_xwire_reserve(int fd, unsigned long n) {
+    if (__builtin_expect(_xwire_outlen + n > sizeof(_xwire_outbuf), 0)) {
+        _xwire_flush(fd);
+    }
+    void *p = _xwire_outbuf + _xwire_outlen;
+    _xwire_outlen += n;
+    return p;
+}
+
 static inline int _xwire_write(int fd, const void *b, unsigned long n) {
     if (n >= sizeof(_xwire_outbuf)) {
         _xwire_flush(fd);
@@ -688,25 +697,23 @@ static inline void XChangeWindowAttributes(Display *d, Window w, unsigned long v
 }
 
 static inline void XSetWindowBorderWidth(Display *d, Window w, unsigned int bw) {
-    unsigned int p[4];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 12;
     p[1] = (unsigned int)w;
     p[2] = 16;
     p[3] = bw;
-    _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline void XSetWindowBorder(Display *d, Window w, unsigned long pixel) {
-    unsigned int p[4];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 2;
     p[1] = (unsigned int)w;
     p[2] = 8;
     p[3] = (unsigned int)pixel;
-    _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline void XMoveResizeWindow(Display *d, Window w, int x, int y, unsigned int width, unsigned int height) {
-    unsigned int p[7];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 28);
     p[0] = (7 << 16) | 12;
     p[1] = (unsigned int)w;
     p[2] = 15;
@@ -714,48 +721,52 @@ static inline void XMoveResizeWindow(Display *d, Window w, int x, int y, unsigne
     p[4] = (unsigned int)y;
     p[5] = width;
     p[6] = height;
-    _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline void XMoveWindow(Display *d, Window w, int x, int y) {
-    unsigned int p[5];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 20);
     p[0] = (5 << 16) | 12;
     p[1] = (unsigned int)w;
     p[2] = 3;
     p[3] = (unsigned int)x;
     p[4] = (unsigned int)y;
-    _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline void XResizeWindow(Display *d, Window w, unsigned int width, unsigned int height) {
-    unsigned int p[5];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 20);
     p[0] = (5 << 16) | 12;
     p[1] = (unsigned int)w;
     p[2] = 12;
     p[3] = width;
     p[4] = height;
-    _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline void XMapWindow(Display *d, Window w) {
-    unsigned int p[2] = { (2 << 16) | 8, (unsigned int)w };
-    _xwire_write(d->fd, p, sizeof(p));
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
+    p[0] = (2 << 16) | 8;
+    p[1] = (unsigned int)w;
 }
 
 static inline void XUnmapWindow(Display *d, Window w) {
-    unsigned int p[2] = { (2 << 16) | 10, (unsigned int)w };
-    _xwire_write(d->fd, p, sizeof(p));
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
+    p[0] = (2 << 16) | 10;
+    p[1] = (unsigned int)w;
 }
 
 static inline void XRaiseWindow(Display *d, Window w) {
-    unsigned int p[4] = { (4 << 16) | 12, (unsigned int)w, 64, 0 };
-    _xwire_write(d->fd, p, sizeof(p));
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
+    p[0] = (4 << 16) | 12;
+    p[1] = (unsigned int)w;
+    p[2] = 64;
+    p[3] = 0;
 }
 
 static inline void XSetInputFocus(Display *d, Window w, int revert, Time t) {
     (void)revert; (void)t;
-    unsigned int p[3] = { (3 << 16) | (1 << 8) | 42, (unsigned int)w, 0 };
-    _xwire_write(d->fd, p, sizeof(p));
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 12);
+    p[0] = (3 << 16) | (1 << 8) | 42;
+    p[1] = (unsigned int)w;
+    p[2] = 0;
 }
 
 static inline void XGrabKey(Display *d, int keycode, unsigned int mod, Window w, int owner, int sync_p, int sync_k) {
