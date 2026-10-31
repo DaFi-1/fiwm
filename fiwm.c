@@ -1207,7 +1207,7 @@ static const char *colors[]      = {
     "#685742",  /* COL_BAR_HL          — texto dos workspaces inativos na barra (marrom miasma) */
 };
 static int tagmap[WORKSPACE_COUNT] = {
-    0, 0, 0, 0, 0, 0, 0, 0, 1
+    1, 1, 1, 1, 1, 1, 1, 1, 0
 };
 static const unsigned int MODKEY = Mod1Mask;
 
@@ -2052,8 +2052,9 @@ void updategeom(void)
             if (isuniquegeom(unique, nunique, &info[i]))
                 unique[nunique++] = info[i];
 
-        if (nunique <= 1)
-            tagmap[WORKSPACE_COUNT - 1] = 0;
+        if (nunique <= 1) {
+            for (int t = 0; t < WORKSPACE_COUNT; t++) tagmap[t] = 0;
+        }
 
         for (int i = 0; i < nunique; i++) {
             m = monitor_new(i, unique[i].x_org, unique[i].y_org,
@@ -2063,7 +2064,7 @@ void updategeom(void)
             if (i == 0) selmon = m;
         }
     } else {
-        tagmap[WORKSPACE_COUNT - 1] = 0;
+        for (int t = 0; t < WORKSPACE_COUNT; t++) tagmap[t] = 0;
         mons = monitor_new(0, 0, 0,
                            DisplayWidth(dpy, XDefaultScreen(dpy)),
                            DisplayHeight(dpy, XDefaultScreen(dpy)));
