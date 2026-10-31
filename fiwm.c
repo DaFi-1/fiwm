@@ -2564,13 +2564,6 @@ void togglefloating(const Arg *arg)
         fh = ((unsigned int)selmon->h * 39322U) >> 16;
         c->x = selmon->x + ((selmon->w - fw) >> 1);
         c->y = selmon->y + ((selmon->h - fh) >> 1);
-        int b2 = borderpx << 1;
-        int max_x = selmon->x + selmon->w - fw - b2;
-        int max_y = selmon->y + selmon->h - fh - b2;
-        if (c->x > max_x) c->x = max_x;
-        if (c->y > max_y) c->y = max_y;
-        if (c->x < selmon->x) c->x = selmon->x;
-        if (c->y < selmon->y) c->y = selmon->y;
         c->w = fw; c->h = fh;
         c->workspace = selmon->curtag;
         XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
