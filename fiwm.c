@@ -1355,16 +1355,11 @@ static inline void hash_insert(Client *c)
 
 static inline void hash_remove(Client *c)
 {
-    unsigned int h = client_hash_idx(c->win);
-    Client **pp = &client_hash[h];
-    while (*pp) {
-        if (*pp == c) {
-            *pp = c->hnext;
-            break;
-        }
+    Client **pp = &client_hash[client_hash_idx(c->win)];
+    while (*pp && *pp != c)
         pp = &(*pp)->hnext;
-    }
-    c->hnext = NULL;
+    if (*pp)
+        *pp = c->hnext;
 }
 
 
