@@ -51,6 +51,12 @@ get_win_offset() {
     xwininfo -root -tree -display "$TEST_DISP" 2>/dev/null | grep "$hex_id" | head -n 1 | awk '{print $NF}'
 }
 
+count_onscreen_st() {
+    local cnt
+    cnt=$(xwininfo -root -tree -display "$TEST_DISP" 2>/dev/null | grep 'st' | grep -vc '\-9999' || echo 0)
+    echo "$cnt"
+}
+
 echo "========================================================="
 echo "       fiwm Complete Shortcut Verification Suite         "
 echo "========================================================="
@@ -381,6 +387,60 @@ if [ "$COUNT_AFTER" -lt "$COUNT_BEFORE" ]; then
     report_pass "Alt+q (kill focused window) -> Window closed ($COUNT_BEFORE -> $COUNT_AFTER)"
 else
     report_fail "Alt+q (kill focused window)" "Window count did not decrease"
+fi
+
+echo ""
+echo "--- [8] Advanced BSP Stress & Memory Recycling ---"
+
+# Test 8.1: Tree collapse down to single on-screen window
+while [ "$(count_onscreen_st)" -gt 1 ]; do
+    DISPLAY="$TEST_DISP" xdotool key alt+q
+    sleep 0.3
+done
+SURVIVING_HEX=$(xwininfo -root -tree -display "$TEST_DISP" 2>/dev/null | grep 'st' | grep -v '\-9999' | head -n 1 | awk '{print $1}')
+LAST_OFFSET=$(get_win_offset "$SURVIVING_HEX")
+if [[ "$LAST_OFFSET" =~ \+1\+19 ]]; then
+    report_pass "Tree collapse -> Single surviving window expanded to root bounds ($LAST_OFFSET)"
+else
+    report_fail "Tree collapse" "Surviving window not restored to +1+19 ($LAST_OFFSET)"
+fi
+
+# Test 8.2: Automatic active window focus update
+sleep 0.2
+ACTIVE_AFTER_COLLAPSE=$(xprop -root -display "$TEST_DISP" _NET_ACTIVE_WINDOW 2>/dev/null | awk '{print $NF}')
+if [ -n "$ACTIVE_AFTER_COLLAPSE" ] && [ "$ACTIVE_AFTER_COLLAPSE" != "0x0" ]; then
+    report_pass "Auto-focus after collapse -> Window focus active ($ACTIVE_AFTER_COLLAPSE)"
+else
+    report_fail "Auto-focus after collapse" "No active window focus found"
+fi
+
+# Test 8.3: Freelist recycling stress (spawn 3, kill 3)
+for i in 1 2 3; do
+    DISPLAY="$TEST_DISP" xdotool key alt+w
+    sleep 0.2
+done
+SPAWNED_COUNT=$(count_onscreen_st)
+for i in 1 2 3; do
+    DISPLAY="$TEST_DISP" xdotool key alt+q
+    sleep 0.2
+done
+RECYCLED_COUNT=$(count_onscreen_st)
+if [ "$SPAWNED_COUNT" -ge 3 ] && [ "$RECYCLED_COUNT" -eq 1 ]; then
+    report_pass "Freelist recycling -> Spawned tiled windows and recycled cleanly back to 1 window ($SPAWNED_COUNT -> $RECYCLED_COUNT)"
+else
+    report_fail "Freelist recycling" "Window counts inconsistent (spawned: $SPAWNED_COUNT, recycled: $RECYCLED_COUNT)"
+fi
+
+# Test 8.4: Rapid workspace cycling under load
+for ws in 2 3 4 5 6 7 8 9 1; do
+    DISPLAY="$TEST_DISP" xdotool key alt+$ws
+    sleep 0.05
+done
+FINAL_WS_OFFSET=$(get_win_offset "$SURVIVING_HEX")
+if [[ "$FINAL_WS_OFFSET" =~ \+1\+19 ]]; then
+    report_pass "Rapid workspace cycle -> Survived fast 9-workspace switch without desync ($FINAL_WS_OFFSET)"
+else
+    report_fail "Rapid workspace cycle" "Window offset lost after rapid cycling ($FINAL_WS_OFFSET)"
 fi
 
 # Shortcut: Alt+Shift+q (quit window manager)
