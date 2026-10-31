@@ -2086,12 +2086,13 @@ static inline XineramaScreenInfo *XineramaQueryScreens(Display *d, int *number) 
 
 static int isuniquegeom(XineramaScreenInfo *unique, int n, XineramaScreenInfo *info)
 {
-    for (int i = 0; i < n; i++)
-        if (unique[i].x_org  == info->x_org  &&
-            unique[i].y_org  == info->y_org  &&
-            unique[i].width  == info->width  &&
-            unique[i].height == info->height)
-            return 0;
+    unsigned long target;
+    __builtin_memcpy(&target, &info->x_org, sizeof(target));
+    for (int i = 0; i < n; i++) {
+        unsigned long cur;
+        __builtin_memcpy(&cur, &unique[i].x_org, sizeof(cur));
+        if (cur == target) return 0;
+    }
     return 1;
 }
 
