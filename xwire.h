@@ -696,9 +696,22 @@ static inline void XUngrabButton(Display *d, unsigned int btn, unsigned int mod,
 static inline void XFlush(Display *d) { (void)d; }
 static inline void XSync(Display *d, int discard) { (void)d; (void)discard; }
 
+struct pollfd {
+    int fd;
+    short events;
+    short revents;
+};
+
 static inline int XNextEvent(Display *d, XEvent *e) {
     unsigned char buf[32];
     for (;;) {
+        struct pollfd pfd;
+        pfd.fd = d->fd;
+        pfd.events = 1; /* POLLIN */
+        pfd.revents = 0;
+        int pr = (int)_xwire_sys3(SYS_POLL, (long)&pfd, 1, -1);
+        if (pr <= 0) { e->type = 0; return 1; }
+
         int n = _xwire_read(d->fd, buf, 32);
         if (n <= 0) { e->type = 0; return 1; }
 
