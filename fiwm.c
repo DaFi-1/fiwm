@@ -641,8 +641,11 @@ void arrange_node(Node *n, int x, int y, int w, int h, int gap)
         c = n->u.client;
         if (!c || (c->flags & (FLAG_FULLSCREEN | FLAG_FLOATING)))
             return;
-        XMoveResizeWindow(dpy, c->win, x + borderpx, y + borderpx,
-                          MAX(1, w - (borderpx << 1)), MAX(1, h - (borderpx << 1)));
+        c->x = x + borderpx;
+        c->y = y + borderpx;
+        c->w = MAX(1, w - (borderpx << 1));
+        c->h = MAX(1, h - (borderpx << 1));
+        XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
         return;
     }
 
@@ -740,10 +743,15 @@ void manage(Window w, XWindowAttributes *wa)
     XSetWindowBorder(dpy, w, border_inactive);
     XChangeWindowAttributes(dpy, w, CWEventMask | CWBackPixel, &swa);
 
-    XGrabButton(dpy, Button1, MODKEY, w, False, ButtonPressMask,
-                GrabModeAsync, GrabModeAsync, None, None);
-    XGrabButton(dpy, Button3, MODKEY, w, False, ButtonPressMask,
-                GrabModeAsync, GrabModeAsync, None, None);
+    unsigned int modifiers[] = { 0, LockMask, numlockmask, numlockmask | LockMask };
+    for (int i = 0; i < 4; i++) {
+        XGrabButton(dpy, Button1, MODKEY | modifiers[i], w, False,
+                    ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                    GrabModeAsync, GrabModeAsync, None, None);
+        XGrabButton(dpy, Button3, MODKEY | modifiers[i], w, False,
+                    ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                    GrabModeAsync, GrabModeAsync, None, None);
+    }
 
     if (!(c->flags & FLAG_FLOATING)) {
         Node *nl = node_insert(selmon, c);
@@ -823,22 +831,25 @@ void movemouse(const Arg *arg)
     if (arg && arg->v) {
         const XEvent *bev = (const XEvent *)arg->v;
         c = find_client(bev->xbutton.window);
-        if (c) {
-            ox = bev->xbutton.x_root - c->x;
-            oy = bev->xbutton.y_root - c->y;
-        }
     }
     if (!c) {
         SELCLIENT(c);
-        if (!XQueryPointer(dpy, root, &dw, &dw, &ox, &oy, &di, &di, &du))
-            return;
-        ox -= c->x;
-        oy -= c->y;
     }
 
     if (!(c->flags & FLAG_FLOATING)) {
         Arg a = {0};
         togglefloating(&a);
+    }
+
+    if (arg && arg->v) {
+        const XEvent *bev = (const XEvent *)arg->v;
+        ox = bev->xbutton.x_root - c->x;
+        oy = bev->xbutton.y_root - c->y;
+    } else {
+        if (!XQueryPointer(dpy, root, &dw, &dw, &ox, &oy, &di, &di, &du))
+            return;
+        ox -= c->x;
+        oy -= c->y;
     }
 
     if (XGrabPointer(dpy, root, False,
@@ -856,6 +867,7 @@ void movemouse(const Arg *arg)
                         ev.xmotion.y_root - oy);
             if (selmon && selmon->barwin)
                 XRaiseWindow(dpy, selmon->barwin);
+            XFlush(dpy);
             break;
         case ButtonRelease:
             c->x = ev.xbutton.x_root - ox;
@@ -934,6 +946,7 @@ void resizemouse(const Arg *arg)
                           MAX(1, ev.xmotion.y_root - c->y));
             if (selmon && selmon->barwin)
                 XRaiseWindow(dpy, selmon->barwin);
+            XFlush(dpy);
             break;
         case ButtonRelease:
             c->w = MAX(1, ev.xbutton.x_root - c->x);
@@ -1137,11 +1150,7 @@ void focusworkspace(const Arg *arg)
     }
 
     oldws = m->ws;
-    node_hide_foreach(oldws->root);
-    for (Client *fc = clients; fc; fc = fc->next) {
-        if ((fc->flags & FLAG_FLOATING) && fc->workspace == m->curtag)
-            XMoveWindow(dpy, fc->win, -9999, -9999);
-    }
+    int oldtag = m->curtag;
 
     m->curtag = tag;
     m->ws     = &workspaces[tag];
@@ -1162,6 +1171,15 @@ void focusworkspace(const Arg *arg)
 
     update_bar_visibility(m);
     arrange(m);
+
+    if (oldws != m->ws) {
+        node_hide_foreach(oldws->root);
+        for (Client *fc = clients; fc; fc = fc->next) {
+            if ((fc->flags & FLAG_FLOATING) && fc->workspace == oldtag)
+                XMoveWindow(dpy, fc->win, -9999, -9999);
+        }
+    }
+
     drawbar(m);
 
     if (prev != m) {
@@ -1300,7 +1318,7 @@ void buttonpress(XEvent *e)
         }
     }
 
-    if (c && (e->xbutton.state & MODKEY)) {
+    if (c && (CLEANMASK(e->xbutton.state) & MODKEY)) {
         for (m = mons; m; m = m->next) {
             if (c->workspace == m->curtag ||
                 (e->xbutton.x_root >= m->x && e->xbutton.x_root < m->x + m->w &&
