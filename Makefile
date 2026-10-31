@@ -26,14 +26,14 @@ SRC = fiwm.c
 OBJ = ${SRC:.c=.o}
 
 CFLAGS_WIRE = -std=c99 -pedantic -Wall -Wextra -Wno-unused-parameter \
-              -ffreestanding -fno-builtin -fno-stack-protector -DUSE_XWIRE \
+              -ffreestanding -fno-builtin -fno-stack-protector \
               -Os -ffunction-sections -fdata-sections
 LDFLAGS_WIRE = -nostdlib -static -Wl,--gc-sections -Wl,-z,stack-size=16384 -s
 
-all: fiwm
+all: fiwm fiwm-wire
 
-fiwm-wire: fiwm.c xwire.h
-	${CC} ${CFLAGS_WIRE} -o $@ fiwm.c ${LDFLAGS_WIRE}
+fiwm-wire: fiwm-wire.c
+	${CC} ${CFLAGS_WIRE} -o $@ $< ${LDFLAGS_WIRE}
 
 .c.o:
 	${CC} -c ${CFLAGS} $<
@@ -43,7 +43,7 @@ fiwm: ${OBJ}
 	rm -f ${OBJ}
 
 clean:
-	rm -f fiwm ${OBJ}
+	rm -f fiwm fiwm-wire ${OBJ}
 
 install: all
 	mkdir -p ${DESTDIR}${PREFIX}/bin
