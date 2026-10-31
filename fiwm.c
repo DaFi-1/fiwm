@@ -1709,16 +1709,13 @@ void manage(Window w, XWindowAttributes *wa)
         XGrabButton(dpy, Button3, MODKEY | modifiers[i], w);
     }
 
+    XMapWindow(dpy, w);
     if (!(c->flags & FLAG_FLOATING)) {
         Node *nl = node_insert(selmon, c);
         selmon->dirty = 1;
         arrange(selmon);
-        XMapWindow(dpy, w);
         if (nl) focus(selmon, nl);
-        return;
     }
-
-    XMapWindow(dpy, w);
 }
 
 void unmanage(Client *c)
