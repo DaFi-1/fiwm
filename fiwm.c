@@ -1577,25 +1577,24 @@ Node *node_insert(Monitor *m, Client *c)
     newnode = node_new();
     newnode->is_leaf = 0;
 
+    Node *fparent = focus->parent;
     if (m->next_split >= 0) {
         newnode->split = m->next_split;
         m->next_split  = -1;
     } else {
-        newnode->split = focus->parent
-                         ? !focus->parent->split
-                         : SPLIT_VERTICAL;
+        newnode->split = fparent ? !fparent->split : SPLIT_VERTICAL;
     }
-    newnode->parent = focus->parent;
+    newnode->parent = fparent;
     newnode->u.ch.first  = focus;
     newnode->u.ch.second = newleaf;
     focus->parent   = newnode;
     newleaf->parent = newnode;
 
-    if (newnode->parent) {
-        if (newnode->parent->u.ch.first == focus)
-            newnode->parent->u.ch.first = newnode;
+    if (fparent) {
+        if (fparent->u.ch.first == focus)
+            fparent->u.ch.first = newnode;
         else
-            newnode->parent->u.ch.second = newnode;
+            fparent->u.ch.second = newnode;
     } else {
         ws->root = newnode;
     }
@@ -1622,17 +1621,19 @@ Node *node_in_direction(Node *n, int orient, int dir)
 
     p = n;
     while (p->parent) {
-        if (p->parent->split == orient) {
-            int on_first = (p->parent->u.ch.first == p);
+        Node *parent = p->parent;
+        if (parent->split == orient) {
+            int on_first = (parent->u.ch.first == p);
             if (on_first != want_first) {
-                c = want_first ? p->parent->u.ch.first : p->parent->u.ch.second;
+                c = want_first ? parent->u.ch.first : parent->u.ch.second;
 
                 int sub_pos = -1;
                 Node *q = n;
-                while (q != p->parent) {
-                    if (q->parent && q->parent->split != orient)
-                        sub_pos = (q->parent->u.ch.first == q) ? 0 : 1;
-                    q = q->parent;
+                while (q != parent) {
+                    Node *qp = q->parent;
+                    if (qp && qp->split != orient)
+                        sub_pos = (qp->u.ch.first == q) ? 0 : 1;
+                    q = qp;
                 }
 
                 while (!c->is_leaf) {
@@ -1644,7 +1645,7 @@ Node *node_in_direction(Node *n, int orient, int dir)
                 return c;
             }
         }
-        p = p->parent;
+        p = parent;
     }
     return NULL;
 }
