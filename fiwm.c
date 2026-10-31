@@ -2136,12 +2136,6 @@ monitor_new(int num, int x, int y, int w, int h)
 void updategeom(void)
 {
     Monitor *m;
-
-    while (mons) {
-        m = mons->next;
-        free(mons);
-        mons = m;
-    }
     mons = NULL;
 
     int n = 0;
@@ -2158,35 +2152,22 @@ void updategeom(void)
             if (isuniquegeom(unique, nunique, &info[i]))
                 unique[nunique++] = info[i];
 
-        if (nunique > 1) {
-            static const int default_dual_tagmap[WORKSPACE_COUNT] = { 0, 0, 0, 0, 0, 0, 0, 0, 1 };
-            for (int i = 0; i < WORKSPACE_COUNT; i++)
-                tagmap[i] = default_dual_tagmap[i];
-        } else {
-            for (int i = 0; i < WORKSPACE_COUNT; i++)
-                tagmap[i] = 0;
-        }
+        if (nunique <= 1)
+            tagmap[WORKSPACE_COUNT - 1] = 0;
 
         for (int i = 0; i < nunique; i++) {
             m = monitor_new(i, unique[i].x_org, unique[i].y_org,
                             unique[i].width, unique[i].height);
             m->next = mons;
             mons = m;
+            if (i == 0) selmon = m;
         }
     } else {
-        for (int i = 0; i < WORKSPACE_COUNT; i++)
-            tagmap[i] = 0;
+        tagmap[WORKSPACE_COUNT - 1] = 0;
         mons = monitor_new(0, 0, 0,
                            DisplayWidth(dpy, XDefaultScreen(dpy)),
                            DisplayHeight(dpy, XDefaultScreen(dpy)));
-    }
-
-    selmon = mons;
-    for (Monitor *tm = mons; tm; tm = tm->next) {
-        if (tm->num == 0) {
-            selmon = tm;
-            break;
-        }
+        selmon = mons;
     }
 }
 
