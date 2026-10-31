@@ -67,4 +67,7 @@ check-elf:
 test: fiwm-wire
 	./test_wire.sh
 
-.PHONY: all clean install uninstall check-elf test
+test-shortcuts: fiwm-wire
+	./test_all_shortcuts.sh
+
+.PHONY: all clean install uninstall check-elf test test-shortcuts

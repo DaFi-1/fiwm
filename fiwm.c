@@ -861,6 +861,7 @@ void movemouse(const Arg *arg)
             if (c->y < selmon->y) c->y = selmon->y;
             XMoveWindow(dpy, c->win, c->x, c->y);
             XUngrabPointer(dpy, CurrentTime);
+            focus(selmon, selmon->ws->focus);
             return;
         }
     }
@@ -906,6 +907,7 @@ void resizemouse(const Arg *arg)
             c->h = MAX(1, c->h);
             XResizeWindow(dpy, c->win, c->w, c->h);
             XUngrabPointer(dpy, CurrentTime);
+            focus(selmon, selmon->ws->focus);
             return;
         }
     }
@@ -1209,21 +1211,17 @@ void buttonpress(XEvent *e)
     }
 
     for (m = mons; m; m = m->next) {
-        if (e->xbutton.window == m->barwin) {
-            XWindowAttributes wa;
-            if (XGetWindowAttributes(dpy, m->barwin, &wa)) {
-                int i, ntags, tags[WORKSPACE_COUNT];
-                ntags = 0;
-                for (i = 0; i < WORKSPACE_COUNT; i++)
-                    if (tagmap[i] == m->num)
-                        tags[ntags++] = i;
-                if (ntags > 0) {
-                    int sw = wa.width / ntags;
-                    int clicked = e->xbutton.x / sw;
-                    if (clicked >= 0 && clicked < ntags) {
-                        Arg a = {.i = tags[clicked]};
-                        focusworkspace(&a);
-                    }
+        if (e->xbutton.window == m->barwin || e->xbutton.subwindow == m->barwin) {
+            int i, ntags = 0, tags[WORKSPACE_COUNT];
+            for (i = 0; i < WORKSPACE_COUNT; i++)
+                if (tagmap[i] == m->num)
+                    tags[ntags++] = i;
+            if (ntags > 0) {
+                int sw = m->w / ntags;
+                int clicked = e->xbutton.x_root / sw;
+                if (clicked >= 0 && clicked < ntags) {
+                    Arg a = {.i = tags[clicked]};
+                    focusworkspace(&a);
                 }
             }
             return;
@@ -1537,6 +1535,15 @@ void movecmd(const Arg *arg)
 
         c->workspace = tag;
         workspace_insert(&workspaces[tag], c, SPLIT_VERTICAL);
+        if (tag != selmon->curtag) {
+            XMoveWindow(dpy, c->win, -9999, -9999);
+            if (!newfocus) {
+                XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
+                XChangeProperty(dpy, root, netatom[NET_ACTIVE_WINDOW],
+                                XA_WINDOW, 32, PropModeReplace,
+                                (unsigned char *)&(Window){0}, 1);
+            }
+        }
         arrange(selmon);
         return;
     }
