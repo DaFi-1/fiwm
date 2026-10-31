@@ -620,19 +620,16 @@ arrange_floating(Monitor *m)
 
     for (c = clients; c; c = c->next) {
         if (!(c->flags & FLAG_FLOATING)) continue;
+        if (c->workspace != m->curtag) continue;
+
+        XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
         n = node_find_client(m->ws->root, c);
-        if (n) {
-            XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
-            if (n != m->ws->focus) {
-                XSetWindowBorderWidth(dpy, c->win, borderpx);
-                XSetWindowBorder(dpy, c->win, border_inactive);
-            }
-        } else if (c->workspace == m->curtag) {
-            XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
+        if (n && n != m->ws->focus) {
+            XSetWindowBorderWidth(dpy, c->win, borderpx);
+            XSetWindowBorder(dpy, c->win, border_inactive);
+        } else {
             XSetWindowBorderWidth(dpy, c->win, borderpx);
             XSetWindowBorder(dpy, c->win, border_active);
-        } else {
-            XMoveWindow(dpy, c->win, -9999, -9999);
         }
     }
 }
@@ -819,23 +816,38 @@ Client *find_client(Window w)
 
 void movemouse(const Arg *arg)
 {
-    Client *c;
+    Client *c = NULL;
     int di, ox = 0, oy = 0;
     unsigned int du;
     Window dw;
     XEvent ev;
 
-    SELCLIENT(c);
-    if (!(c->flags & FLAG_FLOATING)) return;
+    if (arg && arg->v) {
+        const XEvent *bev = (const XEvent *)arg->v;
+        c = find_client(bev->xbutton.window);
+        if (c) {
+            ox = bev->xbutton.x_root - c->x;
+            oy = bev->xbutton.y_root - c->y;
+        }
+    }
+    if (!c) {
+        SELCLIENT(c);
+        if (!XQueryPointer(dpy, root, &dw, &dw, &ox, &oy, &di, &di, &du))
+            return;
+        ox -= c->x;
+        oy -= c->y;
+    }
+
+    if (!(c->flags & FLAG_FLOATING)) {
+        Arg a = {0};
+        togglefloating(&a);
+    }
 
     if (XGrabPointer(dpy, root, False,
                      PointerMotionMask | ButtonReleaseMask,
                      GrabModeAsync, GrabModeAsync, None, None,
                      CurrentTime) != GrabSuccess)
         return;
-
-    XQueryPointer(dpy, root, &dw, &dw, &ox, &oy, &di, &di, &du);
-    ox -= c->x; oy -= c->y;
 
     for (;;) {
         XNextEvent(dpy, &ev);
@@ -862,22 +874,30 @@ void movemouse(const Arg *arg)
                     }
                 }
                 if (target_mon) {
+                    Monitor *old_m = selmon;
                     if (target_mon != selmon) {
                         selmon->dirty = 1;
                         selmon = target_mon;
                         selmon->dirty = 1;
                     }
+                    c->workspace = target_mon->curtag;
                     if (c->x + c->w + (borderpx << 1) > target_mon->x + target_mon->w)
                         c->x = target_mon->x + target_mon->w - c->w - (borderpx << 1);
                     if (c->y + c->h + (borderpx << 1) > target_mon->y + target_mon->h)
                         c->y = target_mon->y + target_mon->h - c->h - (borderpx << 1);
                     if (c->x < target_mon->x) c->x = target_mon->x;
                     if (c->y < target_mon->y) c->y = target_mon->y;
+                    if (old_m != target_mon) {
+                        arrange(old_m);
+                        drawbar(old_m);
+                    }
                 }
             }
             XMoveWindow(dpy, c->win, c->x, c->y);
             XUngrabPointer(dpy, CurrentTime);
             focus(selmon, selmon->ws->focus);
+            arrange(selmon);
+            drawbar(selmon);
             return;
         }
     }
@@ -885,22 +905,27 @@ void movemouse(const Arg *arg)
 
 void resizemouse(const Arg *arg)
 {
-    Client *c;
-    int di, mx, my;
-    unsigned int du;
-    Window dw;
+    Client *c = NULL;
     XEvent ev;
 
-    SELCLIENT(c);
-    if (!(c->flags & FLAG_FLOATING)) return;
+    if (arg && arg->v) {
+        const XEvent *bev = (const XEvent *)arg->v;
+        c = find_client(bev->xbutton.window);
+    }
+    if (!c) {
+        SELCLIENT(c);
+    }
+
+    if (!(c->flags & FLAG_FLOATING)) {
+        Arg a = {0};
+        togglefloating(&a);
+    }
 
     if (XGrabPointer(dpy, root, False,
                      PointerMotionMask | ButtonReleaseMask,
                      GrabModeAsync, GrabModeAsync, None, None,
                      CurrentTime) != GrabSuccess)
         return;
-
-    XQueryPointer(dpy, root, &dw, &dw, &di, &di, &mx, &my, &du);
 
     for (;;) {
         XNextEvent(dpy, &ev);
@@ -915,15 +940,27 @@ void resizemouse(const Arg *arg)
         case ButtonRelease:
             c->w = MAX(1, ev.xbutton.x_root - c->x);
             c->h = MAX(1, ev.xbutton.y_root - c->y);
-            if (c->x + c->w + (borderpx << 1) > selmon->x + selmon->w)
-                c->w = selmon->x + selmon->w - c->x - (borderpx << 1);
-            if (c->y + c->h + (borderpx << 1) > selmon->y + selmon->h)
-                c->h = selmon->y + selmon->h - c->y - (borderpx << 1);
-            c->w = MAX(1, c->w);
-            c->h = MAX(1, c->h);
+            {
+                Monitor *m = selmon;
+                for (Monitor *tm = mons; tm; tm = tm->next) {
+                    if (c->x >= tm->x && c->x < tm->x + tm->w &&
+                        c->y >= tm->y && c->y < tm->y + tm->h) {
+                        m = tm;
+                        break;
+                    }
+                }
+                if (c->x + c->w + (borderpx << 1) > m->x + m->w)
+                    c->w = m->x + m->w - c->x - (borderpx << 1);
+                if (c->y + c->h + (borderpx << 1) > m->y + m->h)
+                    c->h = m->y + m->h - c->y - (borderpx << 1);
+                c->w = MAX(1, c->w);
+                c->h = MAX(1, c->h);
+            }
             XResizeWindow(dpy, c->win, c->w, c->h);
             XUngrabPointer(dpy, CurrentTime);
             focus(selmon, selmon->ws->focus);
+            arrange(selmon);
+            drawbar(selmon);
             return;
         }
     }
@@ -1103,6 +1140,10 @@ void focusworkspace(const Arg *arg)
 
     oldws = m->ws;
     node_hide_foreach(oldws->root);
+    for (Client *fc = clients; fc; fc = fc->next) {
+        if ((fc->flags & FLAG_FLOATING) && fc->workspace == m->curtag)
+            XMoveWindow(dpy, fc->win, -9999, -9999);
+    }
 
     m->curtag = tag;
     m->ws     = &workspaces[tag];
@@ -1263,13 +1304,24 @@ void buttonpress(XEvent *e)
 
     if (c && (e->xbutton.state & MODKEY)) {
         for (m = mons; m; m = m->next) {
+            if (c->workspace == m->curtag ||
+                (e->xbutton.x_root >= m->x && e->xbutton.x_root < m->x + m->w &&
+                 e->xbutton.y_root >= m->y && e->xbutton.y_root < m->y + m->h)) {
+                selmon = m;
+                break;
+            }
+        }
+        for (m = mons; m; m = m->next) {
             n = node_find_client(m->ws->root, c);
             if (n) { focus(m, n); break; }
         }
-        if (e->xbutton.button == Button1)
-            movemouse(NULL);
-        else if (e->xbutton.button == Button3)
-            resizemouse(NULL);
+        if (e->xbutton.button == Button1) {
+            Arg a = {.v = e};
+            movemouse(&a);
+        } else if (e->xbutton.button == Button3) {
+            Arg a = {.v = e};
+            resizemouse(&a);
+        }
         return;
     }
 
@@ -1459,6 +1511,7 @@ void togglefloating(const Arg *arg)
         if (c->x < selmon->x) c->x = selmon->x;
         if (c->y < selmon->y) c->y = selmon->y;
         c->w = fw; c->h = fh;
+        c->workspace = selmon->curtag;
         XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
         XSetWindowBorderWidth(dpy, c->win, borderpx);
         XSetWindowBorder(dpy, c->win, border_active);
