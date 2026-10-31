@@ -453,8 +453,12 @@ static inline int _xwire_read(int fd, void *b, unsigned long n) {
     _xwire_flush(fd);
     unsigned char *dst = (unsigned char *)b;
     unsigned long done = 0;
-    while (_xwire_in_pos < _xwire_in_len && done < n) {
-        dst[done++] = _xwire_inbuf[_xwire_in_pos++];
+    unsigned long avail = (unsigned long)(_xwire_in_len - _xwire_in_pos);
+    if (avail > 0) {
+        unsigned long take = (avail < n) ? avail : n;
+        __builtin_memcpy(dst, _xwire_inbuf + _xwire_in_pos, take);
+        _xwire_in_pos += (int)take;
+        done = take;
     }
     while (done < n) {
         int r = (int)_xwire_sys3(SYS_READ, fd, (long)(dst + done), n - done);
@@ -849,16 +853,10 @@ static inline int XNextEvent(Display *d, XEvent *e) {
             e->xconfigurerequest.border_width = *(const unsigned short *)&buf[24];
             e->xconfigurerequest.value_mask = *(const unsigned short *)&buf[28];
             return 0;
+        case 17: /* DestroyNotify */
         case 18: /* UnmapNotify */
             e->xunmap.window = *(const unsigned int *)&buf[8];
             e->xunmap.send_event = 0;
-            return 0;
-        case 17: /* DestroyNotify */
-            e->xdestroywindow.window = *(const unsigned int *)&buf[8];
-            return 0;
-        case 16: /* CreateNotify */
-            e->xcreatewindow.window = *(const unsigned int *)&buf[8];
-            e->xcreatewindow.parent = *(const unsigned int *)&buf[4];
             return 0;
         case 12: /* Expose */
             e->xexpose.window = *(const unsigned int *)&buf[4];
