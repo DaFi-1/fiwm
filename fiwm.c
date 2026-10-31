@@ -890,20 +890,15 @@ static inline Atom XInternAtom(Display *d, const char *name, int only_if_exists)
     return 0;
 }
 
-static inline int XAllocNamedColor(Display *d, Colormap m, const char *name, XColor *scr, XColor *exact) {
-    (void)d; (void)m; (void)exact;
+static inline unsigned long parse_color(const char *name) {
     unsigned long val = 0;
-    if (name && name[0] == '#' && name[1] != '\0') {
-        const char *p = name + 1;
-        while (*p) {
-            val <<= 4;
-            unsigned char c = (unsigned char)*p++;
-            if (c >= '0' && c <= '9') val |= (c - '0');
-            else if ((c | 0x20) >= 'a' && (c | 0x20) <= 'f') val |= ((c | 0x20) - 'a' + 10);
+    if (name && *name == '#') {
+        while (*++name) {
+            unsigned char c = (unsigned char)*name;
+            val = (val << 4) | ((c <= '9') ? (c - '0') : ((c | 0x20) - 'a' + 10));
         }
     }
-    scr->pixel = val;
-    return 1;
+    return val;
 }
 
 static inline GC XCreateGC(Display *d, Drawable dr, unsigned long valmask, void *val) {
@@ -1680,7 +1675,7 @@ arrange_floating(Monitor *m)
         XSetWindowBorder(dpy, c->win, (c->node && c->node != m->ws->focus) ? border_inactive : border_active);
     }
 }
-void arrange_node(Node *n, int x, int y, int w, int h, int gap)
+void arrange_node(Node *n, int x, int y, int w, int h)
 {
     Client *c;
     if (!n) return;
@@ -1697,15 +1692,15 @@ void arrange_node(Node *n, int x, int y, int w, int h, int gap)
         return;
     }
 
-    int half_gap = gap > 0 ? (gap >> 1) : 0;
+    int half_gap = gappx > 0 ? (gappx >> 1) : 0;
     if (n->split == SPLIT_VERTICAL) {
         int fw = MAX(1, (w >> 1) - half_gap);
-        arrange_node(n->u.ch.first,  x, y, fw, h, gap);
-        arrange_node(n->u.ch.second, x + fw + gap, y, MAX(1, w - fw - gap), h, gap);
+        arrange_node(n->u.ch.first,  x, y, fw, h);
+        arrange_node(n->u.ch.second, x + fw + gappx, y, MAX(1, w - fw - gappx), h);
     } else {
         int fh = MAX(1, (h >> 1) - half_gap);
-        arrange_node(n->u.ch.first,  x, y, w, fh, gap);
-        arrange_node(n->u.ch.second, x, y + fh + gap, w, MAX(1, h - fh - gap), gap);
+        arrange_node(n->u.ch.first,  x, y, w, fh);
+        arrange_node(n->u.ch.second, x, y + fh + gappx, w, MAX(1, h - fh - gappx));
     }
 }
 
@@ -1732,7 +1727,7 @@ void arrange(Monitor *m)
     wh = m->h - BAR_HEIGHT - (gappx << 1) - borderpx;
 
     if (m->ws->root)
-        arrange_node(m->ws->root, wx, wy, ww, wh, gappx);
+        arrange_node(m->ws->root, wx, wy, ww, wh);
 
     arrange_floating(m);
 
@@ -2869,15 +2864,11 @@ void setup(void)
     dpy = XOpenDisplay(NULL);
     if (!dpy) die("fiwm: cannot open display\n");
     root = RootWindow(dpy, XDefaultScreen(dpy));
-    {
-        Colormap cmap = DefaultColormap(dpy, XDefaultScreen(dpy));
-        XColor c;
-        XAllocNamedColor(dpy, cmap, colors[COL_BORDER_ACTIVE], &c, &c); border_active = c.pixel;
-        XAllocNamedColor(dpy, cmap, colors[COL_BORDER_INACTIVE], &c, &c); border_inactive = c.pixel;
-        XAllocNamedColor(dpy, cmap, colors[COL_BAR_BG], &c, &c); bar_bg = c.pixel;
-        XAllocNamedColor(dpy, cmap, colors[COL_BAR_FG], &c, &c); bar_fg = c.pixel;
-        XAllocNamedColor(dpy, cmap, colors[COL_BAR_HL], &c, &c); bar_hl = c.pixel;
-    }
+    border_active   = parse_color(colors[COL_BORDER_ACTIVE]);
+    border_inactive = parse_color(colors[COL_BORDER_INACTIVE]);
+    bar_bg          = parse_color(colors[COL_BAR_BG]);
+    bar_fg          = parse_color(colors[COL_BAR_FG]);
+    bar_hl          = parse_color(colors[COL_BAR_HL]);
 
     for (i = 0; i < WORKSPACE_COUNT; i++) {
         workspaces[i].root  = NULL;
