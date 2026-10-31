@@ -839,14 +839,13 @@ static inline int XNextEvent(Display *d, XEvent *e) {
         _xwire_in_pos += 32;
 
         unsigned char code = buf[0] & 0x7F;
+        e->type = (int)code;
         switch (code) {
         case 20: /* MapRequest */
-            e->type = MapRequest;
             e->xmaprequest.window = *(const unsigned int *)&buf[8];
             e->xmaprequest.parent = *(const unsigned int *)&buf[4];
             return 0;
         case 23: /* ConfigureRequest */
-            e->type = ConfigureRequest;
             e->xconfigurerequest.window = *(const unsigned int *)&buf[8];
             e->xconfigurerequest.x = *(const short *)&buf[16];
             e->xconfigurerequest.y = *(const short *)&buf[18];
@@ -856,25 +855,20 @@ static inline int XNextEvent(Display *d, XEvent *e) {
             e->xconfigurerequest.value_mask = *(const unsigned short *)&buf[28];
             return 0;
         case 18: /* UnmapNotify */
-            e->type = UnmapNotify;
             e->xunmap.window = *(const unsigned int *)&buf[8];
             e->xunmap.send_event = 0;
             return 0;
         case 17: /* DestroyNotify */
-            e->type = DestroyNotify;
             e->xdestroywindow.window = *(const unsigned int *)&buf[8];
             return 0;
         case 16: /* CreateNotify */
-            e->type = CreateNotify;
             e->xcreatewindow.window = *(const unsigned int *)&buf[8];
             e->xcreatewindow.parent = *(const unsigned int *)&buf[4];
             return 0;
         case 12: /* Expose */
-            e->type = Expose;
             e->xexpose.window = *(const unsigned int *)&buf[4];
             return 0;
         case 7: /* EnterNotify */
-            e->type = EnterNotify;
             e->xcrossing.window = *(const unsigned int *)&buf[12];
             e->xcrossing.root = *(const unsigned int *)&buf[8];
             e->xcrossing.subwindow = *(const unsigned int *)&buf[16];
@@ -886,7 +880,6 @@ static inline int XNextEvent(Display *d, XEvent *e) {
             e->xcrossing.detail = (int)buf[1];
             return 0;
         case 6: /* MotionNotify */
-            e->type = MotionNotify;
             e->xmotion.window = *(const unsigned int *)&buf[12];
             e->xmotion.root = *(const unsigned int *)&buf[8];
             e->xmotion.subwindow = *(const unsigned int *)&buf[16];
@@ -898,7 +891,6 @@ static inline int XNextEvent(Display *d, XEvent *e) {
             e->xmotion.state = *(const unsigned short *)&buf[28];
             return 0;
         case 5: /* ButtonRelease */
-            e->type = ButtonRelease;
             e->xbutton.window = *(const unsigned int *)&buf[12];
             e->xbutton.root = *(const unsigned int *)&buf[8];
             e->xbutton.subwindow = *(const unsigned int *)&buf[16];
@@ -911,7 +903,6 @@ static inline int XNextEvent(Display *d, XEvent *e) {
             e->xbutton.state = *(const unsigned short *)&buf[28];
             return 0;
         case 4: /* ButtonPress */
-            e->type = ButtonPress;
             e->xbutton.window = *(const unsigned int *)&buf[12];
             e->xbutton.root = *(const unsigned int *)&buf[8];
             e->xbutton.subwindow = *(const unsigned int *)&buf[16];
@@ -924,13 +915,11 @@ static inline int XNextEvent(Display *d, XEvent *e) {
             e->xbutton.state = *(const unsigned short *)&buf[28];
             return 0;
         case 2: /* KeyPress */
-            e->type = KeyPress;
             e->xkey.window = *(const unsigned int *)&buf[12];
             e->xkey.keycode = buf[1];
             e->xkey.state = *(const unsigned short *)&buf[28];
             return 0;
         default:
-            e->type = code;
             return 0;
         }
     }
@@ -1992,6 +1981,7 @@ void focus(Monitor *m, Node *n)
 
 Client *find_client(Window w)
 {
+    if (__builtin_expect(!w || w == root, 0)) return NULL;
     unsigned int h = client_hash_idx(w);
     for (Client *c = client_hash[h]; c; c = c->hnext)
         if (c->win == w) return c;
