@@ -1046,28 +1046,6 @@ static inline int XQueryPointer(Display *d, Window w, Window *r, Window *c, int 
     return 1;
 }
 
-static inline void XSendEvent(Display *d, Window w, int prop, long mask, XEvent *ev) {
-    if (!d || !ev) return;
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 44);
-    p[0] = (11 << 16) | ((prop & 0xFF) << 8) | 25; /* X_SendEvent: reqType=25, length=11 */
-    p[1] = (unsigned int)w;
-    p[2] = (unsigned int)mask;
-    if (ev->type == ClientMessage) {
-        unsigned char *ep = (unsigned char *)&p[3];
-        for (int i = 0; i < 32; i++) ep[i] = 0;
-        ep[0] = 33; /* ClientMessage */
-        ep[1] = (unsigned char)ev->xclient.format;
-        *(unsigned int *)&ep[4] = (unsigned int)ev->xclient.window;
-        *(unsigned int *)&ep[8] = (unsigned int)ev->xclient.message_type;
-        for (int i = 0; i < 5; i++)
-            *(unsigned int *)&ep[12 + (i << 2)] = (unsigned int)ev->xclient.data.l[i];
-    } else {
-        unsigned char *ep = (unsigned char *)&p[3];
-        const unsigned char *src = (const unsigned char *)ev;
-        for (int i = 0; i < 32; i++) ep[i] = src[i];
-    }
-}
-
 static inline XModifierKeymap *XGetModifierMapping(Display *d) {
     (void)d;
     static KeyCode dummy[8] = { 0, 0, 0, 0, 77 /* Mod2 = NumLock */, 0, 0, 0 };
@@ -2439,17 +2417,20 @@ void quit(const Arg *arg)
 void killclient(const Arg *arg)
 {
     Client *c;
-    XEvent ev;
-
     SELCLIENT(c);
 
-    ev.type = ClientMessage;
-    ev.xclient.window = c->win;
-    ev.xclient.message_type = wmatom[WM_PROTOCOLS];
-    ev.xclient.format = 32;
-    ev.xclient.data.l[0] = wmatom[WM_DELETE_WINDOW];
-    ev.xclient.data.l[1] = CurrentTime;
-    XSendEvent(dpy, c->win, False, NoEventMask, &ev);
+    unsigned int *p = (unsigned int *)_xwire_reserve(dpy->fd, 44);
+    p[0] = (11 << 16) | 25; /* X_SendEvent: reqType=25, length=11, propagate=0 */
+    p[1] = (unsigned int)c->win;
+    p[2] = 0;               /* mask = NoEventMask */
+    p[3] = (32 << 8) | 33;  /* ClientMessage (33), format=32 */
+    p[4] = (unsigned int)c->win;
+    p[5] = (unsigned int)wmatom[WM_PROTOCOLS];
+    p[6] = (unsigned int)wmatom[WM_DELETE_WINDOW];
+    p[7] = 0;               /* CurrentTime */
+    p[8] = 0;
+    p[9] = 0;
+    p[10] = 0;
 }
 
 void togglefullscreen(const Arg *arg)
