@@ -1,4 +1,7 @@
 /* fiwm - BSP tiling WM (freestanding x86_64, _start entry) */
+#ifdef USE_XWIRE
+#include "xwire.h"
+#else
 #include <X11/cursorfont.h>
 #include <X11/XKBlib.h>
 #include <X11/keysym.h>
@@ -6,6 +9,7 @@
 #include <X11/Xlib.h>
 #ifdef XINERAMA
 #include <X11/extensions/Xinerama.h>
+#endif
 #endif
 #define LENGTH(X)           (sizeof(X) / sizeof(X)[0])
 #define MAX(A,B)            ((A) > (B) ? (A) : (B))
@@ -236,7 +240,7 @@ static int   nodeidx;
 static Node *nodefreelist;
 static Client *client_freelist;
 
-static char **envp_global;
+char **envp_global;
 #define SYS_READ      0
 #define SYS_WRITE     1
 #define SYS_CLOSE     3
