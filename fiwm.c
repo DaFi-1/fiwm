@@ -428,19 +428,6 @@ static inline void *_xwire_reserve(int fd, unsigned long n) {
     return p;
 }
 
-static inline int _xwire_write(int fd, const void *b, unsigned long n) {
-    if (n >= sizeof(_xwire_outbuf)) {
-        _xwire_flush(fd);
-        return (int)_xwire_sys3(SYS_WRITE, fd, (long)b, n);
-    }
-    if (_xwire_outlen + n > sizeof(_xwire_outbuf)) {
-        _xwire_flush(fd);
-    }
-    __builtin_memcpy(_xwire_outbuf + _xwire_outlen, b, n);
-    _xwire_outlen += n;
-    return (int)n;
-}
-
 static inline int _xwire_read(int fd, void *b, unsigned long n) {
     _xwire_flush(fd);
     unsigned char *dst = (unsigned char *)b;
@@ -547,8 +534,7 @@ static inline Display *XOpenDisplay(const char *name) {
 connected: ;
 
     unsigned char setup_req[12] = { 'l', 0, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    _xwire_write(fd, setup_req, 12);
-    _xwire_flush(fd);
+    _xwire_sys3(SYS_WRITE, fd, (long)setup_req, 12);
 
     unsigned char rep_hdr[8];
     if (_xwire_read(fd, rep_hdr, 8) != 8 || rep_hdr[0] != 1) {
@@ -605,13 +591,13 @@ static inline void XCloseDisplay(Display *d) {
     }
 }
 
-static inline int ConnectionNumber(Display *d) { return d ? d->fd : -1; }
-static inline int XDefaultScreen(Display *d) { (void)d; return 0; }
-static inline int DisplayWidth(Display *d, int s) { (void)s; return d ? d->width : 1024; }
-static inline int DisplayHeight(Display *d, int s) { (void)s; return d ? d->height : 768; }
-static inline Window RootWindow(Display *d, int s) { (void)s; return d ? d->root : 0; }
-static inline Colormap DefaultColormap(Display *d, int s) { (void)d; (void)s; return 0; }
-static inline int DefaultDepth(Display *d, int s) { (void)d; (void)s; return 24; }
+#define ConnectionNumber(d) ((d)->fd)
+#define XDefaultScreen(d) 0
+#define DisplayWidth(d, s) ((d) ? (d)->width : 1024)
+#define DisplayHeight(d, s) ((d) ? (d)->height : 768)
+#define RootWindow(d, s) ((d) ? (d)->root : 0)
+#define DefaultColormap(d, s) 0
+#define DefaultDepth(d, s) 24
 
 static inline Window XCreateWindow(Display *d, Window parent, int x, int y, unsigned int width, unsigned int height, unsigned int border_width, int depth, unsigned int class_type, VisualID visual, unsigned long valmask, XSetWindowAttributes *a) {
     (void)class_type; (void)visual;
