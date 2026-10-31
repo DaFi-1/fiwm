@@ -2446,8 +2446,6 @@ void togglefloating(const Arg *arg)
         c->y = selmon->y + ((selmon->h - fh) >> 1);
         c->w = fw; c->h = fh;
         c->workspace = selmon->curtag;
-        XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
-        XSetWindowBorder(dpy, c->win, border_active);
         XRaiseWindow(dpy, c->win);
     } else {
         c->x = c->tile_x; c->y = c->tile_y;
