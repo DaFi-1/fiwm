@@ -615,14 +615,15 @@ static inline Window create_bar_window(Display *d, Window parent, int x, int y, 
     return wid;
 }
 
-static inline void XLowerWindow(Display *d, Window w) {
-    /* Opcode 12: ConfigureWindow (CWStackMode = 64, Below = 1) */
+static inline void stack_window(Display *d, Window w, unsigned int mode) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 12;
     p[1] = (unsigned int)w;
     p[2] = 64;
-    p[3] = 1;
+    p[3] = mode;
 }
+#define XRaiseWindow(d, w) stack_window((d), (w), 0)
+#define XLowerWindow(d, w) stack_window((d), (w), 1)
 
 static inline void XConfigureWindowFromReq(Display *d, XConfigureRequestEvent *ev) {
     if (__builtin_expect(_xwire_outlen + 40 > sizeof(_xwire_outbuf), 0))
@@ -715,14 +716,6 @@ static inline void XUnmapWindow(Display *d, Window w) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
     p[0] = (2 << 16) | 10;
     p[1] = (unsigned int)w;
-}
-
-static inline void XRaiseWindow(Display *d, Window w) {
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
-    p[0] = (4 << 16) | 12;
-    p[1] = (unsigned int)w;
-    p[2] = 64;
-    p[3] = 0;
 }
 
 static inline void set_input_focus(Display *d, Window w) {
