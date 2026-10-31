@@ -1002,41 +1002,38 @@ static inline GC XCreateGC(Display *d, Drawable dr, unsigned long valmask, void 
 
 static inline void XFreeGC(Display *d, GC gc) {
     if (!d || !gc) return;
-    unsigned int p[2];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
     p[0] = (2 << 16) | 60; /* X_FreeGC: reqType=60, length=2 */
     p[1] = (unsigned int)(unsigned long)gc;
-    _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline void XSetForeground(Display *d, GC gc, unsigned long pixel) {
     if (!d || !gc) return;
-    unsigned int p[4];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 56; /* X_ChangeGC: reqType=56, length=4 */
     p[1] = (unsigned int)(unsigned long)gc;
     p[2] = 4; /* GCForeground = (1L<<2) */
     p[3] = (unsigned int)pixel;
-    _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline void XFillRectangle(Display *d, Drawable dr, GC gc, int x, int y, unsigned int w, unsigned int h) {
     if (!d || !gc || !dr) return;
-    unsigned int p[5];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 20);
     p[0] = (5 << 16) | 70; /* X_PolyFillRectangle: reqType=70, length=5 */
     p[1] = (unsigned int)dr;
     p[2] = (unsigned int)(unsigned long)gc;
     p[3] = ((int)y << 16) | ((int)x & 0xFFFF);
     p[4] = ((unsigned int)h << 16) | (w & 0xFFFF);
-    _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline void XDrawString(Display *d, Drawable dr, GC gc, int x, int y, const char *s, int len) {
     if (!d || !dr || !gc || !s || len <= 0 || len > 200) return;
-    unsigned int p[64];
     int total_bytes = 18 + len;
     int pad = (-total_bytes) & 3;
     total_bytes += pad;
     int words = total_bytes >> 2;
 
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, words << 2);
     p[0] = (words << 16) | 74; /* X_PolyText8: reqType=74 */
     p[1] = (unsigned int)dr;
     p[2] = (unsigned int)(unsigned long)gc;
@@ -1047,41 +1044,36 @@ static inline void XDrawString(Display *d, Drawable dr, GC gc, int x, int y, con
     bp[1] = 0; /* delta */
     for (int i = 0; i < len; i++) bp[2 + i] = s[i];
     for (int i = 0; i < pad; i++) bp[2 + len + i] = 0;
-
-    _xwire_write(d->fd, p, words << 2);
 }
 
 static inline Pixmap XCreatePixmap(Display *d, Drawable dr, unsigned int w, unsigned int h, unsigned int depth) {
     if (!d || !dr) return 0;
     unsigned int pid = d->next_rid++;
-    unsigned int p[4];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | (depth << 8) | 53; /* X_CreatePixmap: reqType=53, length=4 */
     p[1] = pid;
     p[2] = (unsigned int)dr;
     p[3] = ((unsigned int)h << 16) | (w & 0xFFFF);
-    _xwire_write(d->fd, p, sizeof(p));
     return (Pixmap)pid;
 }
 
 static inline void XFreePixmap(Display *d, Pixmap p) {
     if (!d || !p) return;
-    unsigned int req[2];
+    unsigned int *req = (unsigned int *)_xwire_reserve(d->fd, 8);
     req[0] = (2 << 16) | 54; /* X_FreePixmap: reqType=54, length=2 */
     req[1] = (unsigned int)p;
-    _xwire_write(d->fd, req, sizeof(req));
 }
 
 static inline void XDestroyWindow(Display *d, Window w) {
     if (!d || !w) return;
-    unsigned int p[2];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
     p[0] = (2 << 16) | 4; /* X_DestroyWindow: reqType=4, length=2 */
     p[1] = (unsigned int)w;
-    _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline void XCopyArea(Display *d, Drawable src, Drawable dst, GC gc, int sx, int sy, unsigned int w, unsigned int h, int dx, int dy) {
     if (!d || !src || !dst || !gc) return;
-    unsigned int p[7];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 28);
     p[0] = (7 << 16) | 62; /* X_CopyArea: reqType=62, length=7 */
     p[1] = (unsigned int)src;
     p[2] = (unsigned int)dst;
@@ -1089,7 +1081,6 @@ static inline void XCopyArea(Display *d, Drawable src, Drawable dst, GC gc, int 
     p[4] = ((int)sy << 16) | ((int)sx & 0xFFFF);
     p[5] = ((int)dy << 16) | ((int)dx & 0xFFFF);
     p[6] = ((unsigned int)h << 16) | (w & 0xFFFF);
-    _xwire_write(d->fd, p, sizeof(p));
 }
 
 static inline int XGetWindowAttributes(Display *d, Window w, XWindowAttributes *attr) {
@@ -2485,12 +2476,17 @@ void drawbar(Monitor *m)
     XSetForeground(dpy, bar_gc, bar_bg);
     XFillRectangle(dpy, d, bar_gc, 0, 0, m->bar_width, BAR_HEIGHT);
 
+    unsigned long cur_fg = bar_bg;
     for (idx = 0; idx < m->ntags; idx++) {
         i = m->tags[idx];
         x = idx * sw;
         buf[0] = (char)('1' + i);
         buf[1] = '\0';
-        XSetForeground(dpy, bar_gc, (m == selmon && m->curtag == i) ? bar_fg : bar_hl);
+        unsigned long fg = (m == selmon && m->curtag == i) ? bar_fg : bar_hl;
+        if (fg != cur_fg) {
+            XSetForeground(dpy, bar_gc, fg);
+            cur_fg = fg;
+        }
         XDrawString(dpy, d, bar_gc, x + (sw >> 1) - 4,
                     (BAR_HEIGHT >> 1) + 5, buf, 1);
     }
