@@ -737,13 +737,13 @@ static inline void XRaiseWindow(Display *d, Window w) {
     p[3] = 0;
 }
 
-static inline void XSetInputFocus(Display *d, Window w, int revert, Time t) {
-    (void)revert; (void)t;
+static inline void set_input_focus(Display *d, Window w) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 12);
     p[0] = (3 << 16) | (1 << 8) | 42;
     p[1] = (unsigned int)w;
     p[2] = 0;
 }
+#define XSetInputFocus(d, w, r, t) set_input_focus(d, w)
 
 static inline void XGrabKey(Display *d, int keycode, unsigned int mod, Window w, int owner, int sync_p, int sync_k) {
     (void)owner; (void)sync_p; (void)sync_k;
@@ -1001,9 +1001,7 @@ static inline int XGetWindowAttributes(Display *d, Window w, XWindowAttributes *
 }
 
 static inline int XQueryTree(Display *d, Window w, Window *root_return, Window *parent_return, Window **children_return, unsigned int *nchildren_return) {
-    (void)d; (void)w;
-    if (root_return) *root_return = d ? d->root : 0;
-    if (parent_return) *parent_return = d ? d->root : 0;
+    (void)d; (void)w; (void)root_return; (void)parent_return;
     if (children_return) *children_return = NULL;
     if (nchildren_return) *nchildren_return = 0;
     return 1;
@@ -2199,6 +2197,14 @@ monitor_in_direction(Monitor *m, int orient, int dir)
     return target;
 }
 
+static inline void reset_root_focus(void) {
+    set_input_focus(dpy, root);
+    Window w = 0;
+    XChangeProperty(dpy, root, netatom[NET_ACTIVE_WINDOW],
+                    XA_WINDOW, 32, PropModeReplace,
+                    (unsigned char *)&w, 1);
+}
+
 void focusworkspace(const Arg *arg)
 {
     Monitor *m, *prev;
@@ -2250,10 +2256,7 @@ void focusworkspace(const Arg *arg)
         if (first)
             focus(m, first);
     } else {
-        XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
-        XChangeProperty(dpy, root, netatom[NET_ACTIVE_WINDOW],
-                        XA_WINDOW, 32, PropModeReplace,
-                        (unsigned char *)&(Window){0}, 1);
+        reset_root_focus();
     }
 
     update_bar_visibility(m);
@@ -2691,10 +2694,7 @@ void movecmd(const Arg *arg)
             XMoveWindow(dpy, c->win, -9999, -9999);
         }
         if (!newfocus) {
-            XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
-            XChangeProperty(dpy, root, netatom[NET_ACTIVE_WINDOW],
-                            XA_WINDOW, 32, PropModeReplace,
-                            (unsigned char *)&(Window){0}, 1);
+            reset_root_focus();
         }
         arrange(selmon);
         return;
@@ -2775,20 +2775,7 @@ void grabkeys(void)
 
 void scan(void)
 {
-    unsigned int i, n;
-    Window d1, d2, *wins;
-    XWindowAttributes wa;
-
-    if (XQueryTree(dpy, root, &d1, &d2, &wins, &n)) {
-        for (i = 0; i < n; i++) {
-            if (!XGetWindowAttributes(dpy, wins[i], &wa) ||
-                wa.override_redirect)
-                continue;
-            if (wa.map_state == IsViewable)
-                manage(wins[i], &wa);
-        }
-        XFree(wins);
-    }
+    if (0) manage(0, NULL);
 }
 
 void setup(void)
