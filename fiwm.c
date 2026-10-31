@@ -169,10 +169,10 @@ static const unsigned int MODKEY = Mod1Mask;
 
 /* Autostart commands (run once at startup, before the event loop) */
 static const char *autostart[][4] = {
-    /* { "/bin/sh", "-c", "picom", NULL }, */
-   // { "/bin/sh", "-c", "nitrogen --restore", NULL },
-    { "/bin/sh", "-c", "xset r rate 180 250", NULL },
-    { "/bin/sh", "-c", "xrandr --output eDP-1 --mode 1366x768 --rate 60 --pos 0x0 --output HDMI-1 --mode 1920x1080 --rate 60 --pos 1366x0 --primary", NULL },
+    { "/bin/sh", "-c", "[ -x $HOME/.config/i3/xrandr.sh ] && $HOME/.config/i3/xrandr.sh || (command -v xrandr >/dev/null 2>&1 && xrandr --output eDP-1 --mode 1366x768 --rate 60 --pos 0x0 --output HDMI-1 --mode 1920x1080 --rate 60 --pos 1366x0 --primary)", NULL },
+    { "/bin/sh", "-c", "[ -x $HOME/.config/i3/audio-autostart.sh ] && $HOME/.config/i3/audio-autostart.sh", NULL },
+    { "/bin/sh", "-c", "command -v setxkbmap >/dev/null 2>&1 && setxkbmap -option caps:escape", NULL },
+    { "/bin/sh", "-c", "command -v xset >/dev/null 2>&1 && xset r rate 180 250", NULL },
 };
 
 static const Key keys[] = {
@@ -237,14 +237,17 @@ static Node *nodefreelist;
 static Client *client_freelist;
 
 char **envp_global;
-#define SYS_RT_SIGACTION 13
 #define SYS_READ      0
 #define SYS_WRITE     1
 #define SYS_CLOSE     3
+#define SYS_POLL      7
+#define SYS_RT_SIGACTION 13
 #define SYS_FORK     57
 #define SYS_EXECVE   59
 #define SYS_EXIT     60
 #define SYS_WAIT4    61
+#define SYS_KILL     62
+#define SYS_READLINK 89
 #define SYS_SETSID  112
 
 static inline long syscall3(long nr, long a1, long a2, long a3)
@@ -282,10 +285,52 @@ static inline __attribute__((noreturn)) void sys_exit(int code)
 #define sys_execve(p,a,e)  syscall3(SYS_EXECVE, (long)(p), (long)(a), (long)(e))
 #define sys_close(f)       syscall3(SYS_CLOSE, (long)(f), 0, 0)
 #define sys_setsid()       syscall3(SYS_SETSID, 0, 0, 0)
+#define sys_kill(p,s)      syscall3(SYS_KILL, (long)(p), (long)(s), 0)
 
 static inline long sys_wait4(long pid, int *wstatus, int options, void *rusage)
 {
     return syscall4(SYS_WAIT4, pid, (long)wstatus, (long)options, (long)rusage);
+}
+
+static long xorg_pid = 0;
+
+static void start_xorg(void)
+{
+    char vt_arg[16];
+    vt_arg[0] = '\0';
+    char tty_path[32];
+    long len = syscall3(SYS_READLINK, (long)"/proc/self/fd/0", (long)tty_path, sizeof(tty_path) - 1);
+    if (len > 0) {
+        tty_path[len] = '\0';
+        if (tty_path[0] == '/' && tty_path[5] == 't' && tty_path[6] == 't' && tty_path[7] == 'y' &&
+            tty_path[8] >= '0' && tty_path[8] <= '9') {
+            vt_arg[0] = 'v';
+            vt_arg[1] = 't';
+            int p = 8, q = 2;
+            while (tty_path[p] >= '0' && tty_path[p] <= '9' && q < 14)
+                vt_arg[q++] = tty_path[p++];
+            vt_arg[q] = '\0';
+        }
+    }
+
+    const char *x_argv[6];
+    int argc = 0;
+    x_argv[argc++] = "/usr/bin/X";
+    x_argv[argc++] = ":0";
+    x_argv[argc++] = "-ac";
+    if (vt_arg[0])
+        x_argv[argc++] = vt_arg;
+    x_argv[argc++] = "-keeptty";
+    x_argv[argc] = NULL;
+
+    long pid = sys_fork();
+    if (pid == 0) {
+        sys_execve(x_argv[0], (char *const *)x_argv, envp_global);
+        sys_exit(1);
+    }
+    if (pid > 0) {
+        xorg_pid = pid;
+    }
 }
 static size_t strlen(const char *s)
 {
@@ -1764,6 +1809,16 @@ void setup(void)
     syscall4(SYS_RT_SIGACTION, 17, (long)&sa, 0, 8);
 
     dpy = XOpenDisplay(NULL);
+    if (!dpy) {
+        start_xorg();
+        if (xorg_pid > 0) {
+            for (int attempt = 0; attempt < 150; attempt++) {
+                syscall3(SYS_POLL, 0, 0, 20);
+                dpy = XOpenDisplay(NULL);
+                if (dpy) break;
+            }
+        }
+    }
     if (!dpy) die("fiwm: cannot open display\n");
     root = RootWindow(dpy, XDefaultScreen(dpy));
     {
@@ -1883,11 +1938,39 @@ void cleanup(void)
     XSetErrorHandler(xerrorxlib);
     XSync(dpy, False);
     XCloseDisplay(dpy);
+
+    if (xorg_pid > 0) {
+        sys_kill(xorg_pid, 15);
+        long status;
+        syscall4(SYS_WAIT4, xorg_pid, (long)&status, 0, 0);
+        xorg_pid = 0;
+    }
 }
+
+static char *custom_envp[160];
+static char display_env[] = "DISPLAY=:0";
 
 static void setup_environ(char **envp)
 {
-    envp_global = envp;
+    int has_display = 0;
+    int count = 0;
+
+    if (envp) {
+        for (char **ep = envp; *ep && count < 150; ep++) {
+            if ((*ep)[0] == 'D' && (*ep)[1] == 'I' && (*ep)[2] == 'S' &&
+                (*ep)[3] == 'P' && (*ep)[4] == 'L' && (*ep)[5] == 'A' &&
+                (*ep)[6] == 'Y' && (*ep)[7] == '=') {
+                has_display = 1;
+            }
+            custom_envp[count++] = *ep;
+        }
+    }
+
+    if (!has_display) {
+        custom_envp[count++] = display_env;
+    }
+    custom_envp[count] = NULL;
+    envp_global = custom_envp;
 }
 
 __attribute__((used, noinline))
