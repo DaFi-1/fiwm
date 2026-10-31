@@ -176,7 +176,7 @@ static const char *autostart[][4] = {
     /* { "/bin/sh", "-c", "picom", NULL }, */
    // { "/bin/sh", "-c", "nitrogen --restore", NULL },
     { "/bin/sh", "-c", "xset r rate 180 250", NULL },
-    { "/bin/sh", "-c", "xrandr --output DP-0 --primary --mode 1920x1080 --rate 100 --pos 0x0 --output HDMI-0 --mode 1366x768 --rate 60 --right-of DP-0", NULL },
+    { "/bin/sh", "-c", "xrandr --output eDP-1 --mode 1366x768 --rate 60 --pos 0x0 --output HDMI-1 --mode 1920x1080 --rate 60 --pos 1366x0 --primary", NULL },
 };
 
 static Key keys[] = {

@@ -1249,6 +1249,13 @@ typedef struct Client Client;
 typedef struct Node Node;
 typedef struct Workspace Workspace;
 typedef struct Monitor Monitor;
+typedef struct {
+    int screen_number;
+    short x_org;
+    short y_org;
+    short width;
+    short height;
+} XineramaScreenInfo;
 
 enum {
     FLAG_FLOATING   = 1 << 0,
@@ -1326,9 +1333,7 @@ static void createbars(void);
 static void updategeom(void);
 static void update_bar_visibility(Monitor *);
 static Monitor *monitor_in_direction(Monitor *, int, int);
-#ifdef XINERAMA
 static int isuniquegeom(XineramaScreenInfo *, int, XineramaScreenInfo *);
-#endif
 
 static void keypress(XEvent *);
 static void buttonpress(XEvent *);
@@ -1383,7 +1388,7 @@ static const char *autostart[][4] = {
     /* { "/bin/sh", "-c", "picom", NULL }, */
    // { "/bin/sh", "-c", "nitrogen --restore", NULL },
     { "/bin/sh", "-c", "xset r rate 180 250", NULL },
-    { "/bin/sh", "-c", "xrandr --output DP-0 --primary --mode 1920x1080 --rate 100 --pos 0x0 --output HDMI-0 --mode 1366x768 --rate 60 --right-of DP-0", NULL },
+    { "/bin/sh", "-c", "xrandr --output eDP-1 --mode 1366x768 --rate 60 --pos 0x0 --output HDMI-1 --mode 1920x1080 --rate 60 --pos 1366x0 --primary", NULL },
 };
 
 static Key keys[] = {
@@ -2105,8 +2110,77 @@ void resizemouse(const Arg *arg)
         }
     }
 }
-#ifdef XINERAMA
-int isuniquegeom(XineramaScreenInfo *unique, int n, XineramaScreenInfo *info)
+static int _xinerama_opcode = 0;
+
+static inline int _xwire_query_xinerama(Display *d) {
+    if (!d) return 0;
+    if (_xinerama_opcode > 0) return _xinerama_opcode;
+    if (_xinerama_opcode < 0) return 0;
+    unsigned int p[4];
+    p[0] = (4 << 16) | (8 << 8) | 98;
+    const char *xname = "XINERAMA";
+    for (int i = 0; i < 8; i++) ((char *)&p[1])[i] = xname[i];
+    _xwire_write(d->fd, p, 16);
+    _xwire_flush(d->fd);
+
+    unsigned char rep[32];
+    if (_xwire_read(d->fd, rep, 32) != 32 || rep[0] != 1) {
+        _xinerama_opcode = -1;
+        return 0;
+    }
+    if (!rep[8]) {
+        _xinerama_opcode = -1;
+        return 0;
+    }
+    _xinerama_opcode = (int)rep[9];
+    return _xinerama_opcode;
+}
+
+static inline int XineramaIsActive(Display *d) {
+    int op = _xwire_query_xinerama(d);
+    if (!op) return 0;
+    unsigned int req = (1 << 16) | (4 << 8) | op;
+    _xwire_write(d->fd, &req, 4);
+    _xwire_flush(d->fd);
+
+    unsigned char rep[32];
+    if (_xwire_read(d->fd, rep, 32) != 32 || rep[0] != 1)
+        return 0;
+    unsigned int state = *(unsigned int *)&rep[8];
+    return (state != 0);
+}
+
+static inline XineramaScreenInfo *XineramaQueryScreens(Display *d, int *number) {
+    *number = 0;
+    int op = _xwire_query_xinerama(d);
+    if (!op) return (void *)0;
+
+    unsigned int req = (1 << 16) | (5 << 8) | op;
+    _xwire_write(d->fd, &req, 4);
+    _xwire_flush(d->fd);
+
+    unsigned char rep[32];
+    if (_xwire_read(d->fd, rep, 32) != 32 || rep[0] != 1)
+        return (void *)0;
+
+    unsigned int count = *(unsigned int *)&rep[8];
+    if (count == 0 || count > 16) return (void *)0;
+
+    static XineramaScreenInfo screens[16];
+    for (unsigned int i = 0; i < count; i++) {
+        unsigned char s[8];
+        if (_xwire_read(d->fd, s, 8) != 8) return (void *)0;
+        screens[i].screen_number = (int)i;
+        screens[i].x_org  = *(short *)&s[0];
+        screens[i].y_org  = *(short *)&s[2];
+        screens[i].width  = *(unsigned short *)&s[4];
+        screens[i].height = *(unsigned short *)&s[6];
+    }
+    *number = (int)count;
+    return screens;
+}
+
+static int isuniquegeom(XineramaScreenInfo *unique, int n, XineramaScreenInfo *info)
 {
     for (int i = 0; i < n; i++)
         if (unique[i].x_org  == info->x_org  &&
@@ -2116,7 +2190,6 @@ int isuniquegeom(XineramaScreenInfo *unique, int n, XineramaScreenInfo *info)
             return 0;
     return 1;
 }
-#endif
 
 static Monitor *
 monitor_new(int num, int x, int y, int w, int h)
@@ -2142,14 +2215,17 @@ void updategeom(void)
     }
     mons = NULL;
 
-#ifdef XINERAMA
+    int n = 0;
+    XineramaScreenInfo *info = NULL;
     if (XineramaIsActive(dpy)) {
-        int n;
-        XineramaScreenInfo *info = XineramaQueryScreens(dpy, &n);
-        XineramaScreenInfo *unique = ecalloc(n, sizeof(XineramaScreenInfo));
+        info = XineramaQueryScreens(dpy, &n);
+    }
+
+    if (info && n > 0) {
+        static XineramaScreenInfo unique[16];
         int nunique = 0;
 
-        for (int i = 0; i < n; i++)
+        for (int i = 0; i < n && nunique < 16; i++)
             if (isuniquegeom(unique, nunique, &info[i]))
                 unique[nunique++] = info[i];
 
@@ -2159,11 +2235,7 @@ void updategeom(void)
             m->next = mons;
             mons = m;
         }
-        XFree(info);
-        free(unique);
-    } else
-#endif
-    {
+    } else {
         mons = monitor_new(0, 0, 0,
                            DisplayWidth(dpy, XDefaultScreen(dpy)),
                            DisplayHeight(dpy, XDefaultScreen(dpy)));
