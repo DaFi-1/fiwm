@@ -151,46 +151,22 @@ typedef struct {
 } XModifierKeymap;
 
 /* Event definitions */
-#define KeyPress                2
-#define KeyRelease              3
-#define ButtonPress             4
-#define ButtonRelease           5
-#define MotionNotify            6
-#define EnterNotify             7
-#define LeaveNotify             8
-#define FocusIn                 9
-#define FocusOut                10
-#define KeymapNotify            11
-#define Expose                  12
-#define GraphicsExpose          13
-#define NoExpose                14
-#define VisibilityNotify        15
-#define CreateNotify            16
-#define DestroyNotify           17
-#define UnmapNotify             18
-#define MapNotify               19
-#define MapRequest              20
-#define ReparentNotify          21
-#define ConfigureNotify         22
-#define ConfigureRequest        23
-#define GravityNotify           24
-#define ResizeRequest           25
-#define CirculateNotify         26
-#define CirculateRequest        27
-#define PropertyNotify          28
-#define SelectionClear          29
-#define SelectionRequest        30
-#define SelectionNotify         31
-#define ColormapNotify          32
-#define ClientMessage           33
-#define MappingNotify           34
+#define KeyPress                 2
+#define ButtonPress              4
+#define ButtonRelease            5
+#define MotionNotify             6
+#define EnterNotify              7
+#define Expose                   12
+#define CreateNotify             16
+#define DestroyNotify            17
+#define UnmapNotify              18
+#define MapRequest               20
+#define ConfigureRequest         23
+#define ClientMessage            33
 
-#define KeyPressMask             (1L<<0)
-#define KeyReleaseMask           (1L<<1)
 #define ButtonPressMask          (1L<<2)
 #define ButtonReleaseMask        (1L<<3)
 #define EnterWindowMask          (1L<<4)
-#define LeaveWindowMask          (1L<<5)
 #define PointerMotionMask        (1L<<6)
 #define ExposureMask             (1L<<15)
 #define StructureNotifyMask      (1L<<17)
@@ -200,8 +176,8 @@ typedef struct {
 #define PropertyChangeMask       (1L<<22)
 #define NoEventMask              0L
 
-#define NotifyNormal            0
-#define NotifyInferior          2
+#define NotifyNormal             0
+#define NotifyInferior           2
 
 #define CurrentTime              0L
 #define AnyButton                0
@@ -212,29 +188,21 @@ typedef struct {
 #define True                     1
 #define False                    0
 #define Success                  0
+#define GrabSuccess              0
 #define PropModeReplace          0
 #define RevertToPointerRoot      1
 #define IsViewable               2
 
-#define GrabSuccess              0
 #define CopyFromParent           0L
 #define InputOutput              1
 #define CWOverrideRedirect       (1L<<9)
 
 #define ShiftMask                (1<<0)
 #define LockMask                 (1<<1)
-#define ControlMask              (1<<2)
 #define Mod1Mask                 (1<<3)
-#define Mod2Mask                 (1<<4)
-#define Mod3Mask                 (1<<5)
-#define Mod4Mask                 (1<<6)
-#define Mod5Mask                 (1<<7)
 
 #define Button1                  1
-#define Button2                  2
 #define Button3                  3
-#define Button4                  4
-#define Button5                  5
 
 #define CWBackPixel              (1L<<1)
 #define CWEventMask              (1L<<11)
@@ -270,8 +238,6 @@ typedef struct {
 #define XK_s                     0x0073
 #define XK_f                     0x0066
 #define XK_Num_Lock              0xff7f
-
-#define XC_left_ptr              68
 
 typedef struct {
     int type;
@@ -320,20 +286,6 @@ typedef struct {
     char is_hint;
     int same_screen;
 } XMotionEvent;
-
-typedef struct {
-    int type;
-    unsigned long serial;
-    int send_event;
-    void *display;
-    Window event;
-    Window window;
-    int x, y;
-    int width, height;
-    int border_width;
-    Window above;
-    int override_redirect;
-} XConfigureEvent;
 
 typedef struct {
     int type;
@@ -400,17 +352,6 @@ typedef struct {
     int send_event;
     void *display;
     Window window;
-    Atom atom;
-    Time time;
-    int state;
-} XPropertyEvent;
-
-typedef struct {
-    int type;
-    unsigned long serial;
-    int send_event;
-    void *display;
-    Window window;
     Window root;
     Window subwindow;
     Time time;
@@ -454,25 +395,14 @@ typedef union _XEvent {
     XCrossingEvent xcrossing;
     XCreateWindowEvent xcreatewindow;
     XUnmapEvent xunmap;
-    XConfigureEvent xconfigure;
     XConfigureRequestEvent xconfigurerequest;
     XMapRequestEvent xmaprequest;
     XDestroyWindowEvent xdestroywindow;
     XExposeEvent xexpose;
     XClientMessageEvent xclient;
-    XPropertyEvent xproperty;
     long pad[24];
 } XEvent;
 
-typedef struct {
-    int type;
-    void *display;
-    unsigned long resourceid;
-    unsigned long serial;
-    unsigned char error_code;
-    unsigned char request_code;
-    unsigned char minor_code;
-} XErrorEvent;
 
 typedef struct {
     int fd;
@@ -683,7 +613,6 @@ static inline int ConnectionNumber(Display *d) { return d ? d->fd : -1; }
 static inline int XDefaultScreen(Display *d) { (void)d; return 0; }
 static inline int DisplayWidth(Display *d, int s) { (void)s; return d ? d->width : 1024; }
 static inline int DisplayHeight(Display *d, int s) { (void)s; return d ? d->height : 768; }
-static inline Window XRootWindow(Display *d, int s) { (void)s; return d ? d->root : 0; }
 static inline Window RootWindow(Display *d, int s) { (void)s; return d ? d->root : 0; }
 static inline Colormap DefaultColormap(Display *d, int s) { (void)d; (void)s; return 0; }
 static inline int DefaultDepth(Display *d, int s) { (void)d; (void)s; return 24; }
@@ -996,14 +925,7 @@ static inline int XNextEvent(Display *d, XEvent *e) {
     }
 }
 
-static inline int XCheckMaskEvent(Display *d, long mask, XEvent *e) {
-    (void)d; (void)mask; (void)e;
-    return 0;
-}
-
-static inline unsigned long XCreateFontCursor(Display *d, unsigned int shape) { (void)d; (void)shape; return 0; }
 static inline void XFree(void *p) { (void)p; }
-static inline int (*XSetErrorHandler(int (*handler)(Display *, XErrorEvent *)))(Display *, XErrorEvent *) { return handler; }
 
 static inline Atom XInternAtom(Display *d, const char *name, int only_if_exists) {
     if (!d || !name) return 0;
@@ -1285,7 +1207,6 @@ static inline XModifierKeymap *XGetModifierMapping(Display *d) {
     static XModifierKeymap m = { 1, dummy };
     return &m;
 }
-static inline void XFreeModifiermap(XModifierKeymap *m) { (void)m; }
 
 static inline KeyCode XKeysymToKeycode(Display *d, KeySym ks) {
     (void)d;
@@ -1338,11 +1259,8 @@ static inline KeySym XkbKeycodeToKeysym(Display *d, KeyCode kc, unsigned int gro
 /* Core Window Manager Implementation                                       */
 /* ========================================================================= */
 
-#define likely(x)           __builtin_expect(!!(x), 1)
-#define unlikely(x)         __builtin_expect(!!(x), 0)
 #define LENGTH(X)           (sizeof(X) / sizeof(X)[0])
 #define MAX(A,B)            ((A) > (B) ? (A) : (B))
-#define MIN(A,B)            ((A) < (B) ? (A) : (B))
 #define CLEANMASK(mask)     (mask & ~(numlockmask|LockMask))
 #define SELCLIENT(v)        if (!selmon || !selmon->ws->focus || !(v = selmon->ws->focus->u.client)) return
 
@@ -1420,7 +1338,6 @@ struct Monitor {
     Monitor *next;
     int num, x, y, w, h;
     int bar_width;
-    Client *fs_client;
     short curtag;
     short next_split;
     short ntags;
@@ -1431,62 +1348,28 @@ struct Monitor {
 
 static void die(const char *) __attribute__((noreturn));
 static void *ecalloc(size_t, size_t);
-static void spawn(const Arg *);
-
-static Node *node_new(void);
-static Node *node_detach(Node *, Workspace *);
-static Node *node_insert(Monitor *, Client *);
-static void  node_rotate(Node *);
-static Node *node_in_direction(Node *, int, int);
-static Node *node_first_leaf(Node *);
-static Node *node_find_client(Node *, Client *);
-static void node_hide_foreach(Node *);
-static void node_pool_reset(void);
-
 static void arrange(Monitor *);
-static void arrange_node(Node *, int, int, int, int, int);
-static void arrange_floating(Monitor *);
-
-static void manage(Window, XWindowAttributes *);
-static void unmanage(Client *);
-static void focus(Monitor *, Node *);
-static Client *find_client(Window);
-static void movemouse(const Arg *);
-static void resizemouse(const Arg *);
-
 static void drawbar(Monitor *);
-static void createbars(void);
-static void updategeom(void);
-static void update_bar_visibility(Monitor *);
-static Monitor *monitor_in_direction(Monitor *, int, int);
-static int isuniquegeom(XineramaScreenInfo *, int, XineramaScreenInfo *);
+static void focus(Monitor *, Node *);
+static void unmanage(Client *);
+static Client *find_client(Window);
+static Node *node_first_leaf(Node *);
 
-static void keypress(XEvent *);
-static void buttonpress(XEvent *);
-static void enternotify(XEvent *);
-static void maprequest(XEvent *);
-static void unmapnotify(XEvent *);
-static void destroywindow(XEvent *);
-static void configurerequest(XEvent *);
-
-static int xerror(Display *, XErrorEvent *);
+/* Handlers bound in keys[] and buttons[] */
+static void spawn(const Arg *);
 static void quit(const Arg *);
 static void killclient(const Arg *);
 static void togglefullscreen(const Arg *);
 static void togglefloating(const Arg *);
+static void rotatecmd(const Arg *);
 static void focusworkspace(const Arg *);
 static void focusworkspace_next(const Arg *);
 static void focusworkspace_prev(const Arg *);
-static void rotatecmd(const Arg *);
 static void focuscmd(const Arg *);
 static void movecmd(const Arg *);
 static void setlayoutcmd(const Arg *);
-
-static void setup(void);
-static void scan(void);
-static void grabkeys(void);
-static void run(void);
-static void cleanup(void);
+static void movemouse(const Arg *);
+static void resizemouse(const Arg *);
 
 static const int gappx           = 0; //10
 static const int borderpx        = 1;
@@ -1563,7 +1446,6 @@ static Client *clients;
 static Atom wmatom[WM_LAST];
 static Atom netatom[NET_LAST];
 static int running = 1;
-static int (*xerrorxlib)(Display *, XErrorEvent *);
 static unsigned int numlockmask;
 static unsigned long border_active, border_inactive, bar_bg, bar_fg, bar_hl;
 static GC bar_gc;
@@ -2811,12 +2693,6 @@ void configurerequest(XEvent *e)
         XConfigureWindow(dpy, ev->window, ev->value_mask, &wc);
     }
 }
-int xerror(Display *dpy_, XErrorEvent *ee)
-{
-    (void)dpy_;
-    (void)ee;
-    return 0;
-}
 void quit(const Arg *arg)
 {
     running = 0;
@@ -3080,7 +2956,6 @@ void grabkeys(void)
                 if (modmap->modifiermap[i * modmap->max_keypermod + j]
                     == XKeysymToKeycode(dpy, XK_Num_Lock))
                     numlockmask = (1 << i);
-        XFreeModifiermap(modmap);
     }
 
     modifiers[2] = numlockmask;
@@ -3176,13 +3051,10 @@ void setup(void)
             XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&nd, 1);
     }
 
-    wa.cursor = XCreateFontCursor(dpy, XC_left_ptr);
     wa.event_mask = SubstructureRedirectMask | SubstructureNotifyMask |
                     EnterWindowMask | ButtonPressMask |
                     StructureNotifyMask | PropertyChangeMask;
-    XChangeWindowAttributes(dpy, root, CWEventMask | CWCursor, &wa);
-
-    xerrorxlib = XSetErrorHandler(xerror);
+    XChangeWindowAttributes(dpy, root, CWEventMask, &wa);
 
     updategeom();
     createbars();
@@ -3204,8 +3076,6 @@ void setup(void)
 void run(void)
 {
     XEvent ev;
-    /* Drain stale EnterNotify from startup so selmon isn't overridden */
-    while (XCheckMaskEvent(dpy, EnterWindowMask, &ev));
     while (running && !XNextEvent(dpy, &ev)) {
         switch (ev.type) {
         case KeyPress:         keypress(&ev);       break;
@@ -3256,7 +3126,6 @@ void cleanup(void)
         m = mtmp;
     }
 
-    XSetErrorHandler(xerrorxlib);
     XSync(dpy, False);
     XCloseDisplay(dpy);
 
