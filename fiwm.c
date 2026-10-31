@@ -808,7 +808,6 @@ static inline int XNextEvent(Display *d, XEvent *e) {
         case 17: /* DestroyNotify */
         case 18: /* UnmapNotify */
             e->xunmap.window = *(const unsigned int *)&buf[8];
-            e->xunmap.send_event = 0;
             return 0;
         case 12: /* Expose */
             e->xexpose.window = *(const unsigned int *)&buf[4];
@@ -2374,23 +2373,6 @@ void maprequest(XEvent *e)
     manage(e->xmaprequest.window, &wa);
 }
 
-void unmapnotify(XEvent *e)
-{
-    Client *c;
-    if (!(c = find_client(e->xunmap.window)))
-        return;
-    if (e->xunmap.send_event)
-        return;
-    unmanage(c);
-}
-
-void destroywindow(XEvent *e)
-{
-    Client *c;
-    if ((c = find_client(e->xdestroywindow.window)))
-        unmanage(c);
-}
-
 void configurerequest(XEvent *e)
 {
     XConfigureRequestEvent *ev = &e->xconfigurerequest;
@@ -2754,16 +2736,21 @@ void run(void)
         case ButtonPress:      buttonpress(&ev);    break;
         case EnterNotify:      enternotify(&ev);    break;
         case MapRequest:       maprequest(&ev);     break;
-        case UnmapNotify:      unmapnotify(&ev);    break;
-        case DestroyNotify:    destroywindow(&ev);  break;
+        case UnmapNotify:
+        case DestroyNotify:
+            {
+                Client *c = find_client(ev.xunmap.window);
+                if (c) unmanage(c);
+            }
+            break;
         case ConfigureRequest: configurerequest(&ev); break;
         case Expose:
-            {
-                Monitor *m;
-                for (m = mons; m; m = m->next)
-                    if (m->barwin == ev.xexpose.window)
-                        { m->dirty = 1; drawbar(m); }
-            }
+            for (Monitor *m = mons; m; m = m->next)
+                if (m->barwin == ev.xexpose.window) {
+                    m->dirty = 1;
+                    drawbar(m);
+                    break;
+                }
             break;
         }
     }
