@@ -30,9 +30,11 @@ MARCH ?= native
 CFLAGS_WIRE = -std=c99 -pedantic -Wall -Wextra -Wno-unused-parameter \
               -ffreestanding -fno-builtin -fno-stack-protector -fomit-frame-pointer \
               -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-ident \
-              -fmerge-all-constants -march=${MARCH} \
+              -fmerge-all-constants -fno-plt -flto -fwhole-program -march=${MARCH} \
               -Os -ffunction-sections -fdata-sections
-LDFLAGS_WIRE = -nostdlib -static -Wl,--gc-sections -Wl,--build-id=none -Wl,-z,stack-size=16384 -s
+LDFLAGS_WIRE = -nostdlib -static -flto -Wl,--gc-sections -Wl,--build-id=none \
+               -Wl,--no-eh-frame-hdr -Wl,-z,norelro -Wl,-n \
+               -Wl,-z,stack-size=4096 -s
 
 all: fiwm fiwm-wire
 

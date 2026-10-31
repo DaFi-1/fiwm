@@ -1410,7 +1410,7 @@ static const char *autostart[][4] = {
     { "/bin/sh", "-c", "xrandr --output eDP-1 --mode 1366x768 --rate 60 --pos 0x0 --output HDMI-1 --mode 1920x1080 --rate 60 --pos 1366x0 --primary", NULL },
 };
 
-static Key keys[] = {
+static const Key keys[] = {
     { MODKEY,              XK_w,      spawn,          {.v = termcmd} },
     { MODKEY,              XK_d,      spawn,          {.v = menucmd} },
     { MODKEY,              XK_q,      killclient,     {0} },
@@ -1465,7 +1465,7 @@ static unsigned int numlockmask;
 static unsigned long border_active, border_inactive, bar_bg, bar_fg, bar_hl;
 static GC bar_gc;
 
-enum { NODEPOOL = 256 };
+enum { NODEPOOL = 64 };
 static Node  nodepool[NODEPOOL];
 static int   nodeidx;
 static Node *nodefreelist;
@@ -1548,7 +1548,7 @@ static void *memset(void *s, int c, size_t n)
 }
 
 
-#define HEAP_SIZE (2UL * 1024)          /* 2 KB — bump allocator */
+#define HEAP_SIZE (1UL * 1024)          /* 1 KB — bump allocator */
 static char heap[HEAP_SIZE];
 static unsigned long heap_ptr;
 
