@@ -767,6 +767,11 @@ static inline int XNextEvent(Display *d, XEvent *e) {
             e->type = DestroyNotify;
             e->xdestroywindow.window = *(unsigned int *)&buf[8];
             return 0;
+        } else if (code == 16) {
+            e->type = CreateNotify;
+            e->xcreatewindow.window = *(unsigned int *)&buf[8];
+            e->xcreatewindow.parent = *(unsigned int *)&buf[4];
+            return 0;
         } else if (code == 12) {
             e->type = Expose;
             e->xexpose.window = *(unsigned int *)&buf[4];
