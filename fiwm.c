@@ -131,14 +131,6 @@ typedef struct {
 } XSetWindowAttributes;
 
 typedef struct {
-    int x, y;
-    int width, height;
-    int border_width;
-    Window sibling;
-    int stack_mode;
-} XWindowChanges;
-
-typedef struct {
     unsigned long pixel;
     unsigned short red, green, blue;
     char flags;
@@ -652,20 +644,23 @@ static inline void XLowerWindow(Display *d, Window w) {
     p[3] = 1;
 }
 
-static inline void XConfigureWindow(Display *d, Window w, unsigned long valmask, XWindowChanges *wc) {
-    unsigned int p[16];
+static inline void XConfigureWindowFromReq(Display *d, XConfigureRequestEvent *ev) {
+    if (__builtin_expect(_xwire_outlen + 40 > sizeof(_xwire_outbuf), 0))
+        _xwire_flush(d->fd);
+    unsigned int *p = (unsigned int *)(_xwire_outbuf + _xwire_outlen);
     int idx = 3;
-    p[1] = (unsigned int)w;
+    unsigned long valmask = ev->value_mask;
+    p[1] = (unsigned int)ev->window;
     p[2] = (unsigned int)valmask;
-    if (valmask & 1) p[idx++] = (unsigned int)wc->x;
-    if (valmask & 2) p[idx++] = (unsigned int)wc->y;
-    if (valmask & 4) p[idx++] = (unsigned int)wc->width;
-    if (valmask & 8) p[idx++] = (unsigned int)wc->height;
-    if (valmask & 16) p[idx++] = (unsigned int)wc->border_width;
-    if (valmask & 32) p[idx++] = (unsigned int)wc->sibling;
-    if (valmask & 64) p[idx++] = (unsigned int)wc->stack_mode;
+    if (valmask & 1) p[idx++] = (unsigned int)ev->x;
+    if (valmask & 2) p[idx++] = (unsigned int)ev->y;
+    if (valmask & 4) p[idx++] = (unsigned int)ev->width;
+    if (valmask & 8) p[idx++] = (unsigned int)ev->height;
+    if (valmask & 16) p[idx++] = (unsigned int)ev->border_width;
+    if (valmask & 32) p[idx++] = (unsigned int)ev->above;
+    if (valmask & 64) p[idx++] = (unsigned int)ev->detail;
     p[0] = (idx << 16) | 12;
-    _xwire_write(d->fd, p, idx << 2);
+    _xwire_outlen += (unsigned long)(idx << 2);
 }
 
 static inline void XSelectInput(Display *d, Window w, long mask) {
@@ -2567,22 +2562,15 @@ void configurerequest(XEvent *e)
 {
     XConfigureRequestEvent *ev = &e->xconfigurerequest;
     Client *c = find_client(ev->window);
-    XWindowChanges wc;
 
-    wc.x           = ev->x;
-    wc.y           = ev->y;
-    wc.width       = ev->width;
-    wc.height      = ev->height;
-    wc.border_width = ev->border_width;
-    wc.sibling     = ev->above;
-    wc.stack_mode  = ev->detail;
-
-    if (c && (c->flags & FLAG_FLOATING)) {
-        c->x = ev->x; c->y = ev->y;
-        c->w = ev->width; c->h = ev->height;
-        XConfigureWindow(dpy, ev->window, ev->value_mask, &wc);
-    } else if (!c) {
-        XConfigureWindow(dpy, ev->window, ev->value_mask, &wc);
+    if (c) {
+        if (c->flags & FLAG_FLOATING) {
+            c->x = ev->x; c->y = ev->y;
+            c->w = ev->width; c->h = ev->height;
+            XConfigureWindowFromReq(dpy, ev);
+        }
+    } else {
+        XConfigureWindowFromReq(dpy, ev);
     }
 }
 void quit(const Arg *arg)
