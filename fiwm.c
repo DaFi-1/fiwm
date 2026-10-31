@@ -758,10 +758,8 @@ static inline void XUngrabButton(Display *d, unsigned int btn, unsigned int mod,
     p[2] = mod;
 }
 
-static inline void XFlush(Display *d) {
-    if (d) _xwire_flush(d->fd);
-}
-static inline void XSync(Display *d, int discard) { (void)discard; if (d) _xwire_flush(d->fd); }
+#define XFlush(d) _xwire_flush((d)->fd)
+#define XSync(d, discard) ((void)(discard), _xwire_flush((d)->fd))
 
 static inline int XNextEvent(Display *d, XEvent *e) {
     for (;;) {
