@@ -52,4 +52,9 @@ test: fiwm
 test-shortcuts: fiwm
 	./test_all_shortcuts.sh
 
-.PHONY: all clean install uninstall check-elf test test-shortcuts
+test-dual: fiwm
+	./test_dual_monitor.sh
+
+test-all: test-shortcuts test-dual
+
+.PHONY: all clean install uninstall check-elf test test-shortcuts test-dual test-all
