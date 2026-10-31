@@ -1933,10 +1933,11 @@ void movemouse(const Arg *arg)
                         selmon->dirty = 1;
                     }
                     c->workspace = target_mon->curtag;
-                    if (c->x + c->w + (borderpx << 1) > target_mon->x + target_mon->w)
-                        c->x = target_mon->x + target_mon->w - c->w - (borderpx << 1);
-                    if (c->y + c->h + (borderpx << 1) > target_mon->y + target_mon->h)
-                        c->y = target_mon->y + target_mon->h - c->h - (borderpx << 1);
+                    int b2 = borderpx << 1;
+                    int max_x = target_mon->x + target_mon->w - c->w - b2;
+                    int max_y = target_mon->y + target_mon->h - c->h - b2;
+                    if (c->x > max_x) c->x = max_x;
+                    if (c->y > max_y) c->y = max_y;
                     if (c->x < target_mon->x) c->x = target_mon->x;
                     if (c->y < target_mon->y) c->y = target_mon->y;
                     if (old_m != target_mon)
@@ -2563,10 +2564,11 @@ void togglefloating(const Arg *arg)
         fh = ((unsigned int)selmon->h * 39322U) >> 16;
         c->x = selmon->x + ((selmon->w - fw) >> 1);
         c->y = selmon->y + ((selmon->h - fh) >> 1);
-        if (c->x + fw + (borderpx << 1) > selmon->x + selmon->w)
-            c->x = selmon->x + selmon->w - fw - (borderpx << 1);
-        if (c->y + fh + (borderpx << 1) > selmon->y + selmon->h)
-            c->y = selmon->y + selmon->h - fh - (borderpx << 1);
+        int b2 = borderpx << 1;
+        int max_x = selmon->x + selmon->w - fw - b2;
+        int max_y = selmon->y + selmon->h - fh - b2;
+        if (c->x > max_x) c->x = max_x;
+        if (c->y > max_y) c->y = max_y;
         if (c->x < selmon->x) c->x = selmon->x;
         if (c->y < selmon->y) c->y = selmon->y;
         c->w = fw; c->h = fh;
