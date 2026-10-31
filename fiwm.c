@@ -1636,17 +1636,7 @@ Node *node_first_leaf(Node *n)
     return n;
 }
 
-void node_hide_foreach(Node *n)
-{
-    if (!n) return;
-    if (n->is_leaf) {
-        if (n->u.client)
-            XMoveWindow(dpy, n->u.client->win, -9999, -9999);
-    } else {
-        node_hide_foreach(n->u.ch.first);
-        node_hide_foreach(n->u.ch.second);
-    }
-}
+
 
 static void
 arrange_floating(Monitor *m)
@@ -2263,9 +2253,8 @@ void focusworkspace(const Arg *arg)
     arrange(m);
 
     if (oldws != m->ws) {
-        node_hide_foreach(oldws->root);
         for (Client *fc = clients; fc; fc = fc->next) {
-            if ((fc->flags & FLAG_FLOATING) && fc->workspace == oldtag)
+            if (fc->workspace == oldtag)
                 XMoveWindow(dpy, fc->win, -9999, -9999);
         }
     }
