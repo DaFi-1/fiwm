@@ -900,15 +900,14 @@ static inline Atom XInternAtom(Display *d, const char *name, int only_if_exists)
     int total_bytes = 8 + nbytes + pad;
     int words = total_bytes >> 2;
 
-    unsigned int p[64];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, words << 2);
     p[0] = (words << 16) | ((only_if_exists ? 1 : 0) << 8) | 16; /* X_InternAtom */
     p[1] = (unsigned int)nbytes;
 
     unsigned char *bp = (unsigned char *)&p[2];
     for (int i = 0; i < nbytes; i++) bp[i] = name[i];
     for (int i = 0; i < pad; i++) bp[nbytes + i] = 0;
-
-    _xwire_write(d->fd, p, total_bytes);
+    _xwire_flush(d->fd);
 
     unsigned char rep[32];
     int rep_read = 0;
@@ -944,12 +943,11 @@ static inline GC XCreateGC(Display *d, Drawable dr, unsigned long valmask, void 
     (void)valmask; (void)val;
     if (!d || !dr) return (GC)0;
     unsigned int gcid = d->next_rid++;
-    unsigned int p[4];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 55; /* X_CreateGC: reqType=55, length=4 */
     p[1] = gcid;
     p[2] = (unsigned int)dr;
     p[3] = 0; /* mask = 0 */
-    _xwire_write(d->fd, p, sizeof(p));
     return (GC)(unsigned long)gcid;
 }
 
@@ -1073,9 +1071,7 @@ static inline void XChangeProperty(Display *d, Window w, Atom prop, Atom type, i
     int total_bytes = 24 + data_bytes + pad;
     int words = total_bytes >> 2;
 
-    unsigned int p[128];
-    if (words > (int)(sizeof(p) / sizeof(p[0]))) return;
-
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, words << 2);
     p[0] = (words << 16) | ((mode & 0xFF) << 8) | 18; /* X_ChangeProperty */
     p[1] = (unsigned int)w;
     p[2] = (unsigned int)prop;
@@ -1086,8 +1082,6 @@ static inline void XChangeProperty(Display *d, Window w, Atom prop, Atom type, i
     unsigned char *dp = (unsigned char *)&p[6];
     for (int i = 0; i < data_bytes; i++) dp[i] = data[i];
     for (int i = 0; i < pad; i++) dp[data_bytes + i] = 0;
-
-    _xwire_write(d->fd, p, total_bytes);
 }
 
 static inline int XGrabPointer(Display *d, Window grab_w, int owner, unsigned int mask, int sync_p, int sync_k, Window confine, unsigned long cursor, Time time) {
@@ -2111,12 +2105,11 @@ static inline int _xwire_query_xinerama(Display *d) {
     if (!d) return 0;
     if (_xinerama_opcode > 0) return _xinerama_opcode;
     if (_xinerama_opcode < 0) return 0;
-    unsigned int p[4];
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 98;
     p[1] = 8;
     const char *xname = "XINERAMA";
     for (int i = 0; i < 8; i++) ((char *)&p[2])[i] = xname[i];
-    _xwire_write(d->fd, p, 16);
     _xwire_flush(d->fd);
 
     unsigned char rep[32];
@@ -2135,8 +2128,8 @@ static inline int _xwire_query_xinerama(Display *d) {
 static inline int XineramaIsActive(Display *d) {
     int op = _xwire_query_xinerama(d);
     if (!op) return 0;
-    unsigned int req = (1 << 16) | (4 << 8) | op;
-    _xwire_write(d->fd, &req, 4);
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 4);
+    *p = (1 << 16) | (4 << 8) | op;
     _xwire_flush(d->fd);
 
     unsigned char rep[32];
@@ -2151,8 +2144,8 @@ static inline XineramaScreenInfo *XineramaQueryScreens(Display *d, int *number) 
     int op = _xwire_query_xinerama(d);
     if (!op) return (void *)0;
 
-    unsigned int req = (1 << 16) | (5 << 8) | op;
-    _xwire_write(d->fd, &req, 4);
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 4);
+    *p = (1 << 16) | (5 << 8) | op;
     _xwire_flush(d->fd);
 
     unsigned char rep[32];
