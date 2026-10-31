@@ -651,18 +651,13 @@ static inline void XSelectInput(Display *d, Window w, long mask) {
     p[3] = (unsigned int)mask;
 }
 
-static inline void XChangeWindowAttributes(Display *d, Window w, unsigned long valmask, XSetWindowAttributes *a) {
-    if (__builtin_expect(_xwire_outlen + 32 > sizeof(_xwire_outbuf), 0))
-        _xwire_flush(d->fd);
-    unsigned int *p = (unsigned int *)(_xwire_outbuf + _xwire_outlen);
-    int idx = 3;
+static inline void client_set_attributes(Display *d, Window w, unsigned long bg) {
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 20);
+    p[0] = (5 << 16) | 2;
     p[1] = (unsigned int)w;
-    p[2] = (unsigned int)valmask;
-    if (valmask & (1 << 1)) p[idx++] = (unsigned int)a->background_pixel;
-    if (valmask & (1 << 3)) p[idx++] = (unsigned int)a->border_pixel;
-    if (valmask & (1 << 11)) p[idx++] = (unsigned int)a->event_mask;
-    p[0] = (idx << 16) | 2;
-    _xwire_outlen += (unsigned long)(idx << 2);
+    p[2] = (1 << 1) | (1 << 11);
+    p[3] = (unsigned int)bg;
+    p[4] = EnterWindowMask | FocusChangeMask | PropertyChangeMask | StructureNotifyMask;
 }
 
 static inline void XSetWindowBorderWidth(Display *d, Window w, unsigned int bw) {
@@ -1708,7 +1703,6 @@ void arrange(Monitor *m)
 void manage(Window w, XWindowAttributes *wa)
 {
     Client *c;
-    XSetWindowAttributes swa;
     Atom actual, *atoms;
     int format;
     unsigned long n, left;
@@ -1746,12 +1740,9 @@ void manage(Window w, XWindowAttributes *wa)
     c->prev = NULL;
     clients = c;
 
-    swa.event_mask = EnterWindowMask | FocusChangeMask | PropertyChangeMask |
-                     StructureNotifyMask;
-    swa.background_pixel = bar_bg;
     XSetWindowBorderWidth(dpy, w, borderpx);
     XSetWindowBorder(dpy, w, border_inactive);
-    XChangeWindowAttributes(dpy, w, CWEventMask | CWBackPixel, &swa);
+    client_set_attributes(dpy, w, bar_bg);
 
     unsigned int modifiers[] = { 0, LockMask, numlockmask, numlockmask | LockMask };
     for (int i = 0; i < 4; i++) {
@@ -2725,7 +2716,6 @@ void grabkeys(void)
 
 void setup(void)
 {
-    XSetWindowAttributes wa;
     Atom supported[] = {
         netatom[NET_WM_STATE],
         netatom[NET_WM_STATE_FULLSCREEN],
@@ -2776,10 +2766,9 @@ void setup(void)
             XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&nd, 1);
     }
 
-    wa.event_mask = SubstructureRedirectMask | SubstructureNotifyMask |
-                    EnterWindowMask | ButtonPressMask |
-                    StructureNotifyMask | PropertyChangeMask;
-    XChangeWindowAttributes(dpy, root, CWEventMask, &wa);
+    XSelectInput(dpy, root, SubstructureRedirectMask | SubstructureNotifyMask |
+                            EnterWindowMask | ButtonPressMask |
+                            StructureNotifyMask | PropertyChangeMask);
 
     updategeom();
     createbars();
