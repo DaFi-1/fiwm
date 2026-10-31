@@ -581,12 +581,16 @@ static inline void XSelectInput(Display *d, Window w, long mask) {
 static inline void XChangeWindowAttributes(Display *d, Window w, unsigned long valmask, XSetWindowAttributes *a) {
     unsigned int p[16];
     int idx = 3;
+    unsigned long mask = valmask;
+    if ((mask & (1 << 14)) && a->cursor == 0)
+        mask &= ~(1 << 14);
+
     p[1] = (unsigned int)w;
-    p[2] = (unsigned int)valmask;
-    if (valmask & (1 << 1)) p[idx++] = (unsigned int)a->background_pixel;
-    if (valmask & (1 << 3)) p[idx++] = (unsigned int)a->border_pixel;
-    if (valmask & (1 << 11)) p[idx++] = (unsigned int)a->event_mask;
-    if (valmask & (1 << 14)) p[idx++] = (unsigned int)a->cursor;
+    p[2] = (unsigned int)mask;
+    if (mask & (1 << 1)) p[idx++] = (unsigned int)a->background_pixel;
+    if (mask & (1 << 3)) p[idx++] = (unsigned int)a->border_pixel;
+    if (mask & (1 << 11)) p[idx++] = (unsigned int)a->event_mask;
+    if (mask & (1 << 14)) p[idx++] = (unsigned int)a->cursor;
     p[0] = (idx << 16) | 2;
     _xwire_write(d->fd, p, idx * 4);
 }
@@ -753,6 +757,9 @@ static inline int XNextEvent(Display *d, XEvent *e) {
             e->xkey.keycode = buf[1];
             e->xkey.state = *(unsigned short *)&buf[28];
             return 0;
+        } else {
+            e->type = code;
+            return 0;
         }
     }
 }
@@ -805,14 +812,17 @@ static inline int XGetWindowAttributes(Display *d, Window w, XWindowAttributes *
     attr->x = 0; attr->y = 0;
     attr->width = 640; attr->height = 480;
     attr->border_width = 1;
+    attr->override_redirect = 0;
     attr->map_state = IsViewable;
     return 1;
 }
 
 static inline int XQueryTree(Display *d, Window w, Window *root_return, Window *parent_return, Window **children_return, unsigned int *nchildren_return) {
-    (void)d; (void)w; (void)root_return; (void)parent_return;
-    *children_return = (void *)0;
-    *nchildren_return = 0;
+    (void)d; (void)w;
+    if (root_return) *root_return = d ? d->root : 0;
+    if (parent_return) *parent_return = d ? d->root : 0;
+    if (children_return) *children_return = (void *)0;
+    if (nchildren_return) *nchildren_return = 0;
     return 1;
 }
 
