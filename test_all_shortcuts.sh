@@ -55,9 +55,9 @@ echo "========================================================="
 echo "       fiwm Complete Shortcut Verification Suite         "
 echo "========================================================="
 
-# 1. Compile fiwm-wire
-echo "[*] Compiling fiwm-wire..."
-make fiwm-wire >/dev/null
+# 1. Compile fiwm
+echo "[*] Compiling fiwm..."
+make fiwm >/dev/null
 
 # 2. Setup mock dmenuscript for Alt+d testing
 mkdir -p /home/a/dotfile
@@ -79,14 +79,14 @@ for i in $(seq 1 30); do
     sleep 0.1
 done
 
-# 4. Start fiwm-wire
-echo "[*] Starting fiwm-wire..."
-DISPLAY="$TEST_DISP" ./fiwm-wire >"$TEST_LOG" 2>&1 &
+# 4. Start fiwm
+echo "[*] Starting fiwm..."
+DISPLAY="$TEST_DISP" ./fiwm >"$TEST_LOG" 2>&1 &
 WM_PID=$!
 sleep 0.6
 
 if ! kill -0 "$WM_PID" 2>/dev/null; then
-    echo "[!] fiwm-wire crashed on startup!"
+    echo "[!] fiwm crashed on startup!"
     cat "$TEST_LOG"
     exit 1
 fi

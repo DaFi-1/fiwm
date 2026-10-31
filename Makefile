@@ -1,57 +1,34 @@
-# fiwm - BSP tiling window manager (freestanding edition)
-# Build: zero-libc, _start entry, syscall-only runtime
-#
-# NOTE: libX11 and libXinerama are dynamically linked — they bring
-# their own libc at runtime.  Our code uses NO libc directly.
+# fiwm - Fast Independent Window Manager
+# Zero-libc, freestanding x86_64 Linux binary
+# Pure X11 wire protocol over UNIX domain socket
 
-PREFIX    = /usr/local
-X11INC    = /usr/include
-X11LIB    = /usr/lib/x86_64-linux-gnu
+PREFIX  = /usr/local
+CC      = cc
+MARCH  ?= native
 
-XINERAMALIBS  = -lXinerama
-XINERAMAFLAGS = -DXINERAMA
+CFLAGS  = -std=c99 -pedantic -Wall -Wextra -Wno-unused-parameter \
+          -ffreestanding -fno-builtin -fno-stack-protector -fomit-frame-pointer \
+          -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-ident \
+          -fmerge-all-constants -fno-plt -flto -fwhole-program -march=${MARCH} \
+          -Os -ffunction-sections -fdata-sections
 
-INCS = -I${X11INC}
-LIBS = -L${X11LIB} -lX11 ${XINERAMALIBS}
+LDFLAGS = -nostdlib -static -flto -Wl,--gc-sections -Wl,--build-id=none \
+          -Wl,--no-eh-frame-hdr -Wl,-z,norelro -Wl,-n \
+          -Wl,-z,stack-size=4096 -s
 
-CPPFLAGS = -D_DEFAULT_SOURCE -D_BSD_SOURCE -D_XOPEN_SOURCE=700L ${XINERAMAFLAGS}
-CFLAGS   = -std=c99 -pedantic -Wall -Wextra -Wno-unused-parameter \
-           -ffreestanding -fno-builtin \
-           -Os -ffunction-sections -fdata-sections ${INCS} ${CPPFLAGS}
-LDFLAGS  = -nostartfiles -Wl,--as-needed -Wl,--gc-sections -Wl,-z,stack-size=32768 -s ${LIBS}
+all: fiwm
 
-CC = cc
+fiwm: fiwm.c
+	${CC} ${CFLAGS} -o $@ $< ${LDFLAGS}
 
-SRC = fiwm.c
-OBJ = ${SRC:.c=.o}
-
-MARCH ?= native
-
-CFLAGS_WIRE = -std=c99 -pedantic -Wall -Wextra -Wno-unused-parameter \
-              -ffreestanding -fno-builtin -fno-stack-protector -fomit-frame-pointer \
-              -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-ident \
-              -fmerge-all-constants -fno-plt -flto -fwhole-program -march=${MARCH} \
-              -Os -ffunction-sections -fdata-sections
-LDFLAGS_WIRE = -nostdlib -static -flto -Wl,--gc-sections -Wl,--build-id=none \
-               -Wl,--no-eh-frame-hdr -Wl,-z,norelro -Wl,-n \
-               -Wl,-z,stack-size=4096 -s
-
-all: fiwm fiwm-wire
-
-fiwm-wire: fiwm-wire.c
-	${CC} ${CFLAGS_WIRE} -o $@ $< ${LDFLAGS_WIRE}
-
-.c.o:
-	${CC} -c ${CFLAGS} $<
-
-fiwm: ${OBJ}
-	${CC} -o $@ ${OBJ} ${LDFLAGS}
-	rm -f ${OBJ}
+# Backward compatibility alias
+fiwm-wire: fiwm
+	ln -sf fiwm fiwm-wire
 
 clean:
-	rm -f fiwm fiwm-wire ${OBJ}
+	rm -f fiwm fiwm-wire *.o
 
-install: all
+install: fiwm
 	mkdir -p ${DESTDIR}${PREFIX}/bin
 	cp -f fiwm ${DESTDIR}${PREFIX}/bin
 	chmod 755 ${DESTDIR}${PREFIX}/bin/fiwm
@@ -59,21 +36,20 @@ install: all
 uninstall:
 	rm -f ${DESTDIR}${PREFIX}/bin/fiwm
 
-# Validation targets
-check-elf:
+check-elf: fiwm
 	@echo "=== ELF header check (should show NO interpreter) ==="
-	readelf -l fiwm | grep INTERP || echo "  ✓ No INTERP segment"
+	readelf -l fiwm | grep INTERP || echo "  ✓ No INTERP segment (pure static freestanding)"
 	@echo ""
-	@echo "=== Dynamic dependency check ==="
-	ldd fiwm || true
+	@echo "=== Binary size ==="
+	ls -lh fiwm
 	@echo ""
-	@echo "=== Symbol check (should NOT show libc symbols) ==="
-	nm fiwm | grep -i " U " | head -20 || echo "  (no undefined symbols from our code)"
+	@echo "=== Section headers ==="
+	size fiwm
 
-test: fiwm-wire
+test: fiwm
 	./test_wire.sh
 
-test-shortcuts: fiwm-wire
+test-shortcuts: fiwm
 	./test_all_shortcuts.sh
 
 .PHONY: all clean install uninstall check-elf test test-shortcuts

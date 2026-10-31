@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test_wire.sh - Automated integration test suite for fiwm-wire
+# test_wire.sh - Automated integration test suite for fiwm
 set -euo pipefail
 
 TEST_DISP=":99"
@@ -21,15 +21,15 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "================================================="
-echo "       fiwm-wire Automated Test Suite            "
+echo "       fiwm Automated Integration Test Suite     "
 echo "================================================="
 
-# 1. Compile fiwm-wire
-echo "[*] Building fiwm-wire..."
-make fiwm-wire
+# 1. Compile fiwm
+echo "[*] Building fiwm..."
+make fiwm
 
-if [ ! -x "./fiwm-wire" ]; then
-    echo "[!] Error: ./fiwm-wire binary not found or not executable."
+if [ ! -x "./fiwm" ]; then
+    echo "[!] Error: ./fiwm binary not found or not executable."
     exit 1
 fi
 
@@ -53,14 +53,14 @@ if [ ! -S "/tmp/.X11-unix/X${TEST_DISP#:}" ]; then
     exit 1
 fi
 
-# 3. Launch fiwm-wire on TEST_DISP
-echo "[*] Starting fiwm-wire on ${TEST_DISP}..."
-DISPLAY="$TEST_DISP" ./fiwm-wire >"$TEST_LOG" 2>&1 &
+# 3. Launch fiwm on TEST_DISP
+echo "[*] Starting fiwm on ${TEST_DISP}..."
+DISPLAY="$TEST_DISP" ./fiwm >"$TEST_LOG" 2>&1 &
 WM_PID=$!
 sleep 1
 
 if ! kill -0 "$WM_PID" 2>/dev/null; then
-    echo "[!] fiwm-wire died on startup!"
+    echo "[!] fiwm died on startup!"
     cat "$TEST_LOG"
     exit 1
 fi
@@ -69,7 +69,7 @@ fi
 echo "[1/8] Verifying ultra-low RAM footprint and 0.0% CPU..."
 RSS=$(ps -p "$WM_PID" -o rss= | tr -d ' ')
 CPU=$(ps -p "$WM_PID" -o %cpu= | tr -d ' ')
-echo "      -> fiwm-wire RSS: ${RSS} kB, CPU: ${CPU}%"
+echo "      -> fiwm RSS: ${RSS} kB, CPU: ${CPU}%"
 if [ "$RSS" -gt 150 ]; then
     echo "      [FAIL] RSS (${RSS} kB) exceeded 150 kB threshold!"
     FAILED=1
@@ -189,9 +189,9 @@ for i in $(seq 1 20); do
 done
 
 if [ "$QUIT_OK" -eq 1 ]; then
-    echo "      [PASS] fiwm-wire exited cleanly on Alt+Shift+q."
+    echo "      [PASS] fiwm exited cleanly on Alt+Shift+q."
 else
-    echo "      [FAIL] fiwm-wire did not exit within 2s."
+    echo "      [FAIL] fiwm did not exit within 2s."
     FAILED=1
 fi
 
