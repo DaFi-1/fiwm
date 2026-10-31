@@ -437,11 +437,34 @@ static inline long _xwire_sys3(long nr, long a1, long a2, long a3) {
     return ret;
 }
 
+static char _xwire_outbuf[2048];
+static unsigned long _xwire_outlen = 0;
+
+static inline void _xwire_flush(int fd) {
+    if (_xwire_outlen > 0) {
+        _xwire_sys3(SYS_WRITE, fd, (long)_xwire_outbuf, _xwire_outlen);
+        _xwire_outlen = 0;
+    }
+}
+
 static inline int _xwire_write(int fd, const void *b, unsigned long n) {
-    return (int)_xwire_sys3(SYS_WRITE, fd, (long)b, n);
+    if (n >= sizeof(_xwire_outbuf)) {
+        _xwire_flush(fd);
+        return (int)_xwire_sys3(SYS_WRITE, fd, (long)b, n);
+    }
+    if (_xwire_outlen + n > sizeof(_xwire_outbuf)) {
+        _xwire_flush(fd);
+    }
+    char *dst = _xwire_outbuf + _xwire_outlen;
+    const char *src = (const char *)b;
+    unsigned long count = n;
+    while (count--) *dst++ = *src++;
+    _xwire_outlen += n;
+    return (int)n;
 }
 
 static inline int _xwire_read(int fd, void *b, unsigned long n) {
+    _xwire_flush(fd);
     return (int)_xwire_sys3(SYS_READ, fd, (long)b, n);
 }
 
@@ -485,6 +508,7 @@ static inline Display *XOpenDisplay(const char *name) {
 
     unsigned char setup_req[12] = { 'l', 0, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     _xwire_write(fd, setup_req, 12);
+    _xwire_flush(fd);
 
     unsigned char rep_hdr[8];
     if (_xwire_read(fd, rep_hdr, 8) != 8 || rep_hdr[0] != 1) {
@@ -726,8 +750,10 @@ static inline void XUngrabButton(Display *d, unsigned int btn, unsigned int mod,
     _xwire_write(d->fd, p, sizeof(p));
 }
 
-static inline void XFlush(Display *d) { (void)d; }
-static inline void XSync(Display *d, int discard) { (void)d; (void)discard; }
+static inline void XFlush(Display *d) {
+    if (d) _xwire_flush(d->fd);
+}
+static inline void XSync(Display *d, int discard) { (void)discard; if (d) _xwire_flush(d->fd); }
 
 struct pollfd {
     int fd;
@@ -735,22 +761,34 @@ struct pollfd {
     short revents;
 };
 
+static unsigned char _xwire_inbuf[1024];
+static int _xwire_in_len = 0;
+static int _xwire_in_pos = 0;
+
 static inline int XNextEvent(Display *d, XEvent *e) {
     unsigned char buf[32];
     for (;;) {
-        struct pollfd pfd;
-        pfd.fd = d->fd;
-        pfd.events = 1; /* POLLIN */
-        pfd.revents = 0;
-        int pr = (int)_xwire_sys3(SYS_POLL, (long)&pfd, 1, -1);
-        if (pr <= 0) { e->type = 0; return 1; }
+        if (_xwire_in_pos + 32 > _xwire_in_len) {
+            _xwire_flush(d->fd);
+            _xwire_in_pos = 0;
+            _xwire_in_len = 0;
 
-        int total_n = 0;
-        while (total_n < 32) {
-            int n = _xwire_read(d->fd, buf + total_n, 32 - total_n);
+            struct pollfd pfd;
+            pfd.fd = d->fd;
+            pfd.events = 1; /* POLLIN */
+            pfd.revents = 0;
+            int pr = (int)_xwire_sys3(SYS_POLL, (long)&pfd, 1, -1);
+            if (pr <= 0) { e->type = 0; return 1; }
+
+            int n = (int)_xwire_sys3(SYS_READ, d->fd, (long)_xwire_inbuf, sizeof(_xwire_inbuf));
             if (n <= 0) { e->type = 0; return 1; }
-            total_n += n;
+            _xwire_in_len = n;
+            if (_xwire_in_len < 32) continue;
         }
+
+        const unsigned char *src = _xwire_inbuf + _xwire_in_pos;
+        for (int i = 0; i < 32; i++) buf[i] = src[i];
+        _xwire_in_pos += 32;
 
         unsigned char code = buf[0] & 0x7F;
         if (code == 20) {
@@ -2879,6 +2917,7 @@ void setup(void)
         Arg a = { .v = autostart[i] };
         spawn(&a);
     }
+    XFlush(dpy);
 }
 
 void run(void)
