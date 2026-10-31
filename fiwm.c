@@ -1845,10 +1845,13 @@ void arrange(Monitor *m)
 
     if (m->barwin && !(m->ws->focus && m->ws->focus->u.client &&
         (m->ws->focus->u.client->flags & FLAG_FULLSCREEN))) {
-        m->bar_width = m->w - (gappx << 1);
-        XMoveResizeWindow(dpy, m->barwin,
-                          m->x + gappx, m->y + gappx,
-                          m->bar_width, BAR_HEIGHT);
+        int bw = m->w - (gappx << 1);
+        if (m->bar_width != bw) {
+            m->bar_width = bw;
+            XMoveResizeWindow(dpy, m->barwin,
+                              m->x + gappx, m->y + gappx,
+                              m->bar_width, BAR_HEIGHT);
+        }
     }
 
     wx = m->x + gappx;
@@ -1947,26 +1950,28 @@ void manage(Window w, XWindowAttributes *wa)
 void unmanage(Client *c)
 {
     Monitor *m;
-    Node *n, *newfocus;
+    Node *newfocus;
 
     if (!c) return;
 
     hash_remove(c);
 
     for (m = mons; m; m = m->next) {
-        n = c->node;
-        if (!n) continue;
+        if (m->curtag == c->workspace) break;
+    }
+    if (m) {
         if (m->ws->fs_client == c)
             m->ws->fs_client = NULL;
-        newfocus = node_detach(n, m->ws);
-        if (newfocus)
+        if (c->node) {
+            newfocus = node_detach(c->node, m->ws);
             m->ws->focus = newfocus;
-        else
-            m->ws->focus = NULL;
-        node_free(n);
-        m->dirty = 1;
-        arrange(m);
-        break;
+            node_free(c->node);
+            m->dirty = 1;
+            arrange(m);
+        } else if (c->flags & FLAG_FLOATING) {
+            m->dirty = 1;
+            arrange(m);
+        }
     }
 
     if (c->next) c->next->prev = c->prev;
@@ -2501,12 +2506,14 @@ void createbars(void)
     XSetWindowAttributes wa;
 
     for (m = mons; m; m = m->next) {
+        m->bar_width = m->w - (gappx << 1);
         wa.override_redirect = True;
         wa.background_pixel = 0;
         wa.event_mask = ExposureMask | ButtonPressMask;
 
         m->barwin = XCreateWindow(dpy, root,
-                                  0, 0, 1, 1, 0,
+                                  m->x + gappx, m->y + gappx,
+                                  m->bar_width, BAR_HEIGHT, 0,
                                   CopyFromParent, InputOutput,
                                   CopyFromParent,
                                   CWOverrideRedirect | CWEventMask,
