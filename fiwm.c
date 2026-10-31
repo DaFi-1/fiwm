@@ -1623,14 +1623,18 @@ void arrange(Monitor *m)
 
     if (!m) return;
 
-    if (m->barwin && !(m->ws->focus && m->ws->focus->u.client &&
-        (m->ws->focus->u.client->flags & FLAG_FULLSCREEN))) {
-        int bw = m->w - (gappx << 1);
-        if (m->bar_width != bw) {
-            m->bar_width = bw;
-            XMoveResizeWindow(dpy, m->barwin,
-                              m->x + gappx, m->y + gappx,
-                              m->bar_width, BAR_HEIGHT);
+    if (m->barwin) {
+        if (m->ws->fs_client) {
+            XUnmapWindow(dpy, m->barwin);
+        } else {
+            XMapWindow(dpy, m->barwin);
+            int bw = m->w - (gappx << 1);
+            if (m->bar_width != bw) {
+                m->bar_width = bw;
+                XMoveResizeWindow(dpy, m->barwin,
+                                  m->x + gappx, m->y + gappx,
+                                  m->bar_width, BAR_HEIGHT);
+            }
         }
     }
 
@@ -2072,17 +2076,6 @@ void updategeom(void)
     }
 }
 
-static void
-update_bar_visibility(Monitor *m)
-{
-    if (!m || !m->barwin) return;
-    if (m->ws->focus && m->ws->focus->u.client &&
-        (m->ws->focus->u.client->flags & FLAG_FULLSCREEN))
-        XUnmapWindow(dpy, m->barwin);
-    else
-        XMapWindow(dpy, m->barwin);
-}
-
 static Monitor *
 monitor_in_direction(Monitor *m, int orient, int dir)
 {
@@ -2146,10 +2139,8 @@ void focusworkspace(const Arg *arg)
         if (m->ws->focus && m->ws->focus->u.client)
             focus(m, m->ws->focus);
         if (prev != m) { prev->dirty = 1; m->dirty = 1; }
-        update_bar_visibility(m);
         arrange(m);
         if (prev != m) {
-            update_bar_visibility(prev);
             arrange(prev);
         }
         return;
@@ -2172,7 +2163,6 @@ void focusworkspace(const Arg *arg)
         reset_root_focus();
     }
 
-    update_bar_visibility(m);
     arrange(m);
 
     if (oldws != m->ws) {
@@ -2184,7 +2174,6 @@ void focusworkspace(const Arg *arg)
 
     if (prev != m) {
         prev->dirty = 1;
-        update_bar_visibility(prev);
         arrange(prev);
     }
 }
@@ -2419,13 +2408,11 @@ void togglefullscreen(const Arg *arg)
         c->tile_x = c->x; c->tile_y = c->y;
         c->tile_w = c->w; c->tile_h = c->h;
         XSetWindowBorderWidth(dpy, c->win, 0);
-        XUnmapWindow(dpy, selmon->barwin);
     } else {
         selmon->ws->fs_client = NULL;
-        c->x = c->tile_x; c->y = c->tile_y;
+        c->x = c->tile_x; c->tile_y = c->tile_y;
         c->w = c->tile_w; c->h = c->tile_h;
         XSetWindowBorderWidth(dpy, c->win, borderpx);
-        XMapWindow(dpy, selmon->barwin);
     }
     selmon->dirty = 1;
     arrange(selmon);
