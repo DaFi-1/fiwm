@@ -467,6 +467,7 @@ static inline int _xwire_read(int fd, void *b, unsigned long n) {
 static Display _global_display;
 
 char **envp_global = 0;
+static const char *env_display = ":0";
 static long xorg_pid = 0;
 
 static void start_xorg(void)
@@ -516,17 +517,7 @@ static inline Display *XOpenDisplay(const char *name) {
     addr.sun_family = AF_UNIX;
     char path[64] = "/tmp/.X11-unix/X0";
 
-    const char *dstr = name;
-    if (!dstr && envp_global) {
-        for (char **ep = envp_global; *ep; ep++) {
-            if ((*ep)[0] == 'D' && (*ep)[1] == 'I' && (*ep)[2] == 'S' &&
-                (*ep)[3] == 'P' && (*ep)[4] == 'L' && (*ep)[5] == 'A' &&
-                (*ep)[6] == 'Y' && (*ep)[7] == '=') {
-                dstr = *ep + 8;
-                break;
-            }
-        }
-    }
+    const char *dstr = name ? name : env_display;
 
     if (dstr && dstr[0] == ':') {
         int i = 0, j = 16;
@@ -2460,20 +2451,9 @@ void keypress(XEvent *e)
 void buttonpress(XEvent *e)
 {
     Client *c = find_client(e->xbutton.window);
+    if (!c && e->xbutton.subwindow)
+        c = find_client(e->xbutton.subwindow);
     Monitor *m;
-    Window par, *kids, w;
-    unsigned int nk;
-
-    if (!c) {
-        w = e->xbutton.window;
-        while (!c && w != root && w != None) {
-            if (!XQueryTree(dpy, w, &(Window){0}, &par, &kids, &nk)) break;
-            if (kids) XFree(kids);
-            if (par == root || par == None) break;
-            c = find_client(par);
-            w = par;
-        }
-    }
 
     for (m = mons; m; m = m->next) {
         if (e->xbutton.window == m->barwin || e->xbutton.subwindow == m->barwin) {
@@ -3062,10 +3042,9 @@ static void setup_environ(char **envp)
 
     if (envp) {
         for (char **ep = envp; *ep && count < 150; ep++) {
-            if ((*ep)[0] == 'D' && (*ep)[1] == 'I' && (*ep)[2] == 'S' &&
-                (*ep)[3] == 'P' && (*ep)[4] == 'L' && (*ep)[5] == 'A' &&
-                (*ep)[6] == 'Y' && (*ep)[7] == '=') {
+            if (*(const unsigned long *)*ep == 0x3d59414c50534944ULL) {
                 has_display = 1;
+                env_display = *ep + 8;
             }
             custom_envp[count++] = *ep;
         }
