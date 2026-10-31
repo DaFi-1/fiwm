@@ -2705,7 +2705,7 @@ void movecmd(const Arg *arg)
     dir    = raw & 1;
 
     target = node_in_direction(n, orient, dir);
-    if (target && target->is_leaf && target->u.client && n->u.client) {
+    if (target) {
         tmpc = n->u.client;
         n->u.client = target->u.client;
         target->u.client = tmpc;
@@ -2716,7 +2716,6 @@ void movecmd(const Arg *arg)
         return;
     }
 
-    if (!n->u.client) return;
     {
         Monitor *om = monitor_in_direction(selmon, orient, dir);
         if (om) {
