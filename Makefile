@@ -25,10 +25,14 @@ CC = cc
 SRC = fiwm.c
 OBJ = ${SRC:.c=.o}
 
+MARCH ?= native
+
 CFLAGS_WIRE = -std=c99 -pedantic -Wall -Wextra -Wno-unused-parameter \
-              -ffreestanding -fno-builtin -fno-stack-protector \
+              -ffreestanding -fno-builtin -fno-stack-protector -fomit-frame-pointer \
+              -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-ident \
+              -fmerge-all-constants -march=${MARCH} \
               -Os -ffunction-sections -fdata-sections
-LDFLAGS_WIRE = -nostdlib -static -Wl,--gc-sections -Wl,-z,stack-size=16384 -s
+LDFLAGS_WIRE = -nostdlib -static -Wl,--gc-sections -Wl,--build-id=none -Wl,-z,stack-size=16384 -s
 
 all: fiwm fiwm-wire
 
