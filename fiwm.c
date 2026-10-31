@@ -1672,7 +1672,6 @@ static void
 arrange_floating(Monitor *m)
 {
     Client *c;
-    Node *n;
 
     if (!m) return;
 
@@ -1681,14 +1680,8 @@ arrange_floating(Monitor *m)
         if (c->workspace != m->curtag) continue;
 
         XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
-        n = c->node;
-        if (n && n != m->ws->focus) {
-            XSetWindowBorderWidth(dpy, c->win, borderpx);
-            XSetWindowBorder(dpy, c->win, border_inactive);
-        } else {
-            XSetWindowBorderWidth(dpy, c->win, borderpx);
-            XSetWindowBorder(dpy, c->win, border_active);
-        }
+        XSetWindowBorderWidth(dpy, c->win, borderpx);
+        XSetWindowBorder(dpy, c->win, (c->node && c->node != m->ws->focus) ? border_inactive : border_active);
     }
 }
 void arrange_node(Node *n, int x, int y, int w, int h, int gap)
@@ -1871,15 +1864,17 @@ void unmanage(Client *c)
 void focus(Monitor *m, Node *n)
 {
     if (!m || !n || !n->u.client) return;
-    if (m->ws->focus && m->ws->focus->u.client && m->ws->focus != n)
-        XSetWindowBorder(dpy, m->ws->focus->u.client->win, border_inactive);
+    Node *old = m->ws->focus;
+    if (old && old->u.client && old != n)
+        XSetWindowBorder(dpy, old->u.client->win, border_inactive);
     m->ws->focus = n;
-    XSetWindowBorder(dpy, n->u.client->win, border_active);
-    XSetInputFocus(dpy, n->u.client->win, RevertToPointerRoot, CurrentTime);
-    XRaiseWindow(dpy, n->u.client->win);
+    Window w = n->u.client->win;
+    XSetWindowBorder(dpy, w, border_active);
+    XSetInputFocus(dpy, w, RevertToPointerRoot, CurrentTime);
+    XRaiseWindow(dpy, w);
     XChangeProperty(dpy, root, netatom[NET_ACTIVE_WINDOW],
                     XA_WINDOW, 32, PropModeReplace,
-                    (unsigned char *)&n->u.client->win, 1);
+                    (unsigned char *)&w, 1);
 }
 
 Client *find_client(Window w)
