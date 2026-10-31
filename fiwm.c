@@ -1244,27 +1244,6 @@ static inline KeyCode XKeysymToKeycode(Display *d, KeySym ks) {
     }
 }
 
-static inline KeySym XkbKeycodeToKeysym(Display *d, KeyCode kc, unsigned int group, unsigned int level) {
-    (void)d; (void)group; (void)level;
-    if (kc >= 10 && kc <= 18) return XK_1 + (kc - 10);
-    if (kc == 36) return XK_Return;
-    if (kc == 65) return XK_space;
-    if (kc == 24) return XK_q;
-    if (kc == 25) return XK_w;
-    if (kc == 40) return XK_d;
-    if (kc == 54) return XK_c;
-    if (kc == 43) return XK_h;
-    if (kc == 44) return XK_j;
-    if (kc == 45) return XK_k;
-    if (kc == 46) return XK_l;
-    if (kc == 27) return XK_r;
-    if (kc == 56) return XK_b;
-    if (kc == 55) return XK_v;
-    if (kc == 38) return XK_a;
-    if (kc == 39) return XK_s;
-    if (kc == 41) return XK_f;
-    return 0;
-}
 
 /* ========================================================================= */
 /* Core Window Manager Implementation                                       */
@@ -1447,6 +1426,7 @@ static const Key keys[] = {
     { MODKEY|ShiftMask,    XK_8,      movecmd,        {.i = 7} },
     { MODKEY|ShiftMask,    XK_9,      movecmd,        {.i = 8} },
 };
+static KeyCode key_keycodes[LENGTH(keys)];
 
 static Display *dpy;
 static Window root;
@@ -2540,14 +2520,14 @@ void createbars(void)
 }
 void keypress(XEvent *e)
 {
-    XKeyEvent *ev = &e->xkey;
-    KeySym keysym = XkbKeycodeToKeysym(dpy, ev->keycode, 0, 0);
-    unsigned int state = CLEANMASK(ev->state);
+    unsigned int kc = e->xkey.keycode;
+    unsigned int state = CLEANMASK(e->xkey.state);
 
     for (size_t i = 0; i < LENGTH(keys); i++)
-        if (keysym == keys[i].keysym &&
-            keys[i].mod == state)
-            { keys[i].func(&keys[i].arg); return; }
+        if (key_keycodes[i] == kc && keys[i].mod == state) {
+            keys[i].func(&keys[i].arg);
+            return;
+        }
 }
 
 void buttonpress(XEvent *e)
@@ -2972,6 +2952,7 @@ void grabkeys(void)
 
     for (i = 0; i < LENGTH(keys); i++) {
         keysym = XKeysymToKeycode(dpy, keys[i].keysym);
+        key_keycodes[i] = (KeyCode)keysym;
         for (j = 0; j < LENGTH(modifiers); j++)
             XGrabKey(dpy, keysym, keys[i].mod | modifiers[j], root, True,
                      GrabModeAsync, GrabModeAsync);
