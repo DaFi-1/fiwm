@@ -1005,7 +1005,7 @@ struct Monitor {
 
 
 
-static void *ecalloc(size_t, size_t);
+static void *ecalloc(size_t);
 static void arrange(Monitor *);
 static void drawbar(Monitor *);
 static void focus(Monitor *, Node *);
@@ -1131,28 +1131,20 @@ static Client *client_freelist;
 static char heap[HEAP_SIZE];
 static unsigned long heap_ptr;
 
-static void *bump_calloc(size_t nmemb, size_t size)
-{
-    size_t total = (nmemb * size + 7UL) & ~7UL;
-    if (heap_ptr + total > HEAP_SIZE)
-        return NULL;
-    void *ptr = heap + heap_ptr;
-    heap_ptr += total;
-    return ptr;
-}
 static char *strchrnul(const char *s, int c)
 {
     while (*s && *s != (char)c) s++;
     return (char *)s;
 }
 
-
-
-void *ecalloc(size_t nmemb, size_t size)
+static void *ecalloc(size_t size)
 {
-    void *p = bump_calloc(nmemb, size);
-    if (!p) sys_exit(1);
-    return p;
+    size_t total = (size + 7UL) & ~7UL;
+    if (heap_ptr + total > HEAP_SIZE)
+        sys_exit(1);
+    void *ptr = heap + heap_ptr;
+    heap_ptr += total;
+    return ptr;
 }
 
 static void try_exec(const char *file, char *const argv[])
@@ -1439,7 +1431,7 @@ void manage(Window w, XWindowAttributes *wa)
         client_freelist = c->next;
         c->flags = 0;
     } else {
-        c = ecalloc(1, sizeof(Client));
+        c = ecalloc(sizeof(Client));
     }
     c->win = w;
     c->node = NULL;
@@ -1743,7 +1735,7 @@ static int isuniquegeom(XineramaScreenInfo *unique, int n, XineramaScreenInfo *i
 static Monitor *
 monitor_new(int num, int x, int y, int w, int h)
 {
-    Monitor *m = ecalloc(1, sizeof(Monitor));
+    Monitor *m = ecalloc(sizeof(Monitor));
     m->num = num;
     m->x = x; m->y = y; m->w = w; m->h = h;
     int initial_tag = 0;
