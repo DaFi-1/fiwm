@@ -1625,24 +1625,23 @@ monitor_in_direction(Monitor *m, int orient, int dir)
 
     for (tm = mons; tm; tm = tm->next) {
         if (tm == m) continue;
-        if (orient == SPLIT_VERTICAL) {
-            if (tm->y >= m->y + m->h || tm->y + tm->h <= m->y) continue;
-            if (dir == 0) {
-                if (tm->x + tm->w <= m->x && (!target || tm->x + tm->w > target->x + target->w))
-                    target = tm;
-            } else {
-                if (tm->x >= m->x + m->w && (!target || tm->x < target->x))
-                    target = tm;
-            }
+        int m_pos = orient == SPLIT_VERTICAL ? m->x : m->y;
+        int m_dim = orient == SPLIT_VERTICAL ? m->w : m->h;
+        int tm_pos = orient == SPLIT_VERTICAL ? tm->x : tm->y;
+        int tm_dim = orient == SPLIT_VERTICAL ? tm->w : tm->h;
+        int m_ortho = orient == SPLIT_VERTICAL ? m->y : m->x;
+        int m_ortho_dim = orient == SPLIT_VERTICAL ? m->h : m->w;
+        int tm_ortho = orient == SPLIT_VERTICAL ? tm->y : tm->x;
+        int tm_ortho_dim = orient == SPLIT_VERTICAL ? tm->h : tm->w;
+
+        if (tm_ortho >= m_ortho + m_ortho_dim || tm_ortho + tm_ortho_dim <= m_ortho)
+            continue;
+        if (dir == 0) {
+            if (tm_pos + tm_dim <= m_pos && (!target || tm_pos + tm_dim > (orient == SPLIT_VERTICAL ? target->x + target->w : target->y + target->h)))
+                target = tm;
         } else {
-            if (tm->x >= m->x + m->w || tm->x + tm->w <= m->x) continue;
-            if (dir == 0) {
-                if (tm->y + tm->h <= m->y && (!target || tm->y + tm->h > target->y + target->h))
-                    target = tm;
-            } else {
-                if (tm->y >= m->y + m->h && (!target || tm->y < target->y))
-                    target = tm;
-            }
+            if (tm_pos >= m_pos + m_dim && (!target || tm_pos < (orient == SPLIT_VERTICAL ? target->x : target->y)))
+                target = tm;
         }
     }
     return target;
