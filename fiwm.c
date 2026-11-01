@@ -1143,6 +1143,7 @@ static Atom wmatom[WM_LAST];
 static Atom netatom[NET_LAST];
 static int running = 1;
 static const unsigned int numlockmask = (1 << 4); /* Mod2Mask */
+static const unsigned int mod_combos[] = { 0, LockMask, (1 << 4), (1 << 4) | LockMask };
 static unsigned long border_active, border_inactive, bar_bg, bar_fg, bar_hl;
 static GC bar_gc;
 
@@ -1540,10 +1541,9 @@ void manage(Window w, XWindowAttributes *wa)
     XSetWindowBorder(dpy, w, border_inactive);
     client_set_attributes(dpy, w, bar_bg);
 
-    unsigned int modifiers[] = { 0, LockMask, numlockmask, numlockmask | LockMask };
     for (int i = 0; i < 4; i++) {
-        XGrabButton(dpy, Button1, MODKEY | modifiers[i], w);
-        XGrabButton(dpy, Button3, MODKEY | modifiers[i], w);
+        XGrabButton(dpy, Button1, MODKEY | mod_combos[i], w);
+        XGrabButton(dpy, Button3, MODKEY | mod_combos[i], w);
     }
 
     XMapWindow(dpy, w);
@@ -2407,12 +2407,11 @@ void setlayoutcmd(const Arg *arg)
 void grabkeys(void)
 {
     unsigned int i, j;
-    unsigned int modifiers[] = { 0, LockMask, numlockmask, numlockmask | LockMask };
     XUngrabKey(dpy, AnyKey, AnyModifier, root);
 
     for (i = 0; i < LENGTH(keys); i++) {
-        for (j = 0; j < LENGTH(modifiers); j++)
-            XGrabKey(dpy, keys[i].keycode, keys[i].mod | modifiers[j]);
+        for (j = 0; j < LENGTH(mod_combos); j++)
+            XGrabKey(dpy, keys[i].keycode, keys[i].mod | mod_combos[j]);
     }
 }
 
