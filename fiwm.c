@@ -1629,8 +1629,7 @@ static inline int _xwire_query_xinerama(Display *d) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 98;
     p[1] = 8;
-    const char *xname = "XINERAMA";
-    for (int i = 0; i < 8; i++) ((char *)&p[2])[i] = xname[i];
+    *(unsigned long *)&p[2] = 0x414d4152454e4958ULL; /* "XINERAMA" */
     _xwire_flush(d->fd);
 
     unsigned char rep[32];
