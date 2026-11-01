@@ -728,9 +728,7 @@ static inline Atom intern_atom(Display *d, const char *name) {
     p[0] = (words << 16) | 16; /* X_InternAtom */
     p[1] = (unsigned int)nbytes;
     p[words - 1] = 0;
-
-    unsigned char *bp = (unsigned char *)&p[2];
-    for (int i = 0; i < nbytes; i++) bp[i] = (unsigned char)name[i];
+    __builtin_memcpy(&p[2], name, nbytes);
     _xwire_flush(d->fd);
 
     unsigned char rep[32];
