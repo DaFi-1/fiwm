@@ -965,7 +965,8 @@ enum { COL_BORDER_ACTIVE, COL_BORDER_INACTIVE, COL_BAR_BG, COL_BAR_FG, COL_BAR_H
 enum { WORKSPACE_COUNT = 9 };
 enum { BAR_HEIGHT = 18 };
 enum { WM_PROTOCOLS, WM_DELETE_WINDOW, WM_LAST };
-enum { NET_WM_STATE, NET_WM_STATE_FULLSCREEN, NET_ACTIVE_WINDOW,
+enum { NET_SUPPORTED, NET_NUMBER_OF_DESKTOPS,
+       NET_WM_STATE, NET_WM_STATE_FULLSCREEN, NET_ACTIVE_WINDOW,
        NET_WM_WINDOW_TYPE, NET_WM_WINDOW_TYPE_DIALOG, NET_LAST };
 
 typedef union {
@@ -2417,12 +2418,6 @@ void grabkeys(void)
 
 void setup(void)
 {
-    Atom supported[] = {
-        netatom[NET_WM_STATE],
-        netatom[NET_WM_STATE_FULLSCREEN],
-        netatom[NET_ACTIVE_WINDOW],
-    };
-
     /* Ignore SIGCHLD and set SA_NOCLDWAIT to prevent any child zombies */
     struct {
         void *sa_handler;
@@ -2448,6 +2443,8 @@ void setup(void)
 
     wmatom[WM_PROTOCOLS]              = XInternAtom(dpy, "WM_PROTOCOLS", False);
     wmatom[WM_DELETE_WINDOW]          = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
+    netatom[NET_SUPPORTED]            = XInternAtom(dpy, "_NET_SUPPORTED", False);
+    netatom[NET_NUMBER_OF_DESKTOPS]   = XInternAtom(dpy, "_NET_NUMBER_OF_DESKTOPS", False);
     netatom[NET_WM_STATE]             = XInternAtom(dpy, "_NET_WM_STATE", False);
     netatom[NET_WM_STATE_FULLSCREEN]  = XInternAtom(dpy, "_NET_WM_STATE_FULLSCREEN", False);
     netatom[NET_ACTIVE_WINDOW]        = XInternAtom(dpy, "_NET_ACTIVE_WINDOW", False);
@@ -2455,14 +2452,14 @@ void setup(void)
     netatom[NET_WM_WINDOW_TYPE_DIALOG]= XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DIALOG", False);
 
     XChangeProperty(dpy, root,
-        XInternAtom(dpy, "_NET_SUPPORTED", False),
+        netatom[NET_SUPPORTED],
         XA_ATOM, 32, PropModeReplace,
-        (unsigned char *)supported, LENGTH(supported));
+        (unsigned char *)&netatom[NET_WM_STATE], 3);
 
     {
         unsigned long nd = WORKSPACE_COUNT;
         XChangeProperty(dpy, root,
-            XInternAtom(dpy, "_NET_NUMBER_OF_DESKTOPS", False),
+            netatom[NET_NUMBER_OF_DESKTOPS],
             XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&nd, 1);
     }
 
