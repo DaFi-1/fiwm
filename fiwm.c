@@ -780,16 +780,6 @@ static inline Atom intern_atom(Display *d, const char *name) {
 }
 #define XInternAtom(d, name, b) intern_atom(d, name)
 
-static inline unsigned long parse_color(const char *name) {
-    unsigned long val = 0;
-    if (name && *name == '#') {
-        while (*++name) {
-            unsigned char c = (unsigned char)*name;
-            val = (val << 4) | ((c <= '9') ? (c - '0') : ((c | 0x20) - 'a' + 10));
-        }
-    }
-    return val;
-}
 
 static inline GC XCreateGC(Display *d, Drawable dr, unsigned long valmask, void *val) {
     (void)valmask; (void)val;
@@ -1034,12 +1024,12 @@ static const int borderpx        = 1;
 static const char *termcmd[]     = { "st", NULL };
 static const char *menucmd[]     = {"/bin/sh", "-c", "/home/$USER/dotfile/dmenuscript", NULL};
 /* static const float default_ratio = 0.5f; */
-static const char *colors[]      = {
-    "#FFFFFF",  /* COL_BORDER_ACTIVE   — borda da janela focada (ouro miasma) */
-    "#2d2d2d",  /* COL_BORDER_INACTIVE — borda das janelas não focadas */
-    "#000000",  /* COL_BAR_BG          — fundo da barra */
-    "#c2c2b0",  /* COL_BAR_FG          — texto do workspace ativo na barra (bege miasma) */
-    "#685742",  /* COL_BAR_HL          — texto dos workspaces inativos na barra (marrom miasma) */
+static const unsigned long colors[] = {
+    0xFFFFFF,   /* COL_BORDER_ACTIVE   — borda da janela focada (ouro miasma) */
+    0x2d2d2d,   /* COL_BORDER_INACTIVE — borda das janelas não focadas */
+    0x000000,   /* COL_BAR_BG          — fundo da barra */
+    0xc2c2b0,   /* COL_BAR_FG          — texto do workspace ativo na barra (bege miasma) */
+    0x685742,   /* COL_BAR_HL          — texto dos workspaces inativos na barra (marrom miasma) */
 };
 static int tagmap[WORKSPACE_COUNT] = {
     1, 1, 1, 1, 1, 1, 1, 1, 0
@@ -2291,11 +2281,11 @@ void setup(void)
     dpy = XOpenDisplay(NULL);
     if (!dpy) sys_exit(1);
     root = RootWindow(dpy, XDefaultScreen(dpy));
-    border_active   = parse_color(colors[COL_BORDER_ACTIVE]);
-    border_inactive = parse_color(colors[COL_BORDER_INACTIVE]);
-    bar_bg          = parse_color(colors[COL_BAR_BG]);
-    bar_fg          = parse_color(colors[COL_BAR_FG]);
-    bar_hl          = parse_color(colors[COL_BAR_HL]);
+    border_active   = colors[COL_BORDER_ACTIVE];
+    border_inactive = colors[COL_BORDER_INACTIVE];
+    bar_bg          = colors[COL_BAR_BG];
+    bar_fg          = colors[COL_BAR_FG];
+    bar_hl          = colors[COL_BAR_HL];
 
 
     static const char *const atom_names[] = {
