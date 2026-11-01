@@ -1639,11 +1639,7 @@ static inline int _xinerama_req_reply(Display *d, unsigned int minor, unsigned c
     return (_xwire_read(d->fd, rep, 32) == 32 && rep[0] == 1);
 }
 
-static inline int XineramaIsActive(Display *d) {
-    unsigned char rep[32];
-    if (!_xinerama_req_reply(d, 4, rep)) return 0;
-    return (*(unsigned int *)&rep[8] != 0);
-}
+
 
 static inline XineramaScreenInfo *XineramaQueryScreens(Display *d, int *number) {
     *number = 0;
@@ -1706,10 +1702,7 @@ void updategeom(void)
     mons = NULL;
 
     int n = 0;
-    XineramaScreenInfo *info = NULL;
-    if (XineramaIsActive(dpy)) {
-        info = XineramaQueryScreens(dpy, &n);
-    }
+    XineramaScreenInfo *info = XineramaQueryScreens(dpy, &n);
 
     if (info && n > 0) {
         static XineramaScreenInfo unique[16];
