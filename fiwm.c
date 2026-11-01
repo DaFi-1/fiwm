@@ -694,6 +694,10 @@ static inline void XMoveWindow(Display *d, Window w, int x, int y) {
     p[4] = (unsigned int)y;
 }
 
+static inline void hide_window(Display *d, Window w) {
+    XMoveWindow(d, w, -9999, -9999);
+}
+
 static inline void XResizeWindow(Display *d, Window w, unsigned int width, unsigned int height) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 20);
     p[0] = (5 << 16) | 12;
@@ -1861,7 +1865,6 @@ void movemouse(const Arg *arg)
                         arrange(old_m);
                 }
             }
-            XMoveWindow(dpy, c->win, c->x, c->y);
             ungrab_mouse(dpy);
             focus(selmon, selmon->ws->focus);
             arrange(selmon);
@@ -1921,7 +1924,6 @@ void resizemouse(const Arg *arg)
                 c->w = MAX(1, c->w);
                 c->h = MAX(1, c->h);
             }
-            XResizeWindow(dpy, c->win, c->w, c->h);
             ungrab_mouse(dpy);
             focus(selmon, selmon->ws->focus);
             arrange(selmon);
@@ -2163,7 +2165,7 @@ void focusworkspace(const Arg *arg)
     if (oldws != m->ws) {
         for (Client *fc = clients; fc; fc = fc->next) {
             if (fc->workspace == oldtag)
-                XMoveWindow(dpy, fc->win, -9999, -9999);
+                hide_window(dpy, fc->win);
         }
     }
 
@@ -2527,7 +2529,7 @@ void movecmd(const Arg *arg)
         if (target_m) {
             arrange(target_m);
         } else {
-            XMoveWindow(dpy, c->win, -9999, -9999);
+            hide_window(dpy, c->win);
         }
         if (!newfocus) {
             reset_root_focus();
