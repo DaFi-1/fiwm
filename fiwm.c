@@ -1043,7 +1043,7 @@ static const unsigned int mod_combos[] = { 0, LockMask, (1 << 4), (1 << 4) | Loc
 
 
 
-enum { NODEPOOL = 64 };
+enum { NODEPOOL = 32 };
 static Node  nodepool[NODEPOOL] __attribute__((aligned(64)));
 static int   nodeidx;
 static Node *nodefreelist;
