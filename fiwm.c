@@ -697,12 +697,14 @@ static inline void XGrabKey(Display *d, int keycode, unsigned int mod) {
     p[3] = 1;
 }
 
-static inline void XUngrabKey(Display *d, int keycode, unsigned int mod, Window w) {
+static inline void xwire_ungrab_op(Display *d, unsigned int opcode, unsigned int id, unsigned int mod) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 12);
-    p[0] = (3 << 16) | ((keycode & 0xFF) << 8) | 34; /* X_UngrabKey: reqType=34, key=keycode, length=3 */
-    p[1] = (unsigned int)w;
+    p[0] = (3 << 16) | opcode;
+    p[1] = id;
     p[2] = mod & 0xFFFF;
 }
+#define XUngrabKey(d, kc, mod, w)     xwire_ungrab_op((d), (((unsigned int)(kc) & 0xFF) << 8) | 34, (unsigned int)(w), (mod))
+#define XUngrabButton(d, btn, mod, w) xwire_ungrab_op((d), (((unsigned int)(btn) & 0xFF) << 8) | 29, (unsigned int)(w), (mod))
 
 static inline void XGrabButton(Display *d, unsigned int btn, unsigned int mod, Window w) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 24);
@@ -712,13 +714,6 @@ static inline void XGrabButton(Display *d, unsigned int btn, unsigned int mod, W
     p[3] = 0;
     p[4] = 0;
     p[5] = ((mod & 0xFFFF) << 16) | (btn & 0xFF);
-}
-
-static inline void XUngrabButton(Display *d, unsigned int btn, unsigned int mod, Window w) {
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 12);
-    p[0] = (3 << 16) | (btn << 8) | 29;
-    p[1] = (unsigned int)w;
-    p[2] = mod;
 }
 
 #define XFlush(d) _xwire_flush((d)->fd)
