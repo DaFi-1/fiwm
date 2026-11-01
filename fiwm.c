@@ -1151,7 +1151,6 @@ void spawn(const Arg *arg)
                 sys_close(ConnectionNumber(dpy));
             sys_setsid();
             try_exec(argv[0], (char *const *)argv);
-            sys_write(2, "fiwm: execvp failed\n", 20);
             sys_exit(1);
         }
         sys_exit(0);
