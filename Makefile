@@ -15,7 +15,7 @@ CFLAGS  = -std=c99 -pedantic -Wall -Wextra -Wno-unused-parameter \
           -Oz -ffunction-sections -fdata-sections
 
 LDFLAGS = -no-pie -nostdlib -static -flto -Wl,--gc-sections -Wl,--build-id=none \
-          -Wl,--no-eh-frame-hdr -Wl,-z,norelro -Wl,-n \
+          -Wl,--no-eh-frame-hdr -Wl,-N \
           -Wl,-z,stack-size=4096 -s
 
 all: fiwm
@@ -49,22 +49,22 @@ check-elf: fiwm
 	size fiwm
 
 test: fiwm
-	./test_wire.sh
+	./tests/test_wire.sh
 
 test-shortcuts: fiwm
-	./test_all_shortcuts.sh
+	./tests/test_all_shortcuts.sh
 
 test-dual: fiwm
-	./test_dual_monitor.sh
+	./tests/test_dual_monitor.sh
 
 tools/perf_stat: tools/perf_stat.c
 	$(CC) -O2 tools/perf_stat.c -o tools/perf_stat
 
 perf-test-dual: fiwm tools/perf_stat
-	./tools/perf_stat ./test_dual_monitor.sh
+	./tools/perf_stat ./tests/test_dual_monitor.sh
 
 perf-test: fiwm tools/perf_stat
-	./tools/perf_stat ./test_all_shortcuts.sh
+	./tools/perf_stat ./tests/test_all_shortcuts.sh
 
 test-all: test-shortcuts test-dual
 
