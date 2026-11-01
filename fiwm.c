@@ -664,7 +664,6 @@ static inline void xwire_ungrab_op(Display *d, unsigned int opcode, unsigned int
     p[2] = mod & 0xFFFF;
 }
 #define XUngrabKey(d, kc, mod, w)     xwire_ungrab_op((d), (((unsigned int)(kc) & 0xFF) << 8) | 34, (unsigned int)(w), (mod))
-#define XUngrabButton(d, btn, mod, w) xwire_ungrab_op((d), (((unsigned int)(btn) & 0xFF) << 8) | 29, (unsigned int)(w), (mod))
 
 static inline void XGrabButton(Display *d, unsigned int btn, unsigned int mod, Window w) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 24);
@@ -1427,7 +1426,6 @@ void unmanage(Client *c)
     if (c->prev) c->prev->next = c->next;
     else         clients = c->next;
 
-    XUngrabButton(dpy, AnyButton, AnyModifier, c->win);
     c->next = client_freelist;
     c->prev = NULL;
     c->node = NULL;
