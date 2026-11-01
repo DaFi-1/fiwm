@@ -717,24 +717,55 @@ mw_done:
     ret
 
 /*
- * hide_tree_windows(rdi = node)
+ * hide_tree_windows(rdi = node):
+ * Batches ConfigureWindow (x=-9999, y=-9999) for all leaf windows in tree
+ * into `out_buf` and sends them in ONE atomic sys_write syscall!
  */
 hide_tree_windows:
     test rdi, rdi
     jz htw_ret
-    cmp dword ptr [rdi + NODE_WIN], 0
-    je htw_recurse
-    mov edi, [rdi + NODE_WIN]
-    call hide_single_win
+    push rbx
+    lea rbx, [out_buf]
+    call hide_tree_collect
+    lea rax, [out_buf]
+    sub rbx, rax                /* rbx = total bytes */
+    jz htw_pop_ret
+
+    mov eax, SYS_WRITE
+    mov edi, [sock_fd]
+    lea rsi, [out_buf]
+    mov edx, ebx
+    syscall
+
+htw_pop_ret:
+    pop rbx
+htw_ret:
     ret
-htw_recurse:
+
+hide_tree_collect:
+    test rdi, rdi
+    jz htc_ret
+    cmp dword ptr [rdi + NODE_WIN], 0
+    je htc_recurse
+
+    /* Leaf window found: append 20-byte ConfigureWindow packet to [rbx] */
+    mov dword ptr [rbx + 0], (5 << 16) | 12  /* Opcode 12: ConfigureWindow */
+    mov eax, [rdi + NODE_WIN]
+    mov [rbx + 4], eax                       /* window ID */
+    mov dword ptr [rbx + 8], 3                /* CWX | CWY = 3 */
+    mov dword ptr [rbx + 12], -9999           /* x = -9999 (off-screen) */
+    mov dword ptr [rbx + 16], -9999           /* y = -9999 (off-screen) */
+    add rbx, 20
+    ret
+
+htc_recurse:
     push rdi
     mov rdi, [rdi + NODE_FIRST]
-    call hide_tree_windows
+    call hide_tree_collect
     pop rdi
     mov rdi, [rdi + NODE_SECOND]
-    call hide_tree_windows
-htw_ret:
+    call hide_tree_collect
+htc_ret:
     ret
 
 hide_single_win:
@@ -755,24 +786,52 @@ hide_single_win:
     ret
 
 /*
- * show_tree_windows(rdi = node)
+ * show_tree_windows(rdi = node):
+ * Batches MapWindow (Opcode 8) for all leaf windows in tree
+ * into `out_buf` and sends them in ONE atomic sys_write syscall!
  */
 show_tree_windows:
     test rdi, rdi
     jz stw_ret
-    cmp dword ptr [rdi + NODE_WIN], 0
-    je stw_recurse
-    mov edi, [rdi + NODE_WIN]
-    call show_single_win
+    push rbx
+    lea rbx, [out_buf]
+    call show_tree_collect
+    lea rax, [out_buf]
+    sub rbx, rax                /* rbx = total bytes */
+    jz stw_pop_ret
+
+    mov eax, SYS_WRITE
+    mov edi, [sock_fd]
+    lea rsi, [out_buf]
+    mov edx, ebx
+    syscall
+
+stw_pop_ret:
+    pop rbx
+stw_ret:
     ret
-stw_recurse:
+
+show_tree_collect:
+    test rdi, rdi
+    jz stc_ret
+    cmp dword ptr [rdi + NODE_WIN], 0
+    je stc_recurse
+
+    /* Leaf window found: append 8-byte MapWindow packet to [rbx] */
+    mov dword ptr [rbx + 0], (2 << 16) | 8   /* Opcode 8: MapWindow */
+    mov eax, [rdi + NODE_WIN]
+    mov [rbx + 4], eax
+    add rbx, 8
+    ret
+
+stc_recurse:
     push rdi
     mov rdi, [rdi + NODE_FIRST]
-    call show_tree_windows
+    call show_tree_collect
     pop rdi
     mov rdi, [rdi + NODE_SECOND]
-    call show_tree_windows
-stw_ret:
+    call show_tree_collect
+stc_ret:
     ret
 
 show_single_win:
