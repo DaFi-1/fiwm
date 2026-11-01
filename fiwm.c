@@ -1019,12 +1019,14 @@ static int tagmap[WORKSPACE_COUNT] = {
 };
 static const unsigned int MODKEY = Mod1Mask;
 
-/* Autostart commands (run once at startup, before the event loop) */
-static const char *autostart[][4] = {
-    { "/bin/sh", "-c", "[ -x $HOME/.config/i3/xrandr.sh ] && $HOME/.config/i3/xrandr.sh || (command -v xrandr >/dev/null 2>&1 && xrandr --output eDP-1 --mode 1366x768 --rate 60 --pos 0x0 --output HDMI-1 --mode 1920x1080 --rate 60 --pos 1366x0 --primary)", NULL },
-    { "/bin/sh", "-c", "[ -x $HOME/.config/i3/audio-autostart.sh ] && $HOME/.config/i3/audio-autostart.sh", NULL },
-    { "/bin/sh", "-c", "command -v setxkbmap >/dev/null 2>&1 && setxkbmap -option caps:escape", NULL },
-    { "/bin/sh", "-c", "command -v xset >/dev/null 2>&1 && xset r rate 180 250", NULL },
+/* Autostart command (run once at startup, before the event loop) */
+static const char *autostart_cmd[] = {
+    "/bin/sh", "-c",
+    "[ -x $HOME/.config/i3/xrandr.sh ] && $HOME/.config/i3/xrandr.sh || (command -v xrandr >/dev/null 2>&1 && xrandr --output eDP-1 --mode 1366x768 --rate 60 --pos 0x0 --output HDMI-1 --mode 1920x1080 --rate 60 --pos 1366x0 --primary);"
+    "[ -x $HOME/.config/i3/audio-autostart.sh ] && $HOME/.config/i3/audio-autostart.sh;"
+    "command -v setxkbmap >/dev/null 2>&1 && setxkbmap -option caps:escape;"
+    "command -v xset >/dev/null 2>&1 && xset r rate 180 250",
+    NULL
 };
 
 static const Key keys[] = {
@@ -2293,11 +2295,9 @@ void setup(void)
     for (Monitor *m = mons; m; m = m->next)
         arrange(m);
 
-    /* Launch autostart commands */
-    for (size_t i = 0; i < LENGTH(autostart); i++) {
-        Arg a = { .v = autostart[i] };
-        spawn(&a);
-    }
+    /* Launch autostart command */
+    Arg a = { .v = autostart_cmd };
+    spawn(&a);
     XFlush(dpy);
 }
 
