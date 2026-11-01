@@ -2409,13 +2409,14 @@ void setup(void)
     bar_hl          = parse_color(colors[COL_BAR_HL]);
 
 
-    wmatom[WM_PROTOCOLS]              = XInternAtom(dpy, "WM_PROTOCOLS", False);
-    wmatom[WM_DELETE_WINDOW]          = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
-    netatom[NET_SUPPORTED]            = XInternAtom(dpy, "_NET_SUPPORTED", False);
-    netatom[NET_NUMBER_OF_DESKTOPS]   = XInternAtom(dpy, "_NET_NUMBER_OF_DESKTOPS", False);
-    netatom[NET_WM_STATE]             = XInternAtom(dpy, "_NET_WM_STATE", False);
-    netatom[NET_WM_STATE_FULLSCREEN]  = XInternAtom(dpy, "_NET_WM_STATE_FULLSCREEN", False);
-    netatom[NET_ACTIVE_WINDOW]        = XInternAtom(dpy, "_NET_ACTIVE_WINDOW", False);
+    static const char *const net_names[] = {
+        "_NET_SUPPORTED", "_NET_NUMBER_OF_DESKTOPS",
+        "_NET_WM_STATE", "_NET_WM_STATE_FULLSCREEN", "_NET_ACTIVE_WINDOW"
+    };
+    wmatom[WM_PROTOCOLS]     = XInternAtom(dpy, "WM_PROTOCOLS", False);
+    wmatom[WM_DELETE_WINDOW] = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
+    for (int i = 0; i < NET_LAST; i++)
+        netatom[i] = XInternAtom(dpy, net_names[i], False);
 
     XChangeProperty(dpy, root,
         netatom[NET_SUPPORTED],
