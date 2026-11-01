@@ -1091,7 +1091,7 @@ struct Monitor {
 };
 
 
-static void die(const char *) __attribute__((noreturn));
+
 static void *ecalloc(size_t, size_t);
 static void arrange(Monitor *);
 static void drawbar(Monitor *);
@@ -1227,12 +1227,7 @@ static inline void hash_remove(Client *c)
 }
 
 
-static size_t strlen(const char *s)
-{
-    size_t n = 0;
-    while (s[n]) n++;
-    return n;
-}
+
 
 #define free(p) ((void)0)
 
@@ -1262,16 +1257,12 @@ static char *strchrnul(const char *s, int c)
     return (char *)s;
 }
 
-void die(const char *msg)
-{
-    sys_write(2, msg, strlen(msg));
-    sys_exit(1);
-}
+
 
 void *ecalloc(size_t nmemb, size_t size)
 {
     void *p = bump_calloc(nmemb, size);
-    if (!p) die("fiwm: calloc failed\n");
+    if (!p) sys_exit(1);
     return p;
 }
 
@@ -1326,7 +1317,7 @@ Node *node_new(void)
     } else if (nodeidx < NODEPOOL) {
         n = &nodepool[nodeidx++];
     } else {
-        die("fiwm: node pool exhausted");
+        sys_exit(1);
     }
     n->is_leaf = 1;
     n->split   = 0;
@@ -2529,7 +2520,7 @@ void setup(void)
     syscall4(SYS_RT_SIGACTION, 17, (long)&sa, 0, 8);
 
     dpy = XOpenDisplay(NULL);
-    if (!dpy) die("fiwm: cannot open display\n");
+    if (!dpy) sys_exit(1);
     root = RootWindow(dpy, XDefaultScreen(dpy));
     border_active   = parse_color(colors[COL_BORDER_ACTIVE]);
     border_inactive = parse_color(colors[COL_BORDER_INACTIVE]);
