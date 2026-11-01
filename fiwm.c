@@ -1007,13 +1007,11 @@ static const int borderpx        = 1;
 static const char *termcmd[]     = { "st", NULL };
 static const char *menucmd[]     = {"/bin/sh", "-c", "/home/$USER/dotfile/dmenuscript", NULL};
 /* static const float default_ratio = 0.5f; */
-static const unsigned long colors[] = {
-    0xFFFFFF,   /* COL_BORDER_ACTIVE   — borda da janela focada (ouro miasma) */
-    0x2d2d2d,   /* COL_BORDER_INACTIVE — borda das janelas não focadas */
-    0x000000,   /* COL_BAR_BG          — fundo da barra */
-    0xc2c2b0,   /* COL_BAR_FG          — texto do workspace ativo na barra (bege miasma) */
-    0x685742,   /* COL_BAR_HL          — texto dos workspaces inativos na barra (marrom miasma) */
-};
+#define border_active   0xFFFFFFUL
+#define border_inactive 0x2d2d2dUL
+#define bar_bg          0x000000UL
+#define bar_fg          0xc2c2b0UL
+#define bar_hl          0x685742UL
 static int tagmap[WORKSPACE_COUNT] = {
     1, 1, 1, 1, 1, 1, 1, 1, 0
 };
@@ -1083,7 +1081,7 @@ static inline Client *selclient(void)
 static Atom atoms[ATOM_LAST];
 static int running = 1;
 static const unsigned int mod_combos[] = { 0, LockMask, (1 << 4), (1 << 4) | LockMask };
-static unsigned long border_active, border_inactive, bar_bg, bar_fg, bar_hl;
+
 static GC bar_gc;
 
 enum { NODEPOOL = 64 };
@@ -2248,11 +2246,6 @@ void setup(void)
     dpy = XOpenDisplay(NULL);
     if (!dpy) sys_exit(1);
     root = RootWindow(dpy, XDefaultScreen(dpy));
-    border_active   = colors[COL_BORDER_ACTIVE];
-    border_inactive = colors[COL_BORDER_INACTIVE];
-    bar_bg          = colors[COL_BAR_BG];
-    bar_fg          = colors[COL_BAR_FG];
-    bar_hl          = colors[COL_BAR_HL];
 
 
     static const char *const atom_names[] = {
