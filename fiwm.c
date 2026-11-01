@@ -376,7 +376,7 @@ typedef struct {
 /* Syscall wrappers */
 static char _xwire_outbuf[1024];
 static unsigned long _xwire_outlen = 0;
-static unsigned char _xwire_inbuf[1024];
+static unsigned char _xwire_inbuf[256];
 static int _xwire_in_len = 0;
 static int _xwire_in_pos = 0;
 
@@ -2217,14 +2217,14 @@ void cleanup(void)
     }
 }
 
-static char *custom_envp[64];
+static char *custom_envp[96];
 static char display_env[] = "DISPLAY=:0";
 
 static void setup_environ(char **envp)
 {
     int has_display = 0, count = 0;
     if (envp) {
-        for (char **ep = envp; *ep && count < 60; ep++) {
+        for (char **ep = envp; *ep && count < 90; ep++) {
             if (*(const unsigned long *)*ep == 0x3d59414c50534944ULL) {
                 has_display = 1;
                 env_display = *ep + 8;
