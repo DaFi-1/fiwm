@@ -872,13 +872,6 @@ static inline int XGetWindowAttributes(Display *d, Window w, XWindowAttributes *
     return 1;
 }
 
-static inline int XQueryTree(Display *d, Window w, Window *root_return, Window *parent_return, Window **children_return, unsigned int *nchildren_return) {
-    (void)d; (void)w; (void)root_return; (void)parent_return;
-    if (children_return) *children_return = NULL;
-    if (nchildren_return) *nchildren_return = 0;
-    return 1;
-}
-
 static inline void XChangeProperty(Display *d, Window w, Atom prop, Atom type, int fmt, int mode, const unsigned char *data, int nelem) {
     if (!d || !w || !prop || !data || nelem <= 0) return;
     int data_bytes = (fmt == 32) ? (nelem << 2) : ((fmt == 16) ? (nelem << 1) : nelem);
