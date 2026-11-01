@@ -173,7 +173,9 @@ display_done:
 
     /* Extract resource_id_base */
     mov edx, [in_buf + 4]
-    mov [bar_win], edx
+    mov [bar_win + 0], edx
+    inc edx
+    mov [bar_win + 4], edx
     inc edx
     mov [bar_gc], edx
 
@@ -250,9 +252,12 @@ event_loop:
 
 handle_expose:
     mov edx, [event_buf + 4]    /* drawable/window */
-    cmp edx, [bar_win]
+    cmp edx, [bar_win + 0]
+    je do_handle_expose
+    cmp edx, [bar_win + 4]
     jne event_loop
-    call draw_bar
+do_handle_expose:
+    call draw_all_bars
     jmp event_loop
 
 /*
@@ -640,8 +645,8 @@ focus_workspace:
     /* Switch to new workspace */
     mov [cur_ws], r12d
 
-    /* Redraw top status bar */
-    call draw_bar
+    /* Redraw top status bars across monitors */
+    call draw_all_bars
 
     /* Map (show) windows of new workspace */
     lea rax, [bsp_roots]
@@ -786,31 +791,39 @@ show_single_win:
 /*
  * =========================================================================
  * TOP STATUS BAR RENDERING (Pure X11 Wire Protocol)
+ * Supports Independent Bars per Monitor!
  * =========================================================================
  */
 init_bar:
     push rbx
+    push r12
 
-    /*
-     * 1. X_CreateWindow (Opcode 1, length 11 words = 44 bytes)
-     * bar placed on Monitor 0 at GAP_PX, GAP_PX
-     */
-    mov dword ptr [out_buf + 0], (11 << 16) | 1  /* reqType = 1, len = 11 */
-    mov eax, [bar_win]
+    /* Loop through each detected monitor and create its top status bar */
+    xor r12d, r12d                              /* r12d = monitor index (0 or 1) */
+
+create_bar_loop:
+    mov eax, r12d
+    shl eax, 4                                  /* r12d * 16 bytes mon_geom */
+    lea rbx, [mon_geom]
+    add rbx, rax
+
+    /* 1. X_CreateWindow (Opcode 1, length 11 words = 44 bytes) */
+    mov dword ptr [out_buf + 0], (11 << 16) | 1
+    mov eax, [bar_win + 4*r12]
     mov [out_buf + 4], eax                       /* wid */
     mov eax, [root_win]
     mov [out_buf + 8], eax                       /* parent */
 
-    mov eax, [mon_geom + 0]
+    mov eax, [rbx + 0]
     add eax, GAP_PX                              /* x */
-    mov edx, [mon_geom + 4]
+    mov edx, [rbx + 4]
     add edx, GAP_PX                              /* y */
     shl edx, 16
     and eax, 0xFFFF
     or eax, edx
     mov [out_buf + 12], eax                      /* x, y */
 
-    mov eax, [mon_geom + 8]
+    mov eax, [rbx + 8]
     sub eax, GAP_PX * 2                          /* w */
     mov edx, BAR_HEIGHT                          /* h */
     shl edx, 16
@@ -833,7 +846,7 @@ init_bar:
 
     /* 2. X_MapWindow (Opcode 8, len 2 words = 8 bytes) */
     mov dword ptr [out_buf + 0], (2 << 16) | 8
-    mov eax, [bar_win]
+    mov eax, [bar_win + 4*r12]
     mov [out_buf + 4], eax
     mov eax, SYS_WRITE
     mov edi, [sock_fd]
@@ -841,11 +854,15 @@ init_bar:
     mov edx, 8
     syscall
 
+    inc r12d
+    cmp r12d, [mon_count]
+    jl create_bar_loop
+
     /* 3. X_CreateGC (Opcode 55, len 6 words = 24 bytes) */
     mov dword ptr [out_buf + 0], (6 << 16) | 55
     mov eax, [bar_gc]
     mov [out_buf + 4], eax                       /* gcid */
-    mov eax, [bar_win]
+    mov eax, [bar_win + 0]
     mov [out_buf + 8], eax                       /* drawable */
     mov dword ptr [out_buf + 12], 12             /* GCForeground (4) | GCBackground (8) */
     mov dword ptr [out_buf + 16], 0xc2c2b0       /* fg color */
@@ -857,20 +874,42 @@ init_bar:
     mov edx, 24
     syscall
 
-    call draw_bar
+    call draw_all_bars
 
+    pop r12
     pop rbx
     ret
 
 /*
- * draw_bar(): renders numbers 1..9 with active workspace highlighted
- * MICRO-OPTIMIZATION: Fully vectorized/batched into a single 360-byte buffer.
- * Replaces 19 context switches / sys_write syscalls with exactly 1 syscall!
+ * draw_all_bars(): renders status bar on each active monitor
  */
-draw_bar:
+draw_all_bars:
+    push rbx
+    push r14
+    xor r14d, r14d                              /* monitor index */
+dab_loop:
+    mov edi, r14d
+    call draw_mon_bar
+    inc r14d
+    cmp r14d, [mon_count]
+    jl dab_loop
+    pop r14
+    pop rbx
+    ret
+
+/*
+ * draw_mon_bar(edi = mon_idx):
+ * Renders the top status bar for monitor `edi`.
+ * Displays ONLY the workspaces mapped to this monitor in `ws_mon_table`!
+ */
+draw_mon_bar:
     push rbx
     push r12
     push r13
+    push r14
+    push r15
+
+    mov r14d, edi                               /* r14d = mon_idx (0 or 1) */
 
     lea rbx, [out_buf]
 
@@ -883,12 +922,14 @@ draw_bar:
 
     /* 2. PolyFillRectangle (20 bytes) */
     mov dword ptr [rbx + 16], (5 << 16) | 70    /* PolyFillRectangle */
-    mov eax, [bar_win]
+    mov eax, [bar_win + 4*r14]
     mov [rbx + 20], eax
     mov eax, [bar_gc]
     mov [rbx + 24], eax
     mov dword ptr [rbx + 28], 0                 /* x=0, y=0 */
-    mov eax, [mon_geom + 8]                     /* width */
+    mov eax, r14d
+    shl eax, 4
+    mov eax, [mon_geom + rax + 8]               /* mon width */
     mov edx, BAR_HEIGHT                         /* height */
     shl edx, 16
     and eax, 0xFFFF
@@ -897,17 +938,23 @@ draw_bar:
 
     add rbx, 36                                 /* rbx now points to first WS packet */
 
-    /* 3. Loop through 9 workspaces and build (ChangeGC + PolyText8) in buffer */
+    /* 3. Loop through workspaces 0..8 and draw ONLY those assigned to mon_idx */
     xor r12d, r12d                              /* r12d = ws_idx (0..8) */
+    xor r13d, r13d                              /* r13d = display slot counter for this bar */
 
-draw_ws_loop:
+draw_ws_mon_loop:
+    /* Check if this workspace belongs to this monitor */
+    movzx eax, byte ptr [ws_mon_table + r12]
+    cmp eax, r14d
+    jne skip_ws_mon                             /* Not on this monitor, skip! */
+
     /* Compare with cur_ws to choose color */
     mov eax, 0x685742                           /* inactive fg (gray/brown) */
     cmp r12d, [cur_ws]
-    jne set_bar_color
+    jne set_bar_mon_color
     mov eax, 0xc2c2b0                           /* active fg (bright cream/gold) */
 
-set_bar_color:
+set_bar_mon_color:
     /* ChangeGC (16 bytes) */
     mov dword ptr [rbx + 0], (4 << 16) | 56
     mov edx, [bar_gc]
@@ -917,13 +964,13 @@ set_bar_color:
 
     /* PolyText8 (20 bytes) */
     mov dword ptr [rbx + 16], (5 << 16) | 74
-    mov edx, [bar_win]
+    mov edx, [bar_win + 4*r14]
     mov [rbx + 20], edx
     mov edx, [bar_gc]
     mov [rbx + 24], edx
 
-    /* X position: 10 + r12d * 24, Y: 13 */
-    mov eax, r12d
+    /* X position: 10 + r13d * 24, Y: 13 */
+    mov eax, r13d
     imul eax, 24
     add eax, 10
     mov edx, 13
@@ -940,17 +987,27 @@ set_bar_color:
     mov [rbx + 32], ecx
 
     add rbx, 36
+    inc r13d                                    /* Advance slot counter */
+
+skip_ws_mon:
     inc r12d
     cmp r12d, 9
-    jl draw_ws_loop
+    jl draw_ws_mon_loop
 
-    /* Emit ENTIRE frame in a single atomic syscall (360 bytes)! */
+    /* Emit ENTIRE frame in a single atomic syscall */
+    /* Total bytes = 36 + r13d * 36 */
+    mov eax, r13d
+    imul eax, 36
+    add eax, 36
+    mov edx, eax                                /* edx = total write length */
+
     mov eax, SYS_WRITE
     mov edi, [sock_fd]
     lea rsi, [out_buf]
-    mov edx, 360
     syscall
 
+    pop r15
+    pop r14
     pop r13
     pop r12
     pop rbx
@@ -1832,7 +1889,7 @@ sock_fd:        .long 0
 root_win:       .long 0
 screen_w:       .long 0
 screen_h:       .long 0
-bar_win:        .long 0
+bar_win:        .long 0, 0      /* bar_win for Monitor 0 and Monitor 1 */
 bar_gc:         .long 0
 saved_envp:     .quad 0
 
