@@ -596,22 +596,6 @@ static inline void XCloseDisplay(Display *d) {
 #define DefaultColormap(d, s) 0
 #define DefaultDepth(d, s) 24
 
-static inline Window create_bar_window(Display *d, Window parent, int x, int y, unsigned int width, unsigned int height) {
-    unsigned int wid = d->next_rid++;
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 40);
-    p[0] = (10 << 16) | 1; /* Opcode 1: CreateWindow, depth=0, length=10 words */
-    p[1] = wid;
-    p[2] = (unsigned int)parent;
-    p[3] = ((int)y << 16) | ((int)x & 0xFFFF);
-    p[4] = (height << 16) | (width & 0xFFFF);
-    p[5] = 1 << 16;        /* border_width=0, class=InputOutput (1) */
-    p[6] = 0;              /* visual = CopyFromParent */
-    p[7] = CWOverrideRedirect | CWEventMask;
-    p[8] = 1;              /* override_redirect = True */
-    p[9] = ExposureMask | ButtonPressMask;
-    return wid;
-}
-
 static inline void configure_window_1d(Display *d, Window w, unsigned int mask, unsigned int val) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 12;
@@ -2203,9 +2187,19 @@ void createbars(void)
 {
     for (Monitor *m = mons; m; m = m->next) {
         m->bar_width = m->w - (gappx << 1);
-        m->barwin = create_bar_window(dpy, root,
-                                      m->x + gappx, m->y + gappx,
-                                      m->bar_width, BAR_HEIGHT);
+        unsigned int wid = dpy->next_rid++;
+        unsigned int *p = (unsigned int *)_xwire_reserve(dpy->fd, 40);
+        p[0] = (10 << 16) | 1; /* Opcode 1: CreateWindow, depth=0, length=10 words */
+        p[1] = wid;
+        p[2] = (unsigned int)root;
+        p[3] = ((int)(m->y + gappx) << 16) | ((int)(m->x + gappx) & 0xFFFF);
+        p[4] = ((unsigned int)BAR_HEIGHT << 16) | (m->bar_width & 0xFFFF);
+        p[5] = 1 << 16;        /* border_width=0, class=InputOutput (1) */
+        p[6] = 0;              /* visual = CopyFromParent */
+        p[7] = CWOverrideRedirect | CWEventMask;
+        p[8] = 1;              /* override_redirect = True */
+        p[9] = ExposureMask | ButtonPressMask;
+        m->barwin = wid;
         m->barpm = XCreatePixmap(dpy, root, m->w, BAR_HEIGHT, 24);
 
         XMapWindow(dpy, m->barwin);
