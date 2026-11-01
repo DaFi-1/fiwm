@@ -256,9 +256,7 @@ typedef struct {
     void *display;
     Window parent;
     Window window;
-    int x, y;
-    int width, height;
-    int border_width;
+    int vals[5];
     Window above;
     int detail;
     unsigned long value_mask;
@@ -572,13 +570,8 @@ static inline void XConfigureWindowFromReq(Display *d, XConfigureRequestEvent *e
     unsigned long valmask = ev->value_mask;
     p[1] = (unsigned int)ev->window;
     p[2] = (unsigned int)valmask;
-    if (valmask & 1) p[idx++] = (unsigned int)ev->x;
-    if (valmask & 2) p[idx++] = (unsigned int)ev->y;
-    if (valmask & 4) p[idx++] = (unsigned int)ev->width;
-    if (valmask & 8) p[idx++] = (unsigned int)ev->height;
-    if (valmask & 16) p[idx++] = (unsigned int)ev->border_width;
-    if (valmask & 32) p[idx++] = (unsigned int)ev->above;
-    if (valmask & 64) p[idx++] = (unsigned int)ev->detail;
+    for (int i = 0; i < 5; i++)
+        if (valmask & (1 << i)) p[idx++] = (unsigned int)ev->vals[i];
     p[0] = (idx << 16) | 12;
     _xwire_outlen -= (unsigned long)((10 - idx) << 2);
 }
@@ -699,11 +692,11 @@ static inline int XNextEvent(Display *d, XEvent *e) {
             return 0;
         case 23: /* ConfigureRequest */
             e->xconfigurerequest.window = *(const unsigned int *)&buf[8];
-            e->xconfigurerequest.x = *(const short *)&buf[16];
-            e->xconfigurerequest.y = *(const short *)&buf[18];
-            e->xconfigurerequest.width = *(const unsigned short *)&buf[20];
-            e->xconfigurerequest.height = *(const unsigned short *)&buf[22];
-            e->xconfigurerequest.border_width = *(const unsigned short *)&buf[24];
+            e->xconfigurerequest.vals[0] = *(const short *)&buf[16];
+            e->xconfigurerequest.vals[1] = *(const short *)&buf[18];
+            e->xconfigurerequest.vals[2] = *(const unsigned short *)&buf[20];
+            e->xconfigurerequest.vals[3] = *(const unsigned short *)&buf[22];
+            e->xconfigurerequest.vals[4] = *(const unsigned short *)&buf[24];
             e->xconfigurerequest.value_mask = *(const unsigned short *)&buf[28];
             return 0;
         case 17: /* DestroyNotify */
@@ -1925,8 +1918,8 @@ void configurerequest(XEvent *e)
 
     if (c) {
         if (!(c->flags & FLAG_FLOATING)) return;
-        c->x = ev->x; c->y = ev->y;
-        c->w = ev->width; c->h = ev->height;
+        c->x = ev->vals[0]; c->y = ev->vals[1];
+        c->w = ev->vals[2]; c->h = ev->vals[3];
     }
     XConfigureWindowFromReq(dpy, ev);
 }
