@@ -916,13 +916,7 @@ typedef struct Client Client;
 typedef struct Node Node;
 typedef struct Workspace Workspace;
 typedef struct Monitor Monitor;
-typedef struct {
-    int screen_number;
-    short x_org;
-    short y_org;
-    short width;
-    short height;
-} XineramaScreenInfo;
+
 
 enum {
     FLAG_FLOATING   = 1 << 0,
