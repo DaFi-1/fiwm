@@ -1125,10 +1125,8 @@ Node *node_new(void)
     Node *n = nodefreelist;
     if (n) {
         nodefreelist = n->parent;
-    } else if (nodeidx < NODEPOOL) {
-        n = &nodepool[nodeidx++];
     } else {
-        sys_exit(1);
+        n = &nodepool[nodeidx++];
     }
     n->is_leaf = 1;
     n->split   = 0;
