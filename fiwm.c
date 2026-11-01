@@ -2344,21 +2344,6 @@ void run(void)
 
 void cleanup(void)
 {
-    for (Client *c = clients; c; c = c->next) {
-        XSelectInput(dpy, c->win, NoEventMask);
-        XUngrabButton(dpy, AnyButton, AnyModifier, c->win);
-    }
-
-    if (bar_gc) XFreeGC(dpy, bar_gc);
-
-    for (Monitor *m = mons; m; m = m->next) {
-        if (m->barpm)
-            XFreePixmap(dpy, m->barpm);
-        if (m->barwin)
-            XDestroyWindow(dpy, m->barwin);
-    }
-
-    XSync(dpy, False);
     XCloseDisplay(dpy);
 
     if (xorg_pid > 0) {
