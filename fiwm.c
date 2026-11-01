@@ -426,32 +426,17 @@ static long xorg_pid = 0;
 
 static void start_xorg(void)
 {
-    char vt_arg[16];
-    vt_arg[0] = '\0';
+    char vt_arg[16] = {0};
     char tty_path[32];
     long len = syscall3(SYS_READLINK, (long)"/proc/self/fd/0", (long)tty_path, sizeof(tty_path) - 1);
-    if (len > 0) {
-        tty_path[len] = '\0';
-        if (tty_path[0] == '/' && tty_path[5] == 't' && tty_path[6] == 't' && tty_path[7] == 'y' &&
-            tty_path[8] >= '0' && tty_path[8] <= '9') {
-            vt_arg[0] = 'v';
-            vt_arg[1] = 't';
-            int p = 8, q = 2;
-            while (tty_path[p] >= '0' && tty_path[p] <= '9' && q < 14)
-                vt_arg[q++] = tty_path[p++];
-            vt_arg[q] = '\0';
-        }
+    if (len > 8 && tty_path[0] == '/' && *(int *)&tty_path[5] == 0x30797474 /* "tty0" check prefix */) {
+        vt_arg[0] = 'v'; vt_arg[1] = 't';
+        int p = 8, q = 2;
+        while (tty_path[p] >= '0' && tty_path[p] <= '9' && q < 14)
+            vt_arg[q++] = tty_path[p++];
     }
 
-    const char *x_argv[6];
-    int argc = 0;
-    x_argv[argc++] = "/usr/bin/X";
-    x_argv[argc++] = ":0";
-    x_argv[argc++] = "-ac";
-    if (vt_arg[0])
-        x_argv[argc++] = vt_arg;
-    x_argv[argc++] = "-keeptty";
-    x_argv[argc] = NULL;
+    const char *x_argv[] = { "/usr/bin/X", ":0", "-ac", vt_arg[0] ? vt_arg : "-keeptty", vt_arg[0] ? "-keeptty" : NULL, NULL };
 
     long pid = sys_fork();
     if (pid == 0) {
