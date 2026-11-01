@@ -980,13 +980,10 @@ static inline KeyCode XKeysymToKeycode(Display *d, KeySym ks) {
     (void)d;
     if (ks >= XK_1 && ks <= XK_9) return (KeyCode)(10 + (ks - XK_1));
     switch (ks) {
-    case XK_Num_Lock: return 77;
-    case XK_Return:   return 36;
     case XK_space:    return 65;
     case XK_q:        return 24;
     case XK_w:        return 25;
     case XK_d:        return 40;
-    case XK_c:        return 54;
     case XK_h:        return 43;
     case XK_j:        return 44;
     case XK_k:        return 45;
