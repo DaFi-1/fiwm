@@ -2372,14 +2372,8 @@ static void setup_environ(char **envp)
 __attribute__((used, noinline))
 int wm_main(int argc, char **argv, char **envp)
 {
-
+    (void)argc; (void)argv;
     setup_environ(envp);
-
-    if (argc == 2 && argv[1][0] == '-' && argv[1][1] == 'v' && !argv[1][2]) {
-        sys_write(1, "fiwm 0.1\n", 9);
-        return 0;
-    }
-
     setup();
     run();
     cleanup();
