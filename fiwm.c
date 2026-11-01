@@ -657,13 +657,7 @@ static inline void XGrabKey(Display *d, int keycode, unsigned int mod) {
     p[3] = 1;
 }
 
-static inline void xwire_ungrab_op(Display *d, unsigned int opcode, unsigned int id, unsigned int mod) {
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 12);
-    p[0] = (3 << 16) | opcode;
-    p[1] = id;
-    p[2] = mod & 0xFFFF;
-}
-#define XUngrabKey(d, kc, mod, w)     xwire_ungrab_op((d), (((unsigned int)(kc) & 0xFF) << 8) | 34, (unsigned int)(w), (mod))
+
 
 static inline void XGrabButton(Display *d, unsigned int btn, unsigned int mod, Window w) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 24);
@@ -2144,11 +2138,13 @@ void setlayoutcmd(const Arg *arg)
 }
 void grabkeys(void)
 {
-    unsigned int i, j;
-    XUngrabKey(dpy, AnyKey, AnyModifier, root);
+    unsigned int *p = (unsigned int *)_xwire_reserve(dpy->fd, 12);
+    p[0] = (3 << 16) | 34; /* X_UngrabKey: reqType=34, length=3, AnyKey=0 */
+    p[1] = (unsigned int)root;
+    p[2] = 0x8000;         /* AnyModifier */
 
-    for (i = 0; i < LENGTH(keys); i++) {
-        for (j = 0; j < LENGTH(mod_combos); j++)
+    for (unsigned int i = 0; i < LENGTH(keys); i++) {
+        for (unsigned int j = 0; j < LENGTH(mod_combos); j++)
             XGrabKey(dpy, keys[i].keycode, keys[i].mod | mod_combos[j]);
     }
 }
