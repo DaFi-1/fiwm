@@ -946,10 +946,12 @@ enum { SPLIT_VERTICAL, SPLIT_HORIZONTAL };
 enum { COL_BORDER_ACTIVE, COL_BORDER_INACTIVE, COL_BAR_BG, COL_BAR_FG, COL_BAR_HL };
 enum { WORKSPACE_COUNT = 9 };
 enum { BAR_HEIGHT = 18 };
-enum { WM_PROTOCOLS, WM_DELETE_WINDOW, WM_LAST };
-enum { NET_SUPPORTED, NET_NUMBER_OF_DESKTOPS,
-       NET_WM_STATE, NET_WM_STATE_FULLSCREEN, NET_ACTIVE_WINDOW,
-       NET_LAST };
+enum {
+    WM_PROTOCOLS, WM_DELETE_WINDOW,
+    NET_SUPPORTED, NET_NUMBER_OF_DESKTOPS,
+    NET_WM_STATE, NET_WM_STATE_FULLSCREEN, NET_ACTIVE_WINDOW,
+    ATOM_LAST
+};
 
 typedef union {
     int i;
@@ -1120,8 +1122,7 @@ static Monitor *mons;
 static Monitor *selmon;
 static Workspace workspaces[WORKSPACE_COUNT];
 static Client *clients;
-static Atom wmatom[WM_LAST];
-static Atom netatom[NET_LAST];
+static Atom atoms[ATOM_LAST];
 static int running = 1;
 static const unsigned int numlockmask = (1 << 4); /* Mod2Mask */
 static const unsigned int mod_combos[] = { 0, LockMask, (1 << 4), (1 << 4) | LockMask };
@@ -1556,7 +1557,7 @@ void unmanage(Client *c)
 static void set_active_focus(Window w)
 {
     set_input_focus(dpy, w ? w : root);
-    XChangeProperty(dpy, root, netatom[NET_ACTIVE_WINDOW],
+    XChangeProperty(dpy, root, atoms[NET_ACTIVE_WINDOW],
                     XA_WINDOW, 32, PropModeReplace,
                     (unsigned char *)&w, 1);
 }
@@ -2176,8 +2177,8 @@ void killclient(const Arg *arg)
     p[2] = 0;               /* mask = NoEventMask */
     p[3] = (32 << 8) | 33;  /* ClientMessage (33), format=32 */
     p[4] = (unsigned int)c->win;
-    p[5] = (unsigned int)wmatom[WM_PROTOCOLS];
-    p[6] = (unsigned int)wmatom[WM_DELETE_WINDOW];
+    p[5] = (unsigned int)atoms[WM_PROTOCOLS];
+    p[6] = (unsigned int)atoms[WM_DELETE_WINDOW];
     p[7] = 0;               /* CurrentTime */
     p[8] = 0;
     p[9] = 0;
@@ -2409,24 +2410,23 @@ void setup(void)
     bar_hl          = parse_color(colors[COL_BAR_HL]);
 
 
-    static const char *const net_names[] = {
+    static const char *const atom_names[] = {
+        "WM_PROTOCOLS", "WM_DELETE_WINDOW",
         "_NET_SUPPORTED", "_NET_NUMBER_OF_DESKTOPS",
         "_NET_WM_STATE", "_NET_WM_STATE_FULLSCREEN", "_NET_ACTIVE_WINDOW"
     };
-    wmatom[WM_PROTOCOLS]     = XInternAtom(dpy, "WM_PROTOCOLS", False);
-    wmatom[WM_DELETE_WINDOW] = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
-    for (int i = 0; i < NET_LAST; i++)
-        netatom[i] = XInternAtom(dpy, net_names[i], False);
+    for (int i = 0; i < ATOM_LAST; i++)
+        atoms[i] = XInternAtom(dpy, atom_names[i], False);
 
     XChangeProperty(dpy, root,
-        netatom[NET_SUPPORTED],
+        atoms[NET_SUPPORTED],
         XA_ATOM, 32, PropModeReplace,
-        (unsigned char *)&netatom[NET_WM_STATE], 3);
+        (unsigned char *)&atoms[NET_WM_STATE], 3);
 
     {
         unsigned long nd = WORKSPACE_COUNT;
         XChangeProperty(dpy, root,
-            netatom[NET_NUMBER_OF_DESKTOPS],
+            atoms[NET_NUMBER_OF_DESKTOPS],
             XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&nd, 1);
     }
 
