@@ -803,15 +803,14 @@ static inline Pixmap XCreatePixmap(Display *d, Drawable dr, unsigned int w, unsi
     return (Pixmap)pid;
 }
 
-static inline void XCopyArea(Display *d, Drawable src, Drawable dst, GC gc, int sx, int sy, unsigned int w, unsigned int h, int dx, int dy) {
-    if (!d || !src || !dst || !gc) return;
+static inline void XCopyArea(Display *d, Drawable src, Drawable dst, unsigned int w, unsigned int h) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 28);
     p[0] = (7 << 16) | 62; /* X_CopyArea: reqType=62, length=7 */
     p[1] = (unsigned int)src;
     p[2] = (unsigned int)dst;
-    p[3] = (unsigned int)(unsigned long)gc;
-    p[4] = ((int)sy << 16) | ((int)sx & 0xFFFF);
-    p[5] = ((int)dy << 16) | ((int)dx & 0xFFFF);
+    p[3] = (unsigned int)(unsigned long)bar_gc;
+    p[4] = 0;
+    p[5] = 0;
     p[6] = ((unsigned int)h << 16) | (w & 0xFFFF);
 }
 
@@ -969,8 +968,8 @@ static void setlayoutcmd(const Arg *);
 static void movemouse(const Arg *);
 static void resizemouse(const Arg *);
 
-static const int gappx           = 0; //10
-static const int borderpx        = 1;
+#define gappx 0
+#define borderpx 1
 static const char *termcmd[]     = { "st", NULL };
 static const char *menucmd[]     = {"/bin/sh", "-c", "/home/$USER/dotfile/dmenuscript", NULL};
 /* static const float default_ratio = 0.5f; */
@@ -1787,8 +1786,7 @@ void drawbar(Monitor *m)
     }
 
     if (m->barpm)
-        XCopyArea(dpy, m->barpm, m->barwin, bar_gc, 0, 0,
-                  m->bar_width, BAR_HEIGHT, 0, 0);
+        XCopyArea(dpy, m->barpm, m->barwin, m->bar_width, BAR_HEIGHT);
 }
 
 void createbars(void)
@@ -1861,13 +1859,11 @@ void buttonpress(XEvent *e)
         if (c->node)
             focus(selmon, c->node);
 
-        if (e->xbutton.button == Button1) {
-            Arg a = {.v = e};
+        Arg a = {.v = e};
+        if (e->xbutton.button == Button1)
             movemouse(&a);
-        } else if (e->xbutton.button == Button3) {
-            Arg a = {.v = e};
+        else if (e->xbutton.button == Button3)
             resizemouse(&a);
-        }
         return;
     }
 
