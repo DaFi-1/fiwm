@@ -7,6 +7,7 @@ CC      = cc
 MARCH  ?= native
 
 CFLAGS  = -std=c99 -pedantic -Wall -Wextra -Wno-unused-parameter \
+          -fcf-protection=none -Wa,-mx86-used-note=no \
           -ffreestanding -fno-builtin -fno-stack-protector -fomit-frame-pointer \
           -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-ident \
           -fmerge-all-constants -fno-plt -flto -fwhole-program -march=${MARCH} \
