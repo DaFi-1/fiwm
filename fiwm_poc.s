@@ -239,6 +239,14 @@ key_move_to_ws:
     jmp event_loop
 
 check_other_keys:
+    /* Alt+a (38): Workspace Anterior (Prev) */
+    cmp ecx, 38
+    je key_ws_prev
+
+    /* Alt+s (39): Próxima Workspace (Next) */
+    cmp ecx, 39
+    je key_ws_next
+
     /* Alt+d (40): Menu / scripts */
     cmp ecx, 40
     je key_menu
@@ -261,14 +269,17 @@ check_nav_keys:
     cmp ecx, 41
     je key_fullscreen
 
-    /* Alt+j (44): Focus Next */
-    cmp ecx, 44
-    je key_focus_next
+    /* Navigation with HJKL (keycodes 43, 44, 45, 46) */
+    cmp ecx, 43
+    jl check_split_keys
+    cmp ecx, 46
+    jg check_split_keys
 
-    /* Alt+k (45): Focus Prev */
-    cmp ecx, 45
-    je key_focus_prev
+    test edx, 1                 /* Shift pressed? */
+    jnz key_move_hjkl           /* Alt + Shift + HJKL: Swap/Move window between splits */
+    jmp key_focus_hjkl          /* Alt + HJKL: Change focus between splits */
 
+check_split_keys:
     /* Alt+v (55): Select Next Split = Horizontal for focused window */
     cmp ecx, 55
     je key_split_h
@@ -279,12 +290,78 @@ check_nav_keys:
 
     jmp event_loop
 
+key_focus_hjkl:
+    /* Cycle focus to next leaf in active workspace */
+    mov eax, [cur_ws]
+    lea rbx, [bsp_roots]
+    mov rdi, [rbx + 8*rax]
+    call bsp_find_other_leaf
+    test rax, rax
+    jz event_loop
+    mov ecx, [cur_ws]
+    lea rbx, [bsp_focuses]
+    mov [rbx + 8*rcx], rax
+    mov edi, [rax + NODE_WIN]
+    call set_focus
+    jmp event_loop
+
+key_move_hjkl:
+    /* Swap current focused window with adjacent window in active workspace */
+    mov eax, [cur_ws]
+    lea rbx, [bsp_focuses]
+    mov r12, [rbx + 8*rax]      /* r12 = current focused leaf node */
+    test r12, r12
+    jz event_loop
+
+    lea rbx, [bsp_roots]
+    mov rdi, [rbx + 8*rax]
+    call bsp_find_other_leaf    /* rax = sibling / adjacent leaf */
+    test rax, rax
+    jz event_loop
+
+    /* Swap window IDs between the two leaf nodes in the tree */
+    mov r8d, [r12 + NODE_WIN]
+    mov r9d, [rax + NODE_WIN]
+    mov [r12 + NODE_WIN], r9d
+    mov [rax + NODE_WIN], r8d
+
+    /* Re-arrange workspace to reflect new window positions */
+    mov edi, [cur_ws]
+    call bsp_arrange_ws
+
+    /* Keep focus on the moved window */
+    mov edi, r8d
+    call set_focus
+    jmp event_loop
+
 key_split_h:
     mov dword ptr [next_split_sel], 2   /* 2 = horizontal */
     jmp event_loop
 
 key_split_v:
     mov dword ptr [next_split_sel], 1   /* 1 = vertical */
+    jmp event_loop
+
+key_ws_prev:
+    mov eax, [cur_ws]
+    dec eax
+    test eax, eax
+    jns ws_prev_ok
+    mov eax, WORKSPACE_COUNT - 1   /* Volta para o 8 (workspace 9) */
+ws_prev_ok:
+    mov edi, eax
+    call focus_workspace
+    jmp event_loop
+
+key_ws_next:
+    mov eax, [cur_ws]
+    inc eax
+    cmp eax, WORKSPACE_COUNT
+    jl ws_next_ok
+    xor eax, eax                   /* Volta para o 0 (workspace 1) */
+ws_next_ok:
+    mov edi, eax
+    call focus_workspace
     jmp event_loop
 
 key_menu:
@@ -552,12 +629,15 @@ htw_ret:
 hide_single_win:
     push rcx
     push r11
-    mov dword ptr [out_buf + 0], (2 << 16) | 10
-    mov [out_buf + 4], edi
+    mov dword ptr [out_buf + 0], (5 << 16) | 12  /* Opcode 12: ConfigureWindow */
+    mov [out_buf + 4], edi                      /* window ID */
+    mov dword ptr [out_buf + 8], 3               /* CWX | CWY = 3 */
+    mov dword ptr [out_buf + 12], -9999          /* x = -9999 (off-screen) */
+    mov dword ptr [out_buf + 16], -9999          /* y = -9999 (off-screen) */
     mov eax, SYS_WRITE
     mov edi, [sock_fd]
     lea rsi, [out_buf]
-    mov edx, 8
+    mov edx, 20
     syscall
     pop r11
     pop rcx
@@ -1303,14 +1383,22 @@ sh_argv_term:
  */
 shortcut_keys:
     /* Basic WM shortcuts */
+    .byte 38, 0x08              /* Alt + a (Workspace Prev) */
+    .byte 39, 0x08              /* Alt + s (Workspace Next) */
     .byte 40, 0x08              /* Alt + d */
     .byte 25, 0x08              /* Alt + w */
     .byte 36, 0x08              /* Alt + Return */
     .byte 24, 0x08              /* Alt + q */
     .byte 24, 0x09              /* Alt + Shift + q */
     .byte 41, 0x08              /* Alt + f */
-    .byte 44, 0x08              /* Alt + j */
-    .byte 45, 0x08              /* Alt + k */
+    .byte 43, 0x08              /* Alt + h (Focus Left) */
+    .byte 44, 0x08              /* Alt + j (Focus Down) */
+    .byte 45, 0x08              /* Alt + k (Focus Up) */
+    .byte 46, 0x08              /* Alt + l (Focus Right) */
+    .byte 43, 0x09              /* Alt + Shift + h (Move Left) */
+    .byte 44, 0x09              /* Alt + Shift + j (Move Down) */
+    .byte 45, 0x09              /* Alt + Shift + k (Move Up) */
+    .byte 46, 0x09              /* Alt + Shift + l (Move Right) */
     .byte 55, 0x08              /* Alt + v */
     .byte 56, 0x08              /* Alt + b */
 
