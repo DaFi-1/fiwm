@@ -1606,8 +1606,6 @@ void movemouse(const Arg *arg)
             XMoveWindow(dpy, c->win,
                         ev.xmotion.x_root - ox,
                         ev.xmotion.y_root - oy);
-            if (selmon && selmon->barwin)
-                XRaiseWindow(dpy, selmon->barwin);
             _xwire_flush(dpy->fd);
             break;
         case ButtonRelease:
@@ -1679,8 +1677,6 @@ void resizemouse(const Arg *arg)
             XResizeWindow(dpy, c->win,
                           MAX(1, ev.xmotion.x_root - c->x),
                           MAX(1, ev.xmotion.y_root - c->y));
-            if (selmon && selmon->barwin)
-                XRaiseWindow(dpy, selmon->barwin);
             _xwire_flush(dpy->fd);
             break;
         case ButtonRelease:
