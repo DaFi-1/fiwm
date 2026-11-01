@@ -920,7 +920,7 @@ static inline int grab_mouse_motion(Display *d) {
 #define LENGTH(X)           (sizeof(X) / sizeof(X)[0])
 #define MAX(A,B)            ((A) > (B) ? (A) : (B))
 #define CLEANMASK(mask)     (mask & ~(numlockmask|LockMask))
-#define SELCLIENT(v)        if (!selmon || !selmon->ws->focus || !(v = selmon->ws->focus->u.client)) return
+
 
 enum { SPLIT_VERTICAL, SPLIT_HORIZONTAL };
 enum { COL_BORDER_ACTIVE, COL_BORDER_INACTIVE, COL_BAR_BG, COL_BAR_FG, COL_BAR_HL };
@@ -1101,6 +1101,10 @@ static Monitor *mons;
 static Monitor *selmon;
 static Workspace workspaces[WORKSPACE_COUNT];
 static Client *clients;
+static inline Client *selclient(void)
+{
+    return (selmon && selmon->ws->focus) ? selmon->ws->focus->u.client : NULL;
+}
 static Atom atoms[ATOM_LAST];
 static int running = 1;
 static const unsigned int numlockmask = (1 << 4); /* Mod2Mask */
@@ -1543,7 +1547,7 @@ void movemouse(const Arg *arg)
     const XEvent *bev = (const XEvent *)arg->v;
     c = find_client(bev->xbutton.window);
     if (!c) {
-        SELCLIENT(c);
+        if (!c) c = selclient();
     }
 
     if (!(c->flags & FLAG_FLOATING)) {
@@ -1617,7 +1621,7 @@ void resizemouse(const Arg *arg)
         c = find_client(bev->xbutton.window);
     }
     if (!c) {
-        SELCLIENT(c);
+        if (!c) c = selclient();
     }
 
     if (!(c->flags & FLAG_FLOATING)) {
@@ -2095,8 +2099,8 @@ void quit(const Arg *arg)
 
 void killclient(const Arg *arg)
 {
-    Client *c;
-    SELCLIENT(c);
+    Client *c = selclient();
+    if (!c) return;
 
     unsigned int *p = (unsigned int *)_xwire_reserve(dpy->fd, 44);
     p[0] = (11 << 16) | 25; /* X_SendEvent: reqType=25, length=11, propagate=0 */
@@ -2114,8 +2118,8 @@ void killclient(const Arg *arg)
 
 void togglefullscreen(const Arg *arg)
 {
-    Client *c;
-    SELCLIENT(c);
+    Client *c = selclient();
+    if (!c) return;
 
     c->flags ^= FLAG_FULLSCREEN;
     selmon->ws->fs_client = (c->flags & FLAG_FULLSCREEN) ? c : NULL;
@@ -2126,9 +2130,9 @@ void togglefullscreen(const Arg *arg)
 
 void togglefloating(const Arg *arg)
 {
-    Client *c;
+    Client *c = selclient();
     int fw, fh;
-    SELCLIENT(c);
+    if (!c) return;
 
     c->flags ^= FLAG_FLOATING;
     if (c->flags & FLAG_FLOATING) {
