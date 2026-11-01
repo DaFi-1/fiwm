@@ -1729,8 +1729,12 @@ void focusworkspace(const Arg *arg)
     }
 
     for (Client *fc = clients; fc; fc = fc->next) {
-        if (fc->workspace == oldtag)
-            hide_window(dpy, fc->win);
+        if (fc->workspace == oldtag) {
+            int vis = 0;
+            for (Monitor *tm = mons; tm; tm = tm->next)
+                if (tm != m && tm->curtag == oldtag) { vis = 1; break; }
+            if (!vis) hide_window(dpy, fc->win);
+        }
     }
 
 done:
@@ -2161,6 +2165,10 @@ void setup(void)
                             EnterWindowMask | ButtonPressMask |
                             StructureNotifyMask | PropertyChangeMask);
 
+    /* Run autostart (xrandr, etc.) before probing screen geometries */
+    Arg a = { .v = autostart_cmd };
+    spawn(&a);
+
     updategeom();
     createbars();
     grabkeys();
@@ -2169,9 +2177,6 @@ void setup(void)
     for (Monitor *m = mons; m; m = m->next)
         arrange(m);
 
-    /* Launch autostart command */
-    Arg a = { .v = autostart_cmd };
-    spawn(&a);
     XFlush(dpy);
 }
 
