@@ -1288,9 +1288,10 @@ static void try_exec(const char *file, char *const argv[])
     while (*p) {
         const char *next = strchrnul(p, ':');
         char *d = buf;
-        while (p < next && d < buf + sizeof(buf) - 2) *d++ = *p++;
+        while (p < next) *d++ = *p++;
         *d++ = '/';
-        for (const char *s = file; *s && d < buf + sizeof(buf) - 1; ) *d++ = *s++;
+        const char *s = file;
+        while (*s) *d++ = *s++;
         *d = '\0';
         sys_execve(buf, argv, envp_global);
         p = *next ? next + 1 : next;
