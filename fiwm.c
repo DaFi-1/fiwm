@@ -964,7 +964,7 @@ enum { SPLIT_VERTICAL, SPLIT_HORIZONTAL };
 enum { COL_BORDER_ACTIVE, COL_BORDER_INACTIVE, COL_BAR_BG, COL_BAR_FG, COL_BAR_HL };
 enum { WORKSPACE_COUNT = 9 };
 enum { BAR_HEIGHT = 18 };
-enum { WM_PROTOCOLS, WM_DELETE_WINDOW, WM_STATE, WM_LAST };
+enum { WM_PROTOCOLS, WM_DELETE_WINDOW, WM_LAST };
 enum { NET_WM_STATE, NET_WM_STATE_FULLSCREEN, NET_ACTIVE_WINDOW,
        NET_WM_WINDOW_TYPE, NET_WM_WINDOW_TYPE_DIALOG, NET_LAST };
 
@@ -2448,7 +2448,6 @@ void setup(void)
 
     wmatom[WM_PROTOCOLS]              = XInternAtom(dpy, "WM_PROTOCOLS", False);
     wmatom[WM_DELETE_WINDOW]          = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
-    wmatom[WM_STATE]                  = XInternAtom(dpy, "WM_STATE", False);
     netatom[NET_WM_STATE]             = XInternAtom(dpy, "_NET_WM_STATE", False);
     netatom[NET_WM_STATE_FULLSCREEN]  = XInternAtom(dpy, "_NET_WM_STATE_FULLSCREEN", False);
     netatom[NET_ACTIVE_WINDOW]        = XInternAtom(dpy, "_NET_ACTIVE_WINDOW", False);
