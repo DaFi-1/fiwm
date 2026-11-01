@@ -374,7 +374,7 @@ typedef struct {
 } Display;
 
 /* Syscall wrappers */
-static char _xwire_outbuf[4096];
+static char _xwire_outbuf[1024];
 static unsigned long _xwire_outlen = 0;
 static unsigned char _xwire_inbuf[1024];
 static int _xwire_in_len = 0;
