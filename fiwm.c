@@ -680,6 +680,7 @@ static inline void xwire_op_resource(Display *d, unsigned int opcode, unsigned i
 #define XUnmapWindow(d, w)    xwire_op_resource((d), 10, (unsigned int)(w))
 #define XDestroyWindow(d, w)  xwire_op_resource((d), 4, (unsigned int)(w))
 #define XFreePixmap(d, pm)    xwire_op_resource((d), 54, (unsigned int)(pm))
+#define XFreeGC(d, gc)        xwire_op_resource((d), 60, (unsigned int)(unsigned long)(gc))
 
 static inline void set_input_focus(Display *d, Window w) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 12);
@@ -835,12 +836,7 @@ static inline GC XCreateGC(Display *d, Drawable dr, unsigned long valmask, void 
     return (GC)(unsigned long)gcid;
 }
 
-static inline void XFreeGC(Display *d, GC gc) {
-    if (!d || !gc) return;
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
-    p[0] = (2 << 16) | 60; /* X_FreeGC: reqType=60, length=2 */
-    p[1] = (unsigned int)(unsigned long)gc;
-}
+
 
 static inline void XSetForeground(Display *d, GC gc, unsigned long pixel) {
     if (!d || !gc) return;
