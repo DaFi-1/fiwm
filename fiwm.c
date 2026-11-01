@@ -1058,7 +1058,7 @@ static Client *client_freelist;
 
 
 
-#define HEAP_SIZE (1UL * 1024)          /* 1 KB — bump allocator */
+#define HEAP_SIZE 512          /* 512 B — bump allocator */
 static char heap[HEAP_SIZE];
 static unsigned long heap_ptr;
 
