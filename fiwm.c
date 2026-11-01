@@ -1641,40 +1641,6 @@ static inline int _xinerama_req_reply(Display *d, unsigned int minor, unsigned c
 
 
 
-static inline XineramaScreenInfo *XineramaQueryScreens(Display *d, int *number) {
-    *number = 0;
-    unsigned char rep[32];
-    if (!_xinerama_req_reply(d, 5, rep)) return (void *)0;
-
-    unsigned int count = *(unsigned int *)&rep[8];
-    if (count == 0 || count > 16) return (void *)0;
-
-    static XineramaScreenInfo screens[16];
-    for (unsigned int i = 0; i < count; i++) {
-        unsigned char s[8];
-        if (_xwire_read(d->fd, s, 8) != 8) return (void *)0;
-        screens[i].screen_number = (int)i;
-        screens[i].x_org  = *(short *)&s[0];
-        screens[i].y_org  = *(short *)&s[2];
-        screens[i].width  = *(unsigned short *)&s[4];
-        screens[i].height = *(unsigned short *)&s[6];
-    }
-    *number = (int)count;
-    return screens;
-}
-
-static int isuniquegeom(XineramaScreenInfo *unique, int n, XineramaScreenInfo *info)
-{
-    unsigned long target;
-    __builtin_memcpy(&target, &info->x_org, sizeof(target));
-    for (int i = 0; i < n; i++) {
-        unsigned long cur;
-        __builtin_memcpy(&cur, &unique[i].x_org, sizeof(cur));
-        if (cur == target) return 0;
-    }
-    return 1;
-}
-
 static Monitor *
 monitor_new(int num, int x, int y, int w, int h)
 {
@@ -1698,32 +1664,37 @@ monitor_new(int num, int x, int y, int w, int h)
 
 void updategeom(void)
 {
-    Monitor *m;
     mons = NULL;
 
-    int n = 0;
-    XineramaScreenInfo *info = XineramaQueryScreens(dpy, &n);
+    unsigned char rep[32];
+    int nunique = 0;
+    static unsigned long unique[16];
 
-    if (info && n > 0) {
-        static XineramaScreenInfo unique[16];
-        int nunique = 0;
-
-        for (int i = 0; i < n && nunique < 16; i++)
-            if (isuniquegeom(unique, nunique, &info[i]))
-                unique[nunique++] = info[i];
-
+    if (_xinerama_req_reply(dpy, 5, rep)) {
+        unsigned int count = *(unsigned int *)&rep[8];
+        for (unsigned int i = 0; i < count && nunique < 16; i++) {
+            unsigned char s[8];
+            if (_xwire_read(dpy->fd, s, 8) != 8) break;
+            unsigned long geom = *(unsigned long *)s;
+            int is_unique = 1;
+            for (int j = 0; j < nunique; j++)
+                if (unique[j] == geom) { is_unique = 0; break; }
+            if (is_unique) {
+                unique[nunique++] = geom;
+                Monitor *m = monitor_new(nunique - 1,
+                                         *(short *)&s[0], *(short *)&s[2],
+                                         *(unsigned short *)&s[4], *(unsigned short *)&s[6]);
+                m->next = mons;
+                mons = m;
+                if (nunique == 1) selmon = m;
+            }
+        }
         if (nunique <= 1) {
             for (int t = 0; t < WORKSPACE_COUNT; t++) tagmap[t] = 0;
         }
+    }
 
-        for (int i = 0; i < nunique; i++) {
-            m = monitor_new(i, unique[i].x_org, unique[i].y_org,
-                            unique[i].width, unique[i].height);
-            m->next = mons;
-            mons = m;
-            if (i == 0) selmon = m;
-        }
-    } else {
+    if (!mons) {
         for (int t = 0; t < WORKSPACE_COUNT; t++) tagmap[t] = 0;
         mons = monitor_new(0, 0, 0,
                            DisplayWidth(dpy, XDefaultScreen(dpy)),
