@@ -1043,7 +1043,7 @@ static const unsigned int mod_combos[] = { 0, LockMask, (1 << 4), (1 << 4) | Loc
 
 
 enum { NODEPOOL = 32 };
-static Node  nodepool[NODEPOOL] __attribute__((aligned(64)));
+static Node  nodepool[NODEPOOL] __attribute__((aligned(16)));
 static int   nodeidx;
 static Node *nodefreelist;
 static Client *client_freelist;
@@ -2221,14 +2221,14 @@ void cleanup(void)
     }
 }
 
-static char *custom_envp[96];
+static char *custom_envp[80];
 static char display_env[] = "DISPLAY=:0";
 
 static void setup_environ(char **envp)
 {
     int has_display = 0, count = 0;
     if (envp) {
-        for (char **ep = envp; *ep && count < 90; ep++) {
+        for (char **ep = envp; *ep && count < 75; ep++) {
             if (*(const unsigned long *)*ep == 0x3d59414c50534944ULL) {
                 has_display = 1;
                 env_display = *ep + 8;
