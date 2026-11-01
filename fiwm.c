@@ -609,9 +609,7 @@ static inline void configure_window_1d(Display *d, Window w, unsigned int mask, 
 #define XSetWindowBorderWidth(d, w, bw) configure_window_1d((d), (w), 16, (unsigned int)(bw))
 
 static inline void XConfigureWindowFromReq(Display *d, XConfigureRequestEvent *ev) {
-    if (__builtin_expect(_xwire_outlen + 40 > sizeof(_xwire_outbuf), 0))
-        _xwire_flush(d->fd);
-    unsigned int *p = (unsigned int *)(_xwire_outbuf + _xwire_outlen);
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 40);
     int idx = 3;
     unsigned long valmask = ev->value_mask;
     p[1] = (unsigned int)ev->window;
@@ -624,7 +622,7 @@ static inline void XConfigureWindowFromReq(Display *d, XConfigureRequestEvent *e
     if (valmask & 32) p[idx++] = (unsigned int)ev->above;
     if (valmask & 64) p[idx++] = (unsigned int)ev->detail;
     p[0] = (idx << 16) | 12;
-    _xwire_outlen += (unsigned long)(idx << 2);
+    _xwire_outlen -= (unsigned long)((10 - idx) << 2);
 }
 
 static inline void change_window_attributes_1d(Display *d, Window w, unsigned int mask, unsigned int val) {
