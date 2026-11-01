@@ -448,7 +448,7 @@ static void start_xorg(void)
     }
 }
 
-static inline Display *XOpenDisplay(const char *name) {
+static inline Display *XOpenDisplay(void) {
     int fd = (int)_xwire_sys3(SYS_SOCKET, AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return (void *)0;
 
@@ -456,7 +456,7 @@ static inline Display *XOpenDisplay(const char *name) {
     addr.sun_family = AF_UNIX;
     char path[64] = "/tmp/.X11-unix/X0";
 
-    const char *dstr = name ? name : env_display;
+    const char *dstr = env_display;
 
     if (dstr && dstr[0] == ':') {
         int i = 0, j = 16;
@@ -465,7 +465,7 @@ static inline Display *XOpenDisplay(const char *name) {
         path[j] = '\0';
     }
 
-    for (unsigned long k = 0; k < sizeof(path); k++) addr.sun_path[k] = path[k];
+    __builtin_memcpy(addr.sun_path, path, sizeof(path));
 
     if (_xwire_sys3(SYS_CONNECT, fd, (long)&addr, sizeof(addr)) < 0) {
         _xwire_sys3(SYS_CLOSE, fd, 0, 0);
@@ -2164,7 +2164,7 @@ void setup(void)
     sa.sa_mask = 0;
     syscall4(SYS_RT_SIGACTION, 17, (long)&sa, 0, 8);
 
-    dpy = XOpenDisplay(NULL);
+    dpy = XOpenDisplay();
     if (!dpy) sys_exit(1);
     root = RootWindow(dpy, XDefaultScreen(dpy));
 
