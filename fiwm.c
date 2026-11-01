@@ -365,7 +365,7 @@ typedef union _XEvent {
 
 typedef struct {
     int fd;
-    Window root;
+    Window root_window;
     int width, height;
     unsigned int rid_base;
     unsigned int rid_mask;
@@ -518,11 +518,11 @@ connected: ;
     int screen_offset = 32 + ((vendor_len + 3) & ~3) + (num_formats * 8);
 
     if (screen_offset + 40 <= (int)first_chunk) {
-        _global_display.root   = *(unsigned int *)&body[screen_offset];
+        _global_display.root_window   = *(unsigned int *)&body[screen_offset];
         _global_display.width  = *(unsigned short *)&body[screen_offset + 20];
         _global_display.height = *(unsigned short *)&body[screen_offset + 22];
     } else {
-        _global_display.root   = 0x100;
+        _global_display.root_window   = 0x100;
         _global_display.width  = 1024;
         _global_display.height = 768;
     }
@@ -549,7 +549,7 @@ static inline void XCloseDisplay(Display *d) {
 #define XDefaultScreen(d) 0
 #define DisplayWidth(d, s) ((d) ? (d)->width : 1024)
 #define DisplayHeight(d, s) ((d) ? (d)->height : 768)
-#define RootWindow(d, s) ((d) ? (d)->root : 0)
+#define RootWindow(d, s) ((d) ? (d)->root_window : 0)
 #define DefaultColormap(d, s) 0
 #define DefaultDepth(d, s) 24
 
@@ -637,7 +637,7 @@ static inline void xwire_op_resource(Display *d, unsigned int opcode, unsigned i
 static inline void XGrabKey(Display *d, int keycode, unsigned int mod) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | (1 << 8) | 33; /* X_GrabKey: reqType=33, ownerEvents=1, length=4 */
-    p[1] = (unsigned int)d->root;
+    p[1] = (unsigned int)d->root_window;
     p[2] = (1 << 24) | (((unsigned int)(keycode & 0xFF)) << 16) | (mod & 0xFFFF);
     p[3] = 1;
 }
@@ -813,7 +813,7 @@ static inline int grab_mouse_motion(Display *d) {
     if (!d) return 1;
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 24);
     p[0] = (6 << 16) | 26; /* X_GrabPointer: reqType=26, length=6 */
-    p[1] = (unsigned int)d->root;
+    p[1] = (unsigned int)d->root_window;
     p[2] = (1 << 24) | (1 << 16) | ((PointerMotionMask | ButtonReleaseMask) & 0xFFFF);
     p[3] = 0;
     p[4] = 0;
@@ -903,7 +903,7 @@ struct Node {
 #define NODE_SET_SPLIT(n, v) do { if (v) (n)->tagged_parent |= TAG_SPLIT; else (n)->tagged_parent &= ~TAG_SPLIT; } while(0)
 
 struct Workspace {
-    Node *root;
+    Node *tree_root;
     Node *focus;
     Client *fs_client;
 };
@@ -1028,39 +1028,49 @@ static const unsigned char grabbed_keys[] = {
     24, 25, 27, 38, 39, 40, 41, 43, 44, 45, 46, 55, 56, 65
 };
 
-static Window root;
-static Monitor *mons;
-static Monitor *selmon;
-static Workspace workspaces[WORKSPACE_COUNT];
-static Client *clients;
+static const unsigned char mod_combos[] = { 0, LockMask, (1 << 4), (1 << 4) | LockMask };
+enum { NODEPOOL = 32 };
+#define HEAP_SIZE 512
+
+/* Monolithic Core WM State Arena (Continuous Memory Block) */
+typedef struct {
+    Workspace workspaces[WORKSPACE_COUNT];
+    Node nodepool[NODEPOOL] __attribute__((aligned(16)));
+    char heap[HEAP_SIZE];
+    unsigned long heap_ptr;
+    Window root_win;
+    Monitor *mons;
+    Monitor *selmon;
+    Client *clients;
+    Client *client_freelist;
+    Node *nodefreelist;
+    Atom atoms[ATOM_LAST];
+    unsigned char running;
+    unsigned char nodeidx;
+} WMArena;
+
+static WMArena S;
+
+#define root            (S.root_win)
+#define mons            (S.mons)
+#define selmon          (S.selmon)
+#define workspaces      (S.workspaces)
+#define clients         (S.clients)
+#define atoms           (S.atoms)
+#define running         (S.running)
+#define nodeidx         (S.nodeidx)
+#define nodepool        (S.nodepool)
+#define nodefreelist    (S.nodefreelist)
+#define client_freelist (S.client_freelist)
+#define heap            (S.heap)
+#define heap_ptr        (S.heap_ptr)
+
 static inline Client *selclient(void)
 {
     return (selmon && selmon->ws->focus) ? selmon->ws->focus->u.client : NULL;
 }
-static Atom atoms[ATOM_LAST];
-static unsigned char running = 1;
-static const unsigned char mod_combos[] = { 0, LockMask, (1 << 4), (1 << 4) | LockMask };
-
-
-
-enum { NODEPOOL = 32 };
-static Node  nodepool[NODEPOOL] __attribute__((aligned(16)));
-static unsigned char nodeidx;
-static Node *nodefreelist;
-static Client *client_freelist;
-
-
-
-
-
 
 #define free(p) ((void)0)
-
-
-
-#define HEAP_SIZE 512          /* 512 B — bump allocator */
-static char heap[HEAP_SIZE];
-static unsigned long heap_ptr;
 
 static void *ecalloc(size_t size)
 {
@@ -1143,7 +1153,7 @@ Node *node_detach(Node *n, Workspace *ws)
     if (!n || !NODE_IS_LEAF(n)) return NULL;
     parent = NODE_PARENT(n);
     if (!parent) {
-        ws->root = NULL;
+        ws->tree_root = NULL;
     } else {
         sibling   = (parent->u.ch.first == n) ? parent->u.ch.second : parent->u.ch.first;
         grandparent = NODE_PARENT(parent);
@@ -1155,7 +1165,7 @@ Node *node_detach(Node *n, Workspace *ws)
             else
                 grandparent->u.ch.second = sibling;
         } else {
-            ws->root = sibling;
+            ws->tree_root = sibling;
         }
 
         node_free(parent);
@@ -1172,9 +1182,9 @@ static Node *tree_insert(Workspace *ws, Client *c, int split)
     newleaf->u.client = c;
     c->node = newleaf;
 
-    Node *focus = (ws->focus) ? ws->focus : (ws->root ? node_first_leaf(ws->root) : NULL);
-    if (!focus || !ws->root) {
-        ws->root = newleaf;
+    Node *focus = (ws->focus) ? ws->focus : (ws->tree_root ? node_first_leaf(ws->tree_root) : NULL);
+    if (!focus || !ws->tree_root) {
+        ws->tree_root = newleaf;
     } else {
         Node *newnode = node_new();
         NODE_SET_LEAF(newnode, 0);
@@ -1191,7 +1201,7 @@ static Node *tree_insert(Workspace *ws, Client *c, int split)
             else
                 NODE_PARENT(newnode)->u.ch.second = newnode;
         } else {
-            ws->root = newnode;
+            ws->tree_root = newnode;
         }
     }
     ws->focus = newleaf;
@@ -1326,8 +1336,8 @@ void arrange(Monitor *m)
     ww = m->w - gappx - borderpx;
     wh = m->h - BAR_HEIGHT - (gappx << 1) - borderpx;
 
-    if (m->ws->root)
-        arrange_node(m->ws->root, wx, wy, ww, wh);
+    if (m->ws->tree_root)
+        arrange_node(m->ws->tree_root, wx, wy, ww, wh);
 
     arrange_floating(m);
 
@@ -1684,7 +1694,7 @@ void focusworkspace(const Arg *arg)
     m->ws     = &workspaces[tag];
     m->dirty  = 1;
 
-    Node *f = (m->ws->focus && m->ws->focus->u.client) ? m->ws->focus : (m->ws->root ? node_first_leaf(m->ws->root) : NULL);
+    Node *f = (m->ws->focus && m->ws->focus->u.client) ? m->ws->focus : (m->ws->tree_root ? node_first_leaf(m->ws->tree_root) : NULL);
     if (f)
         focus(m, f);
     else
@@ -2009,8 +2019,8 @@ void focuscmd(const Arg *arg)
         Monitor *om = monitor_in_direction(selmon, orient, dir);
         if (om) {
             Node *n = om->ws->focus;
-            if ((!n || !n->u.client) && om->ws->root)
-                n = node_first_leaf(om->ws->root);
+            if ((!n || !n->u.client) && om->ws->tree_root)
+                n = node_first_leaf(om->ws->tree_root);
             if (n && n->u.client) {
                 Monitor *prev = selmon;
                 selmon = om;
@@ -2137,6 +2147,7 @@ void setup(void)
 
     dpy = XOpenDisplay();
     if (!dpy) sys_exit(1);
+    running = 1;
     root = RootWindow(dpy, XDefaultScreen(dpy));
 
 
