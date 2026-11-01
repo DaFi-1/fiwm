@@ -975,27 +975,7 @@ static inline int XQueryPointer(Display *d, Window w, Window *r, Window *c, int 
 
 
 
-static inline KeyCode XKeysymToKeycode(Display *d, KeySym ks) {
-    (void)d;
-    if (ks >= XK_1 && ks <= XK_9) return (KeyCode)(10 + (ks - XK_1));
-    switch (ks) {
-    case XK_space:    return 65;
-    case XK_q:        return 24;
-    case XK_w:        return 25;
-    case XK_d:        return 40;
-    case XK_h:        return 43;
-    case XK_j:        return 44;
-    case XK_k:        return 45;
-    case XK_l:        return 46;
-    case XK_r:        return 27;
-    case XK_b:        return 56;
-    case XK_v:        return 55;
-    case XK_a:        return 38;
-    case XK_s:        return 39;
-    case XK_f:        return 41;
-    default:          return 0;
-    }
-}
+
 
 
 /* ========================================================================= */
@@ -1023,7 +1003,7 @@ typedef union {
 
 typedef struct {
     unsigned int mod;
-    KeySym keysym;
+    KeyCode keycode;
     void (*func)(const Arg *);
     const Arg arg;
 } Key;
@@ -1139,46 +1119,45 @@ static const char *autostart[][4] = {
 };
 
 static const Key keys[] = {
-    { MODKEY,              XK_w,      spawn,          {.v = termcmd} },
-    { MODKEY,              XK_d,      spawn,          {.v = menucmd} },
-    { MODKEY,              XK_q,      killclient,     {0} },
-    { MODKEY|ShiftMask,    XK_q,      quit,           {0} },
-    { MODKEY,              XK_f,      togglefullscreen, {0} },
-    { MODKEY|ShiftMask,    XK_f,      togglefloating,  {0} },
-    { MODKEY,              XK_space,  togglefloating,  {0} },
-    { MODKEY,              XK_r,      rotatecmd,      {0} },
-    { MODKEY,              XK_b,      setlayoutcmd,   {.i = SPLIT_VERTICAL} },
-    { MODKEY,              XK_v,      setlayoutcmd,   {.i = SPLIT_HORIZONTAL} },
-    { MODKEY,              XK_a,      focusworkspace_step, {.i = -1} },
-    { MODKEY,              XK_s,      focusworkspace_step, {.i = +1} },
-    { MODKEY,              XK_h,      focuscmd,       {.i = (SPLIT_VERTICAL<<1)|0} },
-    { MODKEY,              XK_l,      focuscmd,       {.i = (SPLIT_VERTICAL<<1)|1} },
-    { MODKEY,              XK_k,      focuscmd,       {.i = (SPLIT_HORIZONTAL<<1)|0} },
-    { MODKEY,              XK_j,      focuscmd,       {.i = (SPLIT_HORIZONTAL<<1)|1} },
-    { MODKEY|ShiftMask,    XK_h,      movecmd,        {.i = 100 + ((SPLIT_VERTICAL<<1)|0)} },
-    { MODKEY|ShiftMask,    XK_l,      movecmd,        {.i = 100 + ((SPLIT_VERTICAL<<1)|1)} },
-    { MODKEY|ShiftMask,    XK_k,      movecmd,        {.i = 100 + ((SPLIT_HORIZONTAL<<1)|0)} },
-    { MODKEY|ShiftMask,    XK_j,      movecmd,        {.i = 100 + ((SPLIT_HORIZONTAL<<1)|1)} },
-    { MODKEY,              XK_1,      focusworkspace, {.i = 0} },
-    { MODKEY,              XK_2,      focusworkspace, {.i = 1} },
-    { MODKEY,              XK_3,      focusworkspace, {.i = 2} },
-    { MODKEY,              XK_4,      focusworkspace, {.i = 3} },
-    { MODKEY,              XK_5,      focusworkspace, {.i = 4} },
-    { MODKEY,              XK_6,      focusworkspace, {.i = 5} },
-    { MODKEY,              XK_7,      focusworkspace, {.i = 6} },
-    { MODKEY,              XK_8,      focusworkspace, {.i = 7} },
-    { MODKEY,              XK_9,      focusworkspace, {.i = 8} },
-    { MODKEY|ShiftMask,    XK_1,      movecmd,        {.i = 0} },
-    { MODKEY|ShiftMask,    XK_2,      movecmd,        {.i = 1} },
-    { MODKEY|ShiftMask,    XK_3,      movecmd,        {.i = 2} },
-    { MODKEY|ShiftMask,    XK_4,      movecmd,        {.i = 3} },
-    { MODKEY|ShiftMask,    XK_5,      movecmd,        {.i = 4} },
-    { MODKEY|ShiftMask,    XK_6,      movecmd,        {.i = 5} },
-    { MODKEY|ShiftMask,    XK_7,      movecmd,        {.i = 6} },
-    { MODKEY|ShiftMask,    XK_8,      movecmd,        {.i = 7} },
-    { MODKEY|ShiftMask,    XK_9,      movecmd,        {.i = 8} },
+    { MODKEY,              25 /*w*/,  spawn,          {.v = termcmd} },
+    { MODKEY,              40 /*d*/,  spawn,          {.v = menucmd} },
+    { MODKEY,              24 /*q*/,  killclient,     {0} },
+    { MODKEY|ShiftMask,    24 /*q*/,  quit,           {0} },
+    { MODKEY,              41 /*f*/,  togglefullscreen, {0} },
+    { MODKEY|ShiftMask,    41 /*f*/,  togglefloating,  {0} },
+    { MODKEY,              65 /*sp*/, togglefloating,  {0} },
+    { MODKEY,              27 /*r*/,  rotatecmd,      {0} },
+    { MODKEY,              56 /*b*/,  setlayoutcmd,   {.i = SPLIT_VERTICAL} },
+    { MODKEY,              55 /*v*/,  setlayoutcmd,   {.i = SPLIT_HORIZONTAL} },
+    { MODKEY,              38 /*a*/,  focusworkspace_step, {.i = -1} },
+    { MODKEY,              39 /*s*/,  focusworkspace_step, {.i = +1} },
+    { MODKEY,              43 /*h*/,  focuscmd,       {.i = (SPLIT_VERTICAL<<1)|0} },
+    { MODKEY,              46 /*l*/,  focuscmd,       {.i = (SPLIT_VERTICAL<<1)|1} },
+    { MODKEY,              45 /*k*/,  focuscmd,       {.i = (SPLIT_HORIZONTAL<<1)|0} },
+    { MODKEY,              44 /*j*/,  focuscmd,       {.i = (SPLIT_HORIZONTAL<<1)|1} },
+    { MODKEY|ShiftMask,    43 /*h*/,  movecmd,        {.i = 100 + ((SPLIT_VERTICAL<<1)|0)} },
+    { MODKEY|ShiftMask,    46 /*l*/,  movecmd,        {.i = 100 + ((SPLIT_VERTICAL<<1)|1)} },
+    { MODKEY|ShiftMask,    45 /*k*/,  movecmd,        {.i = 100 + ((SPLIT_HORIZONTAL<<1)|0)} },
+    { MODKEY|ShiftMask,    44 /*j*/,  movecmd,        {.i = 100 + ((SPLIT_HORIZONTAL<<1)|1)} },
+    { MODKEY,              10 /*1*/,  focusworkspace, {.i = 0} },
+    { MODKEY,              11 /*2*/,  focusworkspace, {.i = 1} },
+    { MODKEY,              12 /*3*/,  focusworkspace, {.i = 2} },
+    { MODKEY,              13 /*4*/,  focusworkspace, {.i = 3} },
+    { MODKEY,              14 /*5*/,  focusworkspace, {.i = 4} },
+    { MODKEY,              15 /*6*/,  focusworkspace, {.i = 5} },
+    { MODKEY,              16 /*7*/,  focusworkspace, {.i = 6} },
+    { MODKEY,              17 /*8*/,  focusworkspace, {.i = 7} },
+    { MODKEY,              18 /*9*/,  focusworkspace, {.i = 8} },
+    { MODKEY|ShiftMask,    10 /*1*/,  movecmd,        {.i = 0} },
+    { MODKEY|ShiftMask,    11 /*2*/,  movecmd,        {.i = 1} },
+    { MODKEY|ShiftMask,    12 /*3*/,  movecmd,        {.i = 2} },
+    { MODKEY|ShiftMask,    13 /*4*/,  movecmd,        {.i = 3} },
+    { MODKEY|ShiftMask,    14 /*5*/,  movecmd,        {.i = 4} },
+    { MODKEY|ShiftMask,    15 /*6*/,  movecmd,        {.i = 5} },
+    { MODKEY|ShiftMask,    16 /*7*/,  movecmd,        {.i = 6} },
+    { MODKEY|ShiftMask,    17 /*8*/,  movecmd,        {.i = 7} },
+    { MODKEY|ShiftMask,    18 /*9*/,  movecmd,        {.i = 8} },
 };
-static KeyCode key_keycodes[LENGTH(keys)];
 
 static Display *dpy;
 static Window root;
@@ -2125,7 +2104,7 @@ void keypress(XEvent *e)
     unsigned int state = CLEANMASK(e->xkey.state);
 
     for (size_t i = 0; i < LENGTH(keys); i++)
-        if (key_keycodes[i] == kc && keys[i].mod == state) {
+        if (keys[i].keycode == kc && keys[i].mod == state) {
             keys[i].func(&keys[i].arg);
             return;
         }
@@ -2454,15 +2433,12 @@ void setlayoutcmd(const Arg *arg)
 void grabkeys(void)
 {
     unsigned int i, j;
-    KeySym keysym;
     unsigned int modifiers[] = { 0, LockMask, numlockmask, numlockmask | LockMask };
     XUngrabKey(dpy, AnyKey, AnyModifier, root);
 
     for (i = 0; i < LENGTH(keys); i++) {
-        keysym = XKeysymToKeycode(dpy, keys[i].keysym);
-        key_keycodes[i] = (KeyCode)keysym;
         for (j = 0; j < LENGTH(modifiers); j++)
-            XGrabKey(dpy, keysym, keys[i].mod | modifiers[j]);
+            XGrabKey(dpy, keys[i].keycode, keys[i].mod | modifiers[j]);
     }
 }
 
