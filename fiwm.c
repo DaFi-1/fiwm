@@ -764,6 +764,10 @@ static inline Atom intern_atom(Display *d, const char *name) {
 #define XInternAtom(d, name, b) intern_atom(d, name)
 
 
+
+
+static GC bar_gc;
+
 static inline GC XCreateGC(Display *d, Drawable dr, unsigned long valmask, void *val) {
     (void)valmask; (void)val;
     if (!d || !dr) return (GC)0;
@@ -778,30 +782,28 @@ static inline GC XCreateGC(Display *d, Drawable dr, unsigned long valmask, void 
 
 
 
-static inline void XSetForeground(Display *d, GC gc, unsigned long pixel) {
-    if (!d || !gc) return;
+static inline void XSetForeground(Display *d, unsigned long pixel) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 56; /* X_ChangeGC: reqType=56, length=4 */
-    p[1] = (unsigned int)(unsigned long)gc;
+    p[1] = (unsigned int)(unsigned long)bar_gc;
     p[2] = 4; /* GCForeground = (1L<<2) */
     p[3] = (unsigned int)pixel;
 }
 
-static inline void XFillRectangle(Display *d, Drawable dr, GC gc, int x, int y, unsigned int w, unsigned int h) {
-    if (!d || !gc || !dr) return;
+static inline void XFillRectangle(Display *d, Drawable dr, int x, int y, unsigned int w, unsigned int h) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 20);
     p[0] = (5 << 16) | 70; /* X_PolyFillRectangle: reqType=70, length=5 */
     p[1] = (unsigned int)dr;
-    p[2] = (unsigned int)(unsigned long)gc;
+    p[2] = (unsigned int)(unsigned long)bar_gc;
     p[3] = ((int)y << 16) | ((int)x & 0xFFFF);
     p[4] = ((unsigned int)h << 16) | (w & 0xFFFF);
 }
 
-static inline void XDrawChar(Display *d, Drawable dr, GC gc, int x, int y, char ch) {
+static inline void XDrawChar(Display *d, Drawable dr, int x, int y, char ch) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 24);
     p[0] = (6 << 16) | 74; /* X_PolyText8: reqType=74, length=6 */
     p[1] = (unsigned int)dr;
-    p[2] = (unsigned int)(unsigned long)gc;
+    p[2] = (unsigned int)(unsigned long)bar_gc;
     p[3] = ((int)y << 16) | ((int)x & 0xFFFF);
     p[4] = (1 << 0) | (((unsigned int)(unsigned char)ch) << 16);
     p[5] = 0;
@@ -1064,7 +1066,7 @@ static Atom atoms[ATOM_LAST];
 static int running = 1;
 static const unsigned int mod_combos[] = { 0, LockMask, (1 << 4), (1 << 4) | LockMask };
 
-static GC bar_gc;
+
 
 enum { NODEPOOL = 64 };
 static Node  nodepool[NODEPOOL] __attribute__((aligned(64)));
@@ -1809,8 +1811,8 @@ void drawbar(Monitor *m)
 
     d = m->barpm;
 
-    XSetForeground(dpy, bar_gc, bar_bg);
-    XFillRectangle(dpy, d, bar_gc, 0, 0, m->bar_width, BAR_HEIGHT);
+    XSetForeground(dpy, bar_bg);
+    XFillRectangle(dpy, d, 0, 0, m->bar_width, BAR_HEIGHT);
 
     unsigned long cur_fg = bar_bg;
     int half_sw = (sw >> 1) - 4;
@@ -1820,10 +1822,10 @@ void drawbar(Monitor *m)
         char ch = (char)('1' + i);
         unsigned long fg = (m == selmon && m->curtag == i) ? bar_fg : bar_hl;
         if (fg != cur_fg) {
-            XSetForeground(dpy, bar_gc, fg);
+            XSetForeground(dpy, fg);
             cur_fg = fg;
         }
-        XDrawChar(dpy, d, bar_gc, x + half_sw, ypos, ch);
+        XDrawChar(dpy, d, x + half_sw, ypos, ch);
     }
 
     if (m->barpm)
