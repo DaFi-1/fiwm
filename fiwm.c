@@ -1002,24 +1002,6 @@ static const Key keys[] = {
     { MODKEY|ShiftMask,    46 /*l*/,  movecmd,        {.i = 100 + ((SPLIT_VERTICAL<<1)|1)} },
     { MODKEY|ShiftMask,    45 /*k*/,  movecmd,        {.i = 100 + ((SPLIT_HORIZONTAL<<1)|0)} },
     { MODKEY|ShiftMask,    44 /*j*/,  movecmd,        {.i = 100 + ((SPLIT_HORIZONTAL<<1)|1)} },
-    { MODKEY,              10 /*1*/,  focusworkspace, {.i = 0} },
-    { MODKEY,              11 /*2*/,  focusworkspace, {.i = 1} },
-    { MODKEY,              12 /*3*/,  focusworkspace, {.i = 2} },
-    { MODKEY,              13 /*4*/,  focusworkspace, {.i = 3} },
-    { MODKEY,              14 /*5*/,  focusworkspace, {.i = 4} },
-    { MODKEY,              15 /*6*/,  focusworkspace, {.i = 5} },
-    { MODKEY,              16 /*7*/,  focusworkspace, {.i = 6} },
-    { MODKEY,              17 /*8*/,  focusworkspace, {.i = 7} },
-    { MODKEY,              18 /*9*/,  focusworkspace, {.i = 8} },
-    { MODKEY|ShiftMask,    10 /*1*/,  movecmd,        {.i = 0} },
-    { MODKEY|ShiftMask,    11 /*2*/,  movecmd,        {.i = 1} },
-    { MODKEY|ShiftMask,    12 /*3*/,  movecmd,        {.i = 2} },
-    { MODKEY|ShiftMask,    13 /*4*/,  movecmd,        {.i = 3} },
-    { MODKEY|ShiftMask,    14 /*5*/,  movecmd,        {.i = 4} },
-    { MODKEY|ShiftMask,    15 /*6*/,  movecmd,        {.i = 5} },
-    { MODKEY|ShiftMask,    16 /*7*/,  movecmd,        {.i = 6} },
-    { MODKEY|ShiftMask,    17 /*8*/,  movecmd,        {.i = 7} },
-    { MODKEY|ShiftMask,    18 /*9*/,  movecmd,        {.i = 8} },
 };
 
 static Display *dpy;
@@ -1776,6 +1758,18 @@ void keypress(XEvent *e)
     unsigned int kc = e->xkey.keycode;
     unsigned int state = CLEANMASK(e->xkey.state);
 
+    if (kc >= 10 && kc <= 18) {
+        Arg a = {.i = (int)(kc - 10)};
+        if (state == MODKEY) {
+            focusworkspace(&a);
+            return;
+        }
+        if (state == (MODKEY | ShiftMask)) {
+            movecmd(&a);
+            return;
+        }
+    }
+
     for (size_t i = 0; i < LENGTH(keys); i++)
         if (keys[i].keycode == kc && keys[i].mod == state) {
             keys[i].func(&keys[i].arg);
@@ -2073,9 +2067,13 @@ void grabkeys(void)
     p[1] = (unsigned int)root;
     p[2] = 0x8000;         /* AnyModifier */
 
-    for (unsigned int i = 0; i < LENGTH(keys); i++) {
-        for (unsigned int j = 0; j < LENGTH(mod_combos); j++)
+    for (unsigned int j = 0; j < LENGTH(mod_combos); j++) {
+        for (unsigned int i = 0; i < LENGTH(keys); i++)
             XGrabKey(dpy, keys[i].keycode, keys[i].mod | mod_combos[j]);
+        for (int k = 10; k <= 18; k++) {
+            XGrabKey(dpy, k, MODKEY | mod_combos[j]);
+            XGrabKey(dpy, k, MODKEY | ShiftMask | mod_combos[j]);
+        }
     }
 }
 
