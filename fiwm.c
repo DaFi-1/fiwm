@@ -2282,17 +2282,8 @@ void togglefullscreen(const Arg *arg)
     SELCLIENT(c);
 
     c->flags ^= FLAG_FULLSCREEN;
-    if (c->flags & FLAG_FULLSCREEN) {
-        selmon->ws->fs_client = c;
-        c->tile_x = c->x; c->tile_y = c->y;
-        c->tile_w = c->w; c->tile_h = c->h;
-        XSetWindowBorderWidth(dpy, c->win, 0);
-    } else {
-        selmon->ws->fs_client = NULL;
-        c->x = c->tile_x; c->tile_y = c->tile_y;
-        c->w = c->tile_w; c->h = c->tile_h;
-        XSetWindowBorderWidth(dpy, c->win, borderpx);
-    }
+    selmon->ws->fs_client = (c->flags & FLAG_FULLSCREEN) ? c : NULL;
+    XSetWindowBorderWidth(dpy, c->win, selmon->ws->fs_client ? 0 : borderpx);
     selmon->dirty = 1;
     arrange(selmon);
 }
