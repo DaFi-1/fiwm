@@ -1892,32 +1892,25 @@ static inline int _xwire_query_xinerama(Display *d) {
     return _xinerama_opcode;
 }
 
-static inline int XineramaIsActive(Display *d) {
+static inline int _xinerama_req_reply(Display *d, unsigned int minor, unsigned char rep[32]) {
     int op = _xwire_query_xinerama(d);
     if (!op) return 0;
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 4);
-    *p = (1 << 16) | (4 << 8) | op;
+    *p = (1 << 16) | (minor << 8) | op;
     _xwire_flush(d->fd);
+    return (_xwire_read(d->fd, rep, 32) == 32 && rep[0] == 1);
+}
 
+static inline int XineramaIsActive(Display *d) {
     unsigned char rep[32];
-    if (_xwire_read(d->fd, rep, 32) != 32 || rep[0] != 1)
-        return 0;
-    unsigned int state = *(unsigned int *)&rep[8];
-    return (state != 0);
+    if (!_xinerama_req_reply(d, 4, rep)) return 0;
+    return (*(unsigned int *)&rep[8] != 0);
 }
 
 static inline XineramaScreenInfo *XineramaQueryScreens(Display *d, int *number) {
     *number = 0;
-    int op = _xwire_query_xinerama(d);
-    if (!op) return (void *)0;
-
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 4);
-    *p = (1 << 16) | (5 << 8) | op;
-    _xwire_flush(d->fd);
-
     unsigned char rep[32];
-    if (_xwire_read(d->fd, rep, 32) != 32 || rep[0] != 1)
-        return (void *)0;
+    if (!_xinerama_req_reply(d, 5, rep)) return (void *)0;
 
     unsigned int count = *(unsigned int *)&rep[8];
     if (count == 0 || count > 16) return (void *)0;
