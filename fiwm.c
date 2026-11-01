@@ -1176,6 +1176,7 @@ static void drawbar(Monitor *);
 static void focus(Monitor *, Node *);
 static void unmanage(Client *);
 static Client *find_client(Window);
+static Monitor *mon_from_tag(short);
 static Node *node_first_leaf(Node *);
 
 /* Handlers bound in keys[] and buttons[] */
@@ -1727,9 +1728,7 @@ void unmanage(Client *c)
 
     hash_remove(c);
 
-    for (m = mons; m; m = m->next) {
-        if (m->curtag == c->workspace) break;
-    }
+    m = mon_from_tag(c->workspace);
     if (m) {
         if (m->ws->fs_client == c)
             m->ws->fs_client = NULL;
@@ -1777,6 +1776,13 @@ Client *find_client(Window w)
     unsigned int h = client_hash_idx(w);
     for (Client *c = client_hash[h]; c; c = c->hnext)
         if (c->win == w) return c;
+    return NULL;
+}
+
+Monitor *mon_from_tag(short tag)
+{
+    for (Monitor *m = mons; m; m = m->next)
+        if (m->curtag == tag) return m;
     return NULL;
 }
 
@@ -2294,12 +2300,11 @@ void buttonpress(XEvent *e)
     }
 
     if (c && c->node) {
-        for (m = mons; m; m = m->next) {
-            if (m->curtag == c->workspace) {
-                focus(m, c->node);
-                arrange(m);
-                return;
-            }
+        m = mon_from_tag(c->workspace);
+        if (m) {
+            focus(m, c->node);
+            arrange(m);
+            return;
         }
     }
 }
@@ -2317,9 +2322,7 @@ void enternotify(XEvent *e)
     if (!c || !c->node) return;
 
     n = c->node;
-    for (m = mons; m; m = m->next) {
-        if (m->curtag == c->workspace) break;
-    }
+    m = mon_from_tag(c->workspace);
     if (!m) return;
 
     if (m != selmon) {
