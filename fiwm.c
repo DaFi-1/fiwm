@@ -2254,9 +2254,7 @@ static char display_env[] = "DISPLAY=:0";
 
 static void setup_environ(char **envp)
 {
-    int has_display = 0;
-    int count = 0;
-
+    int has_display = 0, count = 0;
     if (envp) {
         for (char **ep = envp; *ep && count < 150; ep++) {
             if (*(const unsigned long *)*ep == 0x3d59414c50534944ULL) {
@@ -2268,11 +2266,7 @@ static void setup_environ(char **envp)
             custom_envp[count++] = *ep;
         }
     }
-
-    if (!has_display) {
-        custom_envp[count++] = display_env;
-    }
-    custom_envp[count] = NULL;
+    if (!has_display) custom_envp[count++] = display_env;
     envp_global = custom_envp;
 }
 
