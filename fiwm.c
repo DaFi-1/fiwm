@@ -899,7 +899,6 @@ struct Client {
     Window win;
     Node *node;
     Client *next;
-    Client *prev;
     unsigned short x, y, w, h;
     short workspace;
     unsigned short flags;
@@ -1359,9 +1358,7 @@ void manage(Window w, XWindowAttributes *wa)
 
 
 
-    if (clients) clients->prev = c;
     c->next = clients;
-    c->prev = NULL;
     clients = c;
 
     XSetWindowBorderWidth(dpy, w, borderpx);
@@ -1398,12 +1395,14 @@ void unmanage(Client *c)
         arrange(m);
     }
 
-    if (c->next) c->next->prev = c->prev;
-    if (c->prev) c->prev->next = c->next;
-    else         clients = c->next;
+    for (Client **pp = &clients; *pp; pp = &(*pp)->next) {
+        if (*pp == c) {
+            *pp = c->next;
+            break;
+        }
+    }
 
     c->next = client_freelist;
-    c->prev = NULL;
     c->node = NULL;
     client_freelist = c;
 }
