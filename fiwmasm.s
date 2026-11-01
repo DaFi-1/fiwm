@@ -836,104 +836,93 @@ init_bar:
     ret
 
 /*
- * draw_bar(): clears bar and renders numbers 1..9 with active workspace highlighted
+ * draw_bar(): renders numbers 1..9 with active workspace highlighted
+ * MICRO-OPTIMIZATION: Fully vectorized/batched into a single 360-byte buffer.
+ * Replaces 19 context switches / sys_write syscalls with exactly 1 syscall!
  */
 draw_bar:
     push rbx
     push r12
     push r13
 
-    /* 1. Clear background: PolyFillRectangle (Opcode 70, len 5 words = 20 bytes) */
-    /* First set GC foreground to dark background 0x181818 */
-    mov dword ptr [out_buf + 0], (4 << 16) | 56  /* ChangeGC */
-    mov eax, [bar_gc]
-    mov [out_buf + 4], eax
-    mov dword ptr [out_buf + 8], 4               /* GCForeground */
-    mov dword ptr [out_buf + 12], 0x181818
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, 16
-    syscall
+    lea rbx, [out_buf]
 
-    /* Fill rect: x=0, y=0, w=mon0_w, h=BAR_HEIGHT */
-    mov dword ptr [out_buf + 0], (5 << 16) | 70  /* PolyFillRectangle */
-    mov eax, [bar_win]
-    mov [out_buf + 4], eax
+    /* 1. Clear background: ChangeGC (16 bytes) */
+    mov dword ptr [rbx + 0], (4 << 16) | 56     /* ChangeGC */
     mov eax, [bar_gc]
-    mov [out_buf + 8], eax
-    mov dword ptr [out_buf + 12], 0              /* x=0, y=0 */
-    mov eax, [mon_geom + 8]                      /* width */
-    mov edx, BAR_HEIGHT                          /* height */
+    mov [rbx + 4], eax
+    mov dword ptr [rbx + 8], 4                  /* GCForeground */
+    mov dword ptr [rbx + 12], 0x181818
+
+    /* 2. PolyFillRectangle (20 bytes) */
+    mov dword ptr [rbx + 16], (5 << 16) | 70    /* PolyFillRectangle */
+    mov eax, [bar_win]
+    mov [rbx + 20], eax
+    mov eax, [bar_gc]
+    mov [rbx + 24], eax
+    mov dword ptr [rbx + 28], 0                 /* x=0, y=0 */
+    mov eax, [mon_geom + 8]                     /* width */
+    mov edx, BAR_HEIGHT                         /* height */
     shl edx, 16
     and eax, 0xFFFF
     or eax, edx
-    mov [out_buf + 16], eax
+    mov [rbx + 32], eax
 
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, 20
-    syscall
+    add rbx, 36                                 /* rbx now points to first WS packet */
 
-    /* 2. Loop through 9 workspaces and render numbers 1..9 */
-    xor r12d, r12d                               /* r12d = ws_idx (0..8) */
+    /* 3. Loop through 9 workspaces and build (ChangeGC + PolyText8) in buffer */
+    xor r12d, r12d                              /* r12d = ws_idx (0..8) */
 
 draw_ws_loop:
     /* Compare with cur_ws to choose color */
-    mov eax, 0x685742                            /* inactive fg (gray/brown) */
+    mov eax, 0x685742                           /* inactive fg (gray/brown) */
     cmp r12d, [cur_ws]
     jne set_bar_color
-    mov eax, 0xc2c2b0                            /* active fg (bright cream/gold) */
+    mov eax, 0xc2c2b0                           /* active fg (bright cream/gold) */
 
 set_bar_color:
-    mov dword ptr [out_buf + 0], (4 << 16) | 56  /* ChangeGC */
+    /* ChangeGC (16 bytes) */
+    mov dword ptr [rbx + 0], (4 << 16) | 56
     mov edx, [bar_gc]
-    mov [out_buf + 4], edx
-    mov dword ptr [out_buf + 8], 4               /* GCForeground */
-    mov [out_buf + 12], eax                      /* color */
+    mov [rbx + 4], edx
+    mov dword ptr [rbx + 8], 4
+    mov [rbx + 12], eax
 
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, 16
-    syscall
+    /* PolyText8 (20 bytes) */
+    mov dword ptr [rbx + 16], (5 << 16) | 74
+    mov edx, [bar_win]
+    mov [rbx + 20], edx
+    mov edx, [bar_gc]
+    mov [rbx + 24], edx
 
-    /* Calculate X position: 10 + r12d * 24 */
+    /* X position: 10 + r12d * 24, Y: 13 */
     mov eax, r12d
     imul eax, 24
-    add eax, 10                                  /* eax = x */
-
-    /* PolyText8 (Opcode 74, len 5 words = 20 bytes) */
-    mov dword ptr [out_buf + 0], (5 << 16) | 74
-    mov edx, [bar_win]
-    mov [out_buf + 4], edx
-    mov edx, [bar_gc]
-    mov [out_buf + 8], edx
-
-    /* x (int16), y (int16): y = 13 (vertical baseline in 18px bar) */
+    add eax, 10
     mov edx, 13
     shl edx, 16
     and eax, 0xFFFF
     or eax, edx
-    mov [out_buf + 12], eax
+    mov [rbx + 28], eax
 
     /* Text Item: len = 1, delta = 0, char = '1' + r12d, pad = 0 */
     mov ecx, r12d
     add ecx, '1'
     shl ecx, 16
-    or ecx, 1                                    /* len = 1 in low byte */
-    mov [out_buf + 16], ecx
+    or ecx, 1                                   /* len = 1 in low byte */
+    mov [rbx + 32], ecx
 
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, 20
-    syscall
-
+    add rbx, 36
     inc r12d
     cmp r12d, 9
     jl draw_ws_loop
+
+    /* Emit ENTIRE frame in a single atomic syscall (360 bytes)! */
+    mov eax, SYS_WRITE
+    mov edi, [sock_fd]
+    lea rsi, [out_buf]
+    mov edx, 360
+    syscall
 
     pop r13
     pop r12
@@ -1822,6 +1811,6 @@ node_idx:       .long 0
 .align 64
 node_pool:      .space 4096
 
-out_buf:        .space 64
+out_buf:        .space 512
 in_buf:         .space 4096
 event_buf:      .space 64
