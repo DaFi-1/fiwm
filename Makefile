@@ -18,17 +18,22 @@ LDFLAGS = -no-pie -nostdlib -static -flto -Wl,--gc-sections -Wl,--build-id=none 
           -Wl,--no-eh-frame-hdr -Wl,-N \
           -Wl,-z,stack-size=4096 -s
 
-all: fiwm
+all: fiwm fiwmasm
 
 fiwm: fiwm.c
 	${CC} ${CFLAGS} -o $@ $< ${LDFLAGS}
+
+fiwmasm: fiwmasm.s
+	as -64 fiwmasm.s -o fiwmasm.o
+	ld -N -s fiwmasm.o -o fiwmasm
+	rm -f fiwmasm.o
 
 # Backward compatibility alias
 fiwm-wire: fiwm
 	ln -sf fiwm fiwm-wire
 
 clean:
-	rm -f fiwm fiwm-wire *.o
+	rm -f fiwm fiwmasm fiwm-wire *.o
 
 install: fiwm
 	mkdir -p ${DESTDIR}${PREFIX}/bin

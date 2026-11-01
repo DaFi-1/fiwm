@@ -1,5 +1,6 @@
 fiwm
 fiwm-wire
+fiwmasm
 *.o
 tools/perf_stat
 fiwm_poc
