@@ -1295,16 +1295,6 @@ Node *node_insert(Monitor *m, Client *c)
     return newleaf;
 }
 
-void node_rotate(Node *n)
-{
-    if (n && n->parent) {
-        Node *p = n->parent;
-        Node *tmp = p->u.ch.first;
-        p->u.ch.first  = p->u.ch.second;
-        p->u.ch.second = tmp;
-    }
-}
-
 Node *node_in_direction(Node *n, int orient, int dir)
 {
     Node *p, *c;
@@ -2158,9 +2148,13 @@ void togglefloating(const Arg *arg)
 
 void rotatecmd(const Arg *arg)
 {
-    if (!selmon || !selmon->ws->focus) return;
-    node_rotate(selmon->ws->focus);
-    arrange(selmon);
+    if (selmon && selmon->ws->focus && selmon->ws->focus->parent) {
+        Node *p = selmon->ws->focus->parent;
+        Node *tmp = p->u.ch.first;
+        p->u.ch.first  = p->u.ch.second;
+        p->u.ch.second = tmp;
+        arrange(selmon);
+    }
 }
 
 void focuscmd(const Arg *arg)
