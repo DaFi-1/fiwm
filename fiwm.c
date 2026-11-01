@@ -81,7 +81,7 @@ typedef unsigned long  Colormap;
 typedef unsigned long  Atom;
 typedef unsigned long  VisualID;
 typedef unsigned long  Time;
-typedef unsigned int   KeySym;
+
 typedef unsigned char  KeyCode;
 typedef struct _XGC   *GC;
 
