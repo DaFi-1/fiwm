@@ -1727,9 +1727,7 @@ monitor_in_direction(Monitor *m, int orient, int dir)
     return target;
 }
 
-static inline void reset_root_focus(void) {
-    set_active_focus(0);
-}
+
 
 void focusworkspace(const Arg *arg)
 {
@@ -1778,7 +1776,7 @@ void focusworkspace(const Arg *arg)
         if (first)
             focus(m, first);
     } else {
-        reset_root_focus();
+        set_active_focus(0);
     }
 
     arrange(m);
@@ -2120,7 +2118,7 @@ void movecmd(const Arg *arg)
             hide_window(dpy, c->win);
         }
         if (!newfocus) {
-            reset_root_focus();
+            set_active_focus(0);
         }
         arrange(selmon);
         return;
