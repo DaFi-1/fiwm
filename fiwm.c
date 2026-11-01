@@ -71,10 +71,7 @@ static inline __attribute__((noreturn)) void sys_exit(int code)
 #define sys_setsid()       syscall3(SYS_SETSID, 0, 0, 0)
 #define sys_kill(p,s)      syscall3(SYS_KILL, (long)(p), (long)(s), 0)
 
-static inline long sys_wait4(long pid, int *wstatus, int options, void *rusage)
-{
-    return syscall4(SYS_WAIT4, pid, (long)wstatus, (long)options, (long)rusage);
-}
+#define sys_wait4(p,w,o,r) syscall4(SYS_WAIT4, (long)(p), (long)(w), (long)(o), (long)(r))
 
 /* Types matching X11 API */
 typedef unsigned long  Window;
@@ -1003,25 +1000,24 @@ static inline void XChangeProperty(Display *d, Window w, Atom prop, Atom type, i
     for (int i = 0; i < pad; i++) dp[data_bytes + i] = 0;
 }
 
-static inline int XGrabPointer(Display *d, Window grab_w, int owner, unsigned int mask, int sync_p, int sync_k, Window confine, unsigned long cursor, Time time) {
-    (void)owner; (void)sync_p; (void)sync_k; (void)confine; (void)cursor; (void)time;
+static inline int grab_mouse_motion(Display *d) {
     if (!d) return 1;
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 24);
     p[0] = (6 << 16) | 26; /* X_GrabPointer: reqType=26, length=6 */
-    p[1] = (unsigned int)grab_w;
-    p[2] = (1 << 24) | (1 << 16) | (mask & 0xFFFF);
-    p[3] = (unsigned int)confine;
-    p[4] = (unsigned int)cursor;
+    p[1] = (unsigned int)d->root;
+    p[2] = (1 << 24) | (1 << 16) | ((PointerMotionMask | ButtonReleaseMask) & 0xFFFF);
+    p[3] = 0;
+    p[4] = 0;
     p[5] = 0;
     _xwire_flush(d->fd);
     return 0; /* GrabSuccess == 0 */
 }
 
-static inline void XUngrabPointer(Display *d, Time time) {
+static inline void ungrab_mouse(Display *d) {
     if (!d) return;
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
     p[0] = (2 << 16) | 27; /* X_UngrabPointer */
-    p[1] = (unsigned int)time;
+    p[1] = 0; /* CurrentTime */
 }
 
 static inline int XQueryPointer(Display *d, Window w, Window *r, Window *c, int *rx, int *ry, int *wx, int *wy, unsigned int *mask) {
@@ -1818,10 +1814,7 @@ void movemouse(const Arg *arg)
         oy -= c->y;
     }
 
-    if (XGrabPointer(dpy, root, False,
-                     PointerMotionMask | ButtonReleaseMask,
-                     GrabModeAsync, GrabModeAsync, None, None,
-                     CurrentTime) != GrabSuccess)
+    if (grab_mouse_motion(dpy) != GrabSuccess)
         return;
 
     for (;;) {
@@ -1869,7 +1862,7 @@ void movemouse(const Arg *arg)
                 }
             }
             XMoveWindow(dpy, c->win, c->x, c->y);
-            XUngrabPointer(dpy, CurrentTime);
+            ungrab_mouse(dpy);
             focus(selmon, selmon->ws->focus);
             arrange(selmon);
             return;
@@ -1895,10 +1888,7 @@ void resizemouse(const Arg *arg)
         togglefloating(&a);
     }
 
-    if (XGrabPointer(dpy, root, False,
-                     PointerMotionMask | ButtonReleaseMask,
-                     GrabModeAsync, GrabModeAsync, None, None,
-                     CurrentTime) != GrabSuccess)
+    if (grab_mouse_motion(dpy) != GrabSuccess)
         return;
 
     for (;;) {
@@ -1932,7 +1922,7 @@ void resizemouse(const Arg *arg)
                 c->h = MAX(1, c->h);
             }
             XResizeWindow(dpy, c->win, c->w, c->h);
-            XUngrabPointer(dpy, CurrentTime);
+            ungrab_mouse(dpy);
             focus(selmon, selmon->ws->focus);
             arrange(selmon);
             return;
