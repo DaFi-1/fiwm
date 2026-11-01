@@ -1799,7 +1799,6 @@ static inline void reset_root_focus(void) {
 void focusworkspace(const Arg *arg)
 {
     Monitor *m, *prev;
-    Workspace *oldws;
     int tag = arg->i;
 
     if (tag < 0 || tag >= WORKSPACE_COUNT || !selmon)
@@ -1831,7 +1830,6 @@ void focusworkspace(const Arg *arg)
         return;
     }
 
-    oldws = m->ws;
     int oldtag = m->curtag;
 
     m->curtag = tag;
@@ -1850,11 +1848,9 @@ void focusworkspace(const Arg *arg)
 
     arrange(m);
 
-    if (oldws != m->ws) {
-        for (Client *fc = clients; fc; fc = fc->next) {
-            if (fc->workspace == oldtag)
-                hide_window(dpy, fc->win);
-        }
+    for (Client *fc = clients; fc; fc = fc->next) {
+        if (fc->workspace == oldtag)
+            hide_window(dpy, fc->win);
     }
 
     if (prev != m) {
