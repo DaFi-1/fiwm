@@ -1657,15 +1657,11 @@ void focusworkspace(const Arg *arg)
     m->ws     = &workspaces[tag];
     m->dirty  = 1;
 
-    if (m->ws->focus && m->ws->focus->u.client)
-        focus(m, m->ws->focus);
-    else if (m->ws->root) {
-        Node *first = node_first_leaf(m->ws->root);
-        if (first)
-            focus(m, first);
-    } else {
+    Node *f = (m->ws->focus && m->ws->focus->u.client) ? m->ws->focus : (m->ws->root ? node_first_leaf(m->ws->root) : NULL);
+    if (f)
+        focus(m, f);
+    else
         set_active_focus(0);
-    }
 
     for (Client *fc = clients; fc; fc = fc->next) {
         if (fc->workspace == oldtag) {
