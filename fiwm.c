@@ -1422,16 +1422,11 @@ Monitor *mon_from_tag(short tag)
     return NULL;
 }
 
-static void dragmouse(const Arg *arg, int is_resize)
+static void dragmouse(Client *c, const XButtonEvent *bev, int is_resize)
 {
-    Client *c = NULL;
     int ox, oy;
     XEvent ev;
 
-    if (!arg || !arg->v) return;
-    const XEvent *bev = (const XEvent *)arg->v;
-    c = find_client(bev->xbutton.window);
-    if (!c) c = selclient();
     if (!c) return;
 
     if (!(c->flags & FLAG_FLOATING)) {
@@ -1439,8 +1434,8 @@ static void dragmouse(const Arg *arg, int is_resize)
         togglefloating(&a);
     }
 
-    ox = is_resize ? c->x : bev->xbutton.x_root - c->x;
-    oy = is_resize ? c->y : bev->xbutton.y_root - c->y;
+    ox = is_resize ? c->x : bev->x_root - c->x;
+    oy = is_resize ? c->y : bev->y_root - c->y;
 
     if (grab_mouse_motion(dpy) != GrabSuccess)
         return;
@@ -1811,8 +1806,7 @@ void buttonpress(XEvent *e)
         if (c->node)
             focus(selmon, c->node);
 
-        Arg a = {.v = e};
-        dragmouse(&a, e->xbutton.button == Button3);
+        dragmouse(c, &e->xbutton, e->xbutton.button == Button3);
         return;
     }
 
