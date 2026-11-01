@@ -1034,7 +1034,7 @@ static inline Client *selclient(void)
 }
 static Atom atoms[ATOM_LAST];
 static int running = 1;
-static const unsigned int mod_combos[] = { 0, LockMask, (1 << 4), (1 << 4) | LockMask };
+static const unsigned char mod_combos[] = { 0, LockMask, (1 << 4), (1 << 4) | LockMask };
 
 
 
