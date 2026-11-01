@@ -608,13 +608,14 @@ static inline void change_window_attributes_1d(Display *d, Window w, unsigned in
 #define XSelectInput(d, w, mask) change_window_attributes_1d((d), (w), 0x800, (unsigned int)(mask))
 #define XSetWindowBorder(d, w, pixel) change_window_attributes_1d((d), (w), 8, (unsigned int)(pixel))
 
-static inline void client_set_attributes(Display *d, Window w, unsigned long bg) {
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 20);
-    p[0] = (5 << 16) | 2;
+static inline void client_set_attributes(Display *d, Window w, unsigned long bg, unsigned long border) {
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 24);
+    p[0] = (6 << 16) | 2;
     p[1] = (unsigned int)w;
-    p[2] = (1 << 1) | (1 << 11);
+    p[2] = (1 << 1) | (1 << 3) | (1 << 11);
     p[3] = (unsigned int)bg;
-    p[4] = EnterWindowMask | FocusChangeMask | PropertyChangeMask | StructureNotifyMask;
+    p[4] = (unsigned int)border;
+    p[5] = EnterWindowMask | FocusChangeMask | PropertyChangeMask | StructureNotifyMask;
 }
 
 static inline void XMoveResizeWindow(Display *d, Window w, int x, int y, unsigned int width, unsigned int height) {
@@ -1508,8 +1509,7 @@ void manage(Window w, XWindowAttributes *wa)
     clients = c;
 
     XSetWindowBorderWidth(dpy, w, borderpx);
-    XSetWindowBorder(dpy, w, border_inactive);
-    client_set_attributes(dpy, w, bar_bg);
+    client_set_attributes(dpy, w, bar_bg, border_inactive);
 
     for (int i = 0; i < 4; i++) {
         XGrabButton(dpy, Button1, MODKEY | mod_combos[i], w);
