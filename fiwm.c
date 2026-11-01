@@ -1329,11 +1329,7 @@ static void node_free(Node *n)
     nodefreelist = n;
 }
 
-void node_pool_reset(void)
-{
-    nodeidx      = 0;
-    nodefreelist = NULL;
-}
+
 
 Node *node_detach(Node *n, Workspace *ws)
 {
@@ -2588,8 +2584,6 @@ void cleanup(void)
     }
 
     if (bar_gc) XFreeGC(dpy, bar_gc);
-
-    node_pool_reset();
 
     m = mons;
     while (m) {
