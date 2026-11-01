@@ -612,15 +612,15 @@ static inline Window create_bar_window(Display *d, Window parent, int x, int y, 
     return wid;
 }
 
-static inline void stack_window(Display *d, Window w, unsigned int mode) {
+static inline void configure_window_1d(Display *d, Window w, unsigned int mask, unsigned int val) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 12;
     p[1] = (unsigned int)w;
-    p[2] = 64;
-    p[3] = mode;
+    p[2] = mask;
+    p[3] = val;
 }
-#define XRaiseWindow(d, w) stack_window((d), (w), 0)
-#define XLowerWindow(d, w) stack_window((d), (w), 1)
+#define XRaiseWindow(d, w) configure_window_1d((d), (w), 64, 0)
+#define XLowerWindow(d, w) configure_window_1d((d), (w), 64, 1)
 
 static inline void XConfigureWindowFromReq(Display *d, XConfigureRequestEvent *ev) {
     if (__builtin_expect(_xwire_outlen + 40 > sizeof(_xwire_outbuf), 0))
@@ -658,13 +658,7 @@ static inline void client_set_attributes(Display *d, Window w, unsigned long bg)
     p[4] = EnterWindowMask | FocusChangeMask | PropertyChangeMask | StructureNotifyMask;
 }
 
-static inline void XSetWindowBorderWidth(Display *d, Window w, unsigned int bw) {
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
-    p[0] = (4 << 16) | 12;
-    p[1] = (unsigned int)w;
-    p[2] = 16;
-    p[3] = bw;
-}
+#define XSetWindowBorderWidth(d, w, bw) configure_window_1d((d), (w), 16, (unsigned int)(bw))
 
 static inline void XSetWindowBorder(Display *d, Window w, unsigned long pixel) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
