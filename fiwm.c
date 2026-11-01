@@ -1247,47 +1247,43 @@ Node *node_detach(Node *n, Workspace *ws)
     return newfocus;
 }
 
-Node *node_insert(Monitor *m, Client *c)
+static Node *tree_insert(Workspace *ws, Client *c, int split)
 {
-    Workspace *ws = m->ws;
-    Node *focus = ws->focus;
-    Node *newnode, *newleaf;
-
-    newleaf = node_new();
+    Node *newleaf = node_new();
     newleaf->u.client = c;
     c->node = newleaf;
 
+    Node *focus = (ws->focus) ? ws->focus : (ws->root ? node_first_leaf(ws->root) : NULL);
     if (!focus || !ws->root) {
         ws->root = newleaf;
-        return newleaf;
-    }
-
-    newnode = node_new();
-    newnode->is_leaf = 0;
-
-    Node *fparent = focus->parent;
-    if (m->next_split >= 0) {
-        newnode->split = m->next_split;
-        m->next_split  = -1;
     } else {
-        newnode->split = fparent ? !fparent->split : SPLIT_VERTICAL;
-    }
-    newnode->parent = fparent;
-    newnode->u.ch.first  = focus;
-    newnode->u.ch.second = newleaf;
-    focus->parent   = newnode;
-    newleaf->parent = newnode;
+        Node *newnode = node_new();
+        newnode->is_leaf = 0;
+        newnode->split = (split >= 0) ? split : (focus->parent ? !focus->parent->split : SPLIT_VERTICAL);
+        newnode->parent = focus->parent;
+        newnode->u.ch.first  = focus;
+        newnode->u.ch.second = newleaf;
+        focus->parent   = newnode;
+        newleaf->parent = newnode;
 
-    if (fparent) {
-        if (fparent->u.ch.first == focus)
-            fparent->u.ch.first = newnode;
-        else
-            fparent->u.ch.second = newnode;
-    } else {
-        ws->root = newnode;
+        if (newnode->parent) {
+            if (newnode->parent->u.ch.first == focus)
+                newnode->parent->u.ch.first = newnode;
+            else
+                newnode->parent->u.ch.second = newnode;
+        } else {
+            ws->root = newnode;
+        }
     }
-
+    ws->focus = newleaf;
     return newleaf;
+}
+
+Node *node_insert(Monitor *m, Client *c)
+{
+    int s = m->next_split;
+    m->next_split = -1;
+    return tree_insert(m->ws, c, s);
 }
 
 Node *node_in_direction(Node *n, int orient, int dir)
@@ -2183,36 +2179,6 @@ void focuscmd(const Arg *arg)
     }
 }
 
-static Node *workspace_insert(Workspace *ws, Client *c, int split)
-{
-    Node *nl = node_new();
-    nl->u.client = c;
-    c->node = nl;
-
-    if (!ws->root) {
-        ws->root = nl;
-    } else {
-        Node *ff = ws->focus ? ws->focus : node_first_leaf(ws->root);
-        Node *nn = node_new();
-        nn->is_leaf = 0;
-        nn->split = split;
-        nn->u.ch.first  = ff;
-        nn->u.ch.second = nl;
-        nn->parent = ff->parent;
-        if (ff->parent) {
-            if (ff->parent->u.ch.first == ff)
-                ff->parent->u.ch.first = nn;
-            else
-                ff->parent->u.ch.second = nn;
-        } else {
-            ws->root = nn;
-        }
-        ff->parent = nn;
-        nl->parent = nn;
-    }
-    ws->focus = nl;
-    return nl;
-}
 
 void movecmd(const Arg *arg)
 {
@@ -2234,7 +2200,7 @@ void movecmd(const Arg *arg)
         Node *newfocus = node_detach(n, ws);
 
         c->workspace = tag;
-        workspace_insert(&workspaces[tag], c, SPLIT_VERTICAL);
+        tree_insert(&workspaces[tag], c, SPLIT_VERTICAL);
         Monitor *target_m = NULL;
         for (Monitor *tm = mons; tm; tm = tm->next) {
             if (tm->curtag == tag) {
@@ -2277,7 +2243,7 @@ void movecmd(const Arg *arg)
 
             node_detach(n, ws);
 
-            Node *nl = workspace_insert(om->ws, c, orient);
+            Node *nl = tree_insert(om->ws, c, orient);
 
             {
                 Monitor *prev = selmon;
