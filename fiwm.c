@@ -2353,14 +2353,11 @@ void configurerequest(XEvent *e)
     Client *c = find_client(ev->window);
 
     if (c) {
-        if (c->flags & FLAG_FLOATING) {
-            c->x = ev->x; c->y = ev->y;
-            c->w = ev->width; c->h = ev->height;
-            XConfigureWindowFromReq(dpy, ev);
-        }
-    } else {
-        XConfigureWindowFromReq(dpy, ev);
+        if (!(c->flags & FLAG_FLOATING)) return;
+        c->x = ev->x; c->y = ev->y;
+        c->w = ev->width; c->h = ev->height;
     }
+    XConfigureWindowFromReq(dpy, ev);
 }
 void quit(const Arg *arg)
 {
