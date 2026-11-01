@@ -360,7 +360,6 @@ typedef union _XEvent {
     XDestroyWindowEvent xdestroywindow;
     XExposeEvent xexpose;
     XClientMessageEvent xclient;
-    long pad[24];
 } XEvent;
 
 
@@ -372,6 +371,8 @@ typedef struct {
     unsigned int rid_mask;
     unsigned int next_rid;
 } Display;
+
+register Display *dpy __asm__("r12");
 
 /* Syscall wrappers */
 static char _xwire_outbuf[1024];
@@ -498,24 +499,15 @@ connected: ;
 
     unsigned short add_len = *(unsigned short *)&rep_hdr[6];
     unsigned int total_body = (unsigned int)add_len << 2;
-    unsigned char body[2048];
-    unsigned int first_chunk = total_body > sizeof(body) ? sizeof(body) : total_body;
+    unsigned int first_chunk = total_body > sizeof(_xwire_outbuf) ? sizeof(_xwire_outbuf) : total_body;
     unsigned int read_bytes = 0;
     while (read_bytes < first_chunk) {
-        int r = _xwire_read(fd, body + read_bytes, first_chunk - read_bytes);
+        int r = _xwire_read(fd, (unsigned char *)_xwire_outbuf + read_bytes, first_chunk - read_bytes);
         if (r <= 0) break;
         read_bytes += (unsigned int)r;
     }
 
-    /* Drain the rest of the setup reply data so socket is 100% clean */
-    while (read_bytes < total_body) {
-        char discard[512];
-        unsigned int want = (total_body - read_bytes) > sizeof(discard) ? sizeof(discard) : (total_body - read_bytes);
-        int r = _xwire_read(fd, discard, want);
-        if (r <= 0) break;
-        read_bytes += (unsigned int)r;
-    }
-
+    unsigned char *body = (unsigned char *)_xwire_outbuf;
     _global_display.fd = fd;
     _global_display.rid_base = *(unsigned int *)&body[4];
     _global_display.rid_mask = *(unsigned int *)&body[8];
@@ -533,6 +525,14 @@ connected: ;
         _global_display.root   = 0x100;
         _global_display.width  = 1024;
         _global_display.height = 768;
+    }
+
+    /* Drain any remaining reply data into _xwire_inbuf */
+    while (read_bytes < total_body) {
+        unsigned int want = (total_body - read_bytes) > sizeof(_xwire_inbuf) ? sizeof(_xwire_inbuf) : (total_body - read_bytes);
+        int r = _xwire_read(fd, _xwire_inbuf, want);
+        if (r <= 0) break;
+        read_bytes += (unsigned int)r;
     }
 
     return &_global_display;
@@ -680,12 +680,16 @@ static inline int XNextEvent(Display *d, XEvent *e) {
         case 4: /* ButtonPress */
         case 5: /* ButtonRelease */
         case 6: /* MotionNotify */
-            e->xkey.window = *(const unsigned int *)&buf[12];
-            e->xkey.subwindow = *(const unsigned int *)&buf[16];
-            e->xkey.x_root = *(const short *)&buf[20];
-            e->xkey.y_root = *(const short *)&buf[22];
-            e->xkey.keycode = buf[1];
-            e->xkey.state = *(const unsigned short *)&buf[28];
+            {
+                unsigned long wins = *(const unsigned long *)&buf[12];
+                e->xkey.window = (unsigned int)wins;
+                e->xkey.subwindow = (unsigned int)(wins >> 32);
+                unsigned int roots = *(const unsigned int *)&buf[20];
+                e->xkey.x_root = (short)roots;
+                e->xkey.y_root = (short)(roots >> 16);
+                e->xkey.keycode = buf[1];
+                e->xkey.state = *(const unsigned short *)&buf[28];
+            }
             return 0;
         case 20: /* MapRequest */
             e->xmaprequest.window = *(const unsigned int *)&buf[8];
@@ -716,30 +720,6 @@ static inline int XNextEvent(Display *d, XEvent *e) {
         }
     }
 }
-
-
-static inline Atom intern_atom(Display *d, const char *name) {
-    if (!d || !name) return 0;
-    int nbytes = 0;
-    while (name[nbytes]) nbytes++;
-
-    int words = (11 + nbytes) >> 2;
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, words << 2);
-    p[0] = (words << 16) | 16; /* X_InternAtom */
-    p[1] = (unsigned int)nbytes;
-    p[words - 1] = 0;
-    __builtin_memcpy(&p[2], name, nbytes);
-    _xwire_flush(d->fd);
-
-    unsigned char rep[32];
-    if (_xwire_read(d->fd, rep, 32) == 32 && rep[0] == 1) {
-        return (Atom)*(unsigned int *)&rep[8];
-    }
-    return 0;
-}
-#define XInternAtom(d, name, b) intern_atom(d, name)
-
-
 
 
 static GC bar_gc;
@@ -875,13 +855,6 @@ typedef union {
     const void *v;
 } Arg;
 
-typedef struct {
-    unsigned int mod;
-    KeyCode keycode;
-    void (*func)(const Arg *);
-    const Arg arg;
-} Key;
-
 typedef struct Client Client;
 typedef struct Node Node;
 typedef struct Workspace Workspace;
@@ -893,24 +866,41 @@ enum {
     FLAG_FULLSCREEN = 1 << 1,
 };
 
+typedef struct {
+    unsigned short x, y, w, h;
+} Rect;
+
 struct Client {
     Window win;
     Node *node;
     Client *next;
-    unsigned short x, y, w, h;
-    short workspace;
-    unsigned short flags;
+    union {
+        Rect r;
+        unsigned long geom_u64;
+    } g;
+    signed char workspace;
+    unsigned char flags;
 };
+
+#define TAG_LEAF  0x01UL
+#define TAG_SPLIT 0x02UL
+#define TAG_MASK  0x03UL
+#define PTR_MASK  (~TAG_MASK)
 
 struct Node {
     union {
         Client *client;
         struct children { Node *first, *second; } ch;
     } u;
-    Node *parent;
-    unsigned is_leaf : 1;
-    unsigned split   : 1;
+    unsigned long tagged_parent;
 };
+
+#define NODE_PARENT(n) ((Node *)((n)->tagged_parent & PTR_MASK))
+#define NODE_SET_PARENT(n, p) do { (n)->tagged_parent = ((unsigned long)(p) & PTR_MASK) | ((n)->tagged_parent & TAG_MASK); } while(0)
+#define NODE_IS_LEAF(n) (((n)->tagged_parent & TAG_LEAF) != 0)
+#define NODE_SET_LEAF(n, v) do { if (v) (n)->tagged_parent |= TAG_LEAF; else (n)->tagged_parent &= ~TAG_LEAF; } while(0)
+#define NODE_SPLIT(n) (((n)->tagged_parent & TAG_SPLIT) ? 1 : 0)
+#define NODE_SET_SPLIT(n, v) do { if (v) (n)->tagged_parent |= TAG_SPLIT; else (n)->tagged_parent &= ~TAG_SPLIT; } while(0)
 
 struct Workspace {
     Node *root;
@@ -925,11 +915,11 @@ struct Monitor {
     Monitor *next;
     int num, x, y, w, h;
     int bar_width;
-    short curtag;
-    short next_split;
-    short ntags;
-    short tags[WORKSPACE_COUNT];
-    unsigned dirty : 1;
+    unsigned char curtag;
+    unsigned char next_split;
+    unsigned char ntags;
+    unsigned char tags[WORKSPACE_COUNT];
+    unsigned char dirty;
 };
 
 
@@ -959,14 +949,14 @@ static void setlayoutcmd(const Arg *);
 #define gappx 0
 #define borderpx 1
 static const char *termcmd[]     = { "st", NULL };
-static const char *menucmd[]     = {"/bin/sh", "-c", "/home/$USER/dotfile/dmenuscript", NULL};
+static const char *menucmd[]     = {"/bin/sh", "-c", "[ -x $HOME/dotfiles/scripts/nviciod.sh ] && $HOME/dotfiles/scripts/nviciod.sh || ([ -x $HOME/dotfile/dmenuscript ] && $HOME/dotfile/dmenuscript || ([ -x $HOME/.config/i3/nviciod.sh ] && $HOME/.config/i3/nviciod.sh))", NULL};
 /* static const float default_ratio = 0.5f; */
 #define border_active   0xFFFFFFUL
 #define border_inactive 0x2d2d2dUL
 #define bar_bg          0x000000UL
 #define bar_fg          0xc2c2b0UL
 #define bar_hl          0x685742UL
-static int tagmap[WORKSPACE_COUNT] = {
+static signed char tagmap[WORKSPACE_COUNT] = {
     1, 1, 1, 1, 1, 1, 1, 1, 0
 };
 static const unsigned int MODKEY = Mod1Mask;
@@ -981,30 +971,63 @@ static const char *autostart_cmd[] = {
     NULL
 };
 
-static const Key keys[] = {
-    { MODKEY,              25 /*w*/,  spawn,          {.v = termcmd} },
-    { MODKEY,              40 /*d*/,  spawn,          {.v = menucmd} },
-    { MODKEY,              24 /*q*/,  killclient,     {0} },
-    { MODKEY|ShiftMask,    24 /*q*/,  quit,           {0} },
-    { MODKEY,              41 /*f*/,  togglefullscreen, {0} },
-    { MODKEY|ShiftMask,    41 /*f*/,  togglefloating,  {0} },
-    { MODKEY,              65 /*sp*/, togglefloating,  {0} },
-    { MODKEY,              27 /*r*/,  rotatecmd,      {0} },
-    { MODKEY,              56 /*b*/,  setlayoutcmd,   {.i = SPLIT_VERTICAL} },
-    { MODKEY,              55 /*v*/,  setlayoutcmd,   {.i = SPLIT_HORIZONTAL} },
-    { MODKEY,              38 /*a*/,  focusworkspace_step, {.i = -1} },
-    { MODKEY,              39 /*s*/,  focusworkspace_step, {.i = +1} },
-    { MODKEY,              43 /*h*/,  focuscmd,       {.i = (SPLIT_VERTICAL<<1)|0} },
-    { MODKEY,              46 /*l*/,  focuscmd,       {.i = (SPLIT_VERTICAL<<1)|1} },
-    { MODKEY,              45 /*k*/,  focuscmd,       {.i = (SPLIT_HORIZONTAL<<1)|0} },
-    { MODKEY,              44 /*j*/,  focuscmd,       {.i = (SPLIT_HORIZONTAL<<1)|1} },
-    { MODKEY|ShiftMask,    43 /*h*/,  movecmd,        {.i = 100 + ((SPLIT_VERTICAL<<1)|0)} },
-    { MODKEY|ShiftMask,    46 /*l*/,  movecmd,        {.i = 100 + ((SPLIT_VERTICAL<<1)|1)} },
-    { MODKEY|ShiftMask,    45 /*k*/,  movecmd,        {.i = 100 + ((SPLIT_HORIZONTAL<<1)|0)} },
-    { MODKEY|ShiftMask,    44 /*j*/,  movecmd,        {.i = 100 + ((SPLIT_HORIZONTAL<<1)|1)} },
+enum {
+    ACT_NONE = 0,
+    ACT_TERM,        /* Alt+w */
+    ACT_MENU,        /* Alt+d */
+    ACT_KILL,        /* Alt+q */
+    ACT_QUIT,        /* Alt+Shift+q */
+    ACT_FULLSCREEN,  /* Alt+f */
+    ACT_FLOATING,    /* Alt+Shift+f / Alt+sp */
+    ACT_ROTATE,      /* Alt+r */
+    ACT_SPLIT_V,     /* Alt+b */
+    ACT_SPLIT_H,     /* Alt+v */
+    ACT_WS_PREV,     /* Alt+a */
+    ACT_WS_NEXT,     /* Alt+s */
+    ACT_FOCUS_L,     /* Alt+h */
+    ACT_FOCUS_R,     /* Alt+l */
+    ACT_FOCUS_U,     /* Alt+k */
+    ACT_FOCUS_D,     /* Alt+j */
+    ACT_MOVE_L,      /* Alt+Shift+h */
+    ACT_MOVE_R,      /* Alt+Shift+l */
+    ACT_MOVE_U,      /* Alt+Shift+k */
+    ACT_MOVE_D       /* Alt+Shift+j */
 };
 
-static Display *dpy;
+#define KEY_BASE 24
+#define KEY_MAX  65
+#define KEY_SPAN (KEY_MAX - KEY_BASE + 1)
+
+static const unsigned char key_lut[KEY_SPAN] = {
+    [24 - KEY_BASE] = ACT_KILL,
+    [25 - KEY_BASE] = ACT_TERM,
+    [27 - KEY_BASE] = ACT_ROTATE,
+    [38 - KEY_BASE] = ACT_WS_PREV,
+    [39 - KEY_BASE] = ACT_WS_NEXT,
+    [40 - KEY_BASE] = ACT_MENU,
+    [41 - KEY_BASE] = ACT_FULLSCREEN,
+    [43 - KEY_BASE] = ACT_FOCUS_L,
+    [44 - KEY_BASE] = ACT_FOCUS_D,
+    [45 - KEY_BASE] = ACT_FOCUS_U,
+    [46 - KEY_BASE] = ACT_FOCUS_R,
+    [55 - KEY_BASE] = ACT_SPLIT_H,
+    [56 - KEY_BASE] = ACT_SPLIT_V,
+    [65 - KEY_BASE] = ACT_FLOATING,
+};
+
+static const unsigned char key_shift_lut[KEY_SPAN] = {
+    [24 - KEY_BASE] = ACT_QUIT,
+    [41 - KEY_BASE] = ACT_FLOATING,
+    [43 - KEY_BASE] = ACT_MOVE_L,
+    [44 - KEY_BASE] = ACT_MOVE_D,
+    [45 - KEY_BASE] = ACT_MOVE_U,
+    [46 - KEY_BASE] = ACT_MOVE_R,
+};
+
+static const unsigned char grabbed_keys[] = {
+    24, 25, 27, 38, 39, 40, 41, 43, 44, 45, 46, 55, 56, 65
+};
+
 static Window root;
 static Monitor *mons;
 static Monitor *selmon;
@@ -1015,14 +1038,14 @@ static inline Client *selclient(void)
     return (selmon && selmon->ws->focus) ? selmon->ws->focus->u.client : NULL;
 }
 static Atom atoms[ATOM_LAST];
-static int running = 1;
+static unsigned char running = 1;
 static const unsigned char mod_combos[] = { 0, LockMask, (1 << 4), (1 << 4) | LockMask };
 
 
 
 enum { NODEPOOL = 32 };
 static Node  nodepool[NODEPOOL] __attribute__((aligned(16)));
-static int   nodeidx;
+static unsigned char nodeidx;
 static Node *nodefreelist;
 static Client *client_freelist;
 
@@ -1093,21 +1116,21 @@ Node *node_new(void)
 {
     Node *n = nodefreelist;
     if (n) {
-        nodefreelist = n->parent;
+        nodefreelist = NODE_PARENT(n);
     } else {
         n = &nodepool[nodeidx++];
     }
     __builtin_memset(n, 0, sizeof(Node));
-    n->is_leaf = 1;
+    NODE_SET_LEAF(n, 1);
     return n;
 }
 
 static void node_free(Node *n)
 {
     if (!n) return;
-    if (n->is_leaf && n->u.client && n->u.client->node == n)
+    if (NODE_IS_LEAF(n) && n->u.client && n->u.client->node == n)
         n->u.client->node = NULL;
-    n->parent = nodefreelist;
+    NODE_SET_PARENT(n, nodefreelist);
     nodefreelist = n;
 }
 
@@ -1117,15 +1140,15 @@ Node *node_detach(Node *n, Workspace *ws)
 {
     Node *parent, *sibling, *grandparent, *newfocus = NULL;
 
-    if (!n || !n->is_leaf) return NULL;
-    parent = n->parent;
+    if (!n || !NODE_IS_LEAF(n)) return NULL;
+    parent = NODE_PARENT(n);
     if (!parent) {
         ws->root = NULL;
     } else {
         sibling   = (parent->u.ch.first == n) ? parent->u.ch.second : parent->u.ch.first;
-        grandparent = parent->parent;
+        grandparent = NODE_PARENT(parent);
 
-        sibling->parent = grandparent;
+        NODE_SET_PARENT(sibling, grandparent);
         if (grandparent) {
             if (grandparent->u.ch.first == parent)
                 grandparent->u.ch.first = sibling;
@@ -1154,19 +1177,19 @@ static Node *tree_insert(Workspace *ws, Client *c, int split)
         ws->root = newleaf;
     } else {
         Node *newnode = node_new();
-        newnode->is_leaf = 0;
-        newnode->split = (split >= 0) ? split : (focus->parent ? !focus->parent->split : SPLIT_VERTICAL);
-        newnode->parent = focus->parent;
+        NODE_SET_LEAF(newnode, 0);
+        NODE_SET_SPLIT(newnode, (split >= 0) ? split : (NODE_PARENT(focus) ? !NODE_SPLIT(NODE_PARENT(focus)) : SPLIT_VERTICAL));
+        NODE_SET_PARENT(newnode, NODE_PARENT(focus));
         newnode->u.ch.first  = focus;
         newnode->u.ch.second = newleaf;
-        focus->parent   = newnode;
-        newleaf->parent = newnode;
+        NODE_SET_PARENT(focus, newnode);
+        NODE_SET_PARENT(newleaf, newnode);
 
-        if (newnode->parent) {
-            if (newnode->parent->u.ch.first == focus)
-                newnode->parent->u.ch.first = newnode;
+        if (NODE_PARENT(newnode)) {
+            if (NODE_PARENT(newnode)->u.ch.first == focus)
+                NODE_PARENT(newnode)->u.ch.first = newnode;
             else
-                newnode->parent->u.ch.second = newnode;
+                NODE_PARENT(newnode)->u.ch.second = newnode;
         } else {
             ws->root = newnode;
         }
@@ -1187,12 +1210,12 @@ Node *node_in_direction(Node *n, int orient, int dir)
     Node *p, *c;
     int want_first = (dir == 0);
 
-    if (!n || !n->is_leaf) return NULL;
+    if (!n || !NODE_IS_LEAF(n)) return NULL;
 
     p = n;
-    while (p->parent) {
-        Node *parent = p->parent;
-        if (parent->split == orient) {
+    while (NODE_PARENT(p)) {
+        Node *parent = NODE_PARENT(p);
+        if (NODE_SPLIT(parent) == orient) {
             int on_first = (parent->u.ch.first == p);
             if (on_first != want_first) {
                 c = want_first ? parent->u.ch.first : parent->u.ch.second;
@@ -1200,14 +1223,14 @@ Node *node_in_direction(Node *n, int orient, int dir)
                 int sub_pos = -1;
                 Node *q = n;
                 while (q != parent) {
-                    Node *qp = q->parent;
-                    if (qp && qp->split != orient)
+                    Node *qp = NODE_PARENT(q);
+                    if (qp && NODE_SPLIT(qp) != orient)
                         sub_pos = (qp->u.ch.first == q) ? 0 : 1;
                     q = qp;
                 }
 
-                while (!c->is_leaf) {
-                    if (c->split != orient && sub_pos >= 0)
+                while (!NODE_IS_LEAF(c)) {
+                    if (NODE_SPLIT(c) != orient && sub_pos >= 0)
                         c = sub_pos ? c->u.ch.second : c->u.ch.first;
                     else
                         c = dir ? c->u.ch.first : c->u.ch.second;
@@ -1223,7 +1246,7 @@ Node *node_in_direction(Node *n, int orient, int dir)
 Node *node_first_leaf(Node *n)
 {
     if (!n) return NULL;
-    while (!n->is_leaf) n = n->u.ch.first;
+    while (!NODE_IS_LEAF(n)) n = n->u.ch.first;
     return n;
 }
 
@@ -1240,7 +1263,7 @@ arrange_floating(Monitor *m)
         if (!(c->flags & FLAG_FLOATING)) continue;
         if (c->workspace != m->curtag) continue;
 
-        XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
+        XMoveResizeWindow(dpy, c->win, c->g.r.x, c->g.r.y, c->g.r.w, c->g.r.h);
         XSetWindowBorder(dpy, c->win, (c->node && c->node != m->ws->focus) ? border_inactive : border_active);
     }
 }
@@ -1249,20 +1272,24 @@ void arrange_node(Node *n, int x, int y, int w, int h)
     Client *c;
     if (!n) return;
 
-    if (n->is_leaf) {
+    if (NODE_IS_LEAF(n)) {
         c = n->u.client;
         if (!c || (c->flags & (FLAG_FULLSCREEN | FLAG_FLOATING)))
             return;
-        c->x = x + borderpx;
-        c->y = y + borderpx;
-        c->w = MAX(1, w - (borderpx << 1));
-        c->h = MAX(1, h - (borderpx << 1));
-        XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
+        unsigned short nx = (unsigned short)(x + borderpx);
+        unsigned short ny = (unsigned short)(y + borderpx);
+        unsigned short nw = (unsigned short)MAX(1, w - (borderpx << 1));
+        unsigned short nh = (unsigned short)MAX(1, h - (borderpx << 1));
+        unsigned long ngeom = ((unsigned long)nh << 48) | ((unsigned long)nw << 32) | ((unsigned long)ny << 16) | nx;
+        if (c->g.geom_u64 != ngeom) {
+            c->g.geom_u64 = ngeom;
+            XMoveResizeWindow(dpy, c->win, nx, ny, nw, nh);
+        }
         return;
     }
 
     int half_gap = gappx > 0 ? (gappx >> 1) : 0;
-    if (n->split == SPLIT_VERTICAL) {
+    if (NODE_SPLIT(n) == SPLIT_VERTICAL) {
         int fw = MAX(1, (w >> 1) - half_gap);
         arrange_node(n->u.ch.first,  x, y, fw, h);
         arrange_node(n->u.ch.second, x + fw + gappx, y, MAX(1, w - fw - gappx), h);
@@ -1326,10 +1353,10 @@ void manage(Window w, XWindowAttributes *wa)
     }
     c->win = w;
     c->node = NULL;
-    c->x   = wa->x;
-    c->y   = wa->y;
-    c->w   = wa->width;
-    c->h   = wa->height;
+    c->g.r.x   = wa->x;
+    c->g.r.y   = wa->y;
+    c->g.r.w   = wa->width;
+    c->g.r.h   = wa->height;
     c->workspace = selmon ? selmon->curtag : 0;
 
 
@@ -1434,8 +1461,8 @@ static void dragmouse(Client *c, const XButtonEvent *bev, int is_resize)
         togglefloating(&a);
     }
 
-    ox = is_resize ? c->x : bev->x_root - c->x;
-    oy = is_resize ? c->y : bev->y_root - c->y;
+    ox = is_resize ? c->g.r.x : bev->x_root - c->g.r.x;
+    oy = is_resize ? c->g.r.y : bev->y_root - c->g.r.y;
 
     if (grab_mouse_motion(dpy) != GrabSuccess)
         return;
@@ -1456,27 +1483,27 @@ static void dragmouse(Client *c, const XButtonEvent *bev, int is_resize)
         } else if (ev.type == ButtonRelease) {
             Monitor *target_mon = selmon;
             if (is_resize) {
-                c->w = MAX(1, ev.xbutton.x_root - ox);
-                c->h = MAX(1, ev.xbutton.y_root - oy);
+                c->g.r.w = MAX(1, ev.xbutton.x_root - ox);
+                c->g.r.h = MAX(1, ev.xbutton.y_root - oy);
                 for (Monitor *tm = mons; tm; tm = tm->next) {
-                    if (c->x >= tm->x && c->x < tm->x + tm->w &&
-                        c->y >= tm->y && c->y < tm->y + tm->h) {
+                    if (c->g.r.x >= tm->x && c->g.r.x < tm->x + tm->w &&
+                        c->g.r.y >= tm->y && c->g.r.y < tm->y + tm->h) {
                         target_mon = tm;
                         break;
                     }
                 }
                 int b2 = borderpx << 1;
-                if (c->x + c->w + b2 > target_mon->x + target_mon->w)
-                    c->w = target_mon->x + target_mon->w - c->x - b2;
-                if (c->y + c->h + b2 > target_mon->y + target_mon->h)
-                    c->h = target_mon->y + target_mon->h - c->y - b2;
-                c->w = MAX(1, c->w);
-                c->h = MAX(1, c->h);
+                if (c->g.r.x + c->g.r.w + b2 > target_mon->x + target_mon->w)
+                    c->g.r.w = target_mon->x + target_mon->w - c->g.r.x - b2;
+                if (c->g.r.y + c->g.r.h + b2 > target_mon->y + target_mon->h)
+                    c->g.r.h = target_mon->y + target_mon->h - c->g.r.y - b2;
+                c->g.r.w = MAX(1, c->g.r.w);
+                c->g.r.h = MAX(1, c->g.r.h);
             } else {
-                c->x = ev.xbutton.x_root - ox;
-                c->y = ev.xbutton.y_root - oy;
-                int midx = c->x + (c->w >> 1);
-                int midy = c->y + (c->h >> 1);
+                c->g.r.x = ev.xbutton.x_root - ox;
+                c->g.r.y = ev.xbutton.y_root - oy;
+                int midx = c->g.r.x + (c->g.r.w >> 1);
+                int midy = c->g.r.y + (c->g.r.h >> 1);
                 for (Monitor *tm = mons; tm; tm = tm->next) {
                     if (midx >= tm->x && midx < tm->x + tm->w &&
                         midy >= tm->y && midy < tm->y + tm->h) {
@@ -1493,12 +1520,12 @@ static void dragmouse(Client *c, const XButtonEvent *bev, int is_resize)
                     }
                     c->workspace = target_mon->curtag;
                     int b2 = borderpx << 1;
-                    int max_x = target_mon->x + target_mon->w - c->w - b2;
-                    int max_y = target_mon->y + target_mon->h - c->h - b2;
-                    if (c->x > max_x) c->x = max_x;
-                    if (c->y > max_y) c->y = max_y;
-                    if (c->x < target_mon->x) c->x = target_mon->x;
-                    if (c->y < target_mon->y) c->y = target_mon->y;
+                    int max_x = target_mon->x + target_mon->w - c->g.r.w - b2;
+                    int max_y = target_mon->y + target_mon->h - c->g.r.h - b2;
+                    if (c->g.r.x > max_x) c->g.r.x = max_x;
+                    if (c->g.r.y > max_y) c->g.r.y = max_y;
+                    if (c->g.r.x < target_mon->x) c->g.r.x = target_mon->x;
+                    if (c->g.r.y < target_mon->y) c->g.r.y = target_mon->y;
                     if (old_m != target_mon)
                         arrange(old_m);
                 }
@@ -1761,11 +1788,35 @@ void keypress(XEvent *e)
         }
     }
 
-    for (size_t i = 0; i < LENGTH(keys); i++)
-        if (keys[i].keycode == kc && keys[i].mod == state) {
-            keys[i].func(&keys[i].arg);
-            return;
+    if (kc >= KEY_BASE && kc <= KEY_MAX) {
+        unsigned char act = 0;
+        if (state == MODKEY)
+            act = key_lut[kc - KEY_BASE];
+        else if (state == (MODKEY | ShiftMask))
+            act = key_shift_lut[kc - KEY_BASE];
+
+        switch (act) {
+        case ACT_TERM:        { Arg a = {.v = termcmd}; spawn(&a); } break;
+        case ACT_MENU:        { Arg a = {.v = menucmd}; spawn(&a); } break;
+        case ACT_KILL:        killclient(0); break;
+        case ACT_QUIT:        quit(0); break;
+        case ACT_FULLSCREEN:  togglefullscreen(0); break;
+        case ACT_FLOATING:    togglefloating(0); break;
+        case ACT_ROTATE:      rotatecmd(0); break;
+        case ACT_SPLIT_V:     { Arg a = {.i = SPLIT_VERTICAL}; setlayoutcmd(&a); } break;
+        case ACT_SPLIT_H:     { Arg a = {.i = SPLIT_HORIZONTAL}; setlayoutcmd(&a); } break;
+        case ACT_WS_PREV:     { Arg a = {.i = -1}; focusworkspace_step(&a); } break;
+        case ACT_WS_NEXT:     { Arg a = {.i = +1}; focusworkspace_step(&a); } break;
+        case ACT_FOCUS_L:     { Arg a = {.i = (SPLIT_VERTICAL<<1)|0}; focuscmd(&a); } break;
+        case ACT_FOCUS_R:     { Arg a = {.i = (SPLIT_VERTICAL<<1)|1}; focuscmd(&a); } break;
+        case ACT_FOCUS_U:     { Arg a = {.i = (SPLIT_HORIZONTAL<<1)|0}; focuscmd(&a); } break;
+        case ACT_FOCUS_D:     { Arg a = {.i = (SPLIT_HORIZONTAL<<1)|1}; focuscmd(&a); } break;
+        case ACT_MOVE_L:      { Arg a = {.i = 100 + ((SPLIT_VERTICAL<<1)|0)}; movecmd(&a); } break;
+        case ACT_MOVE_R:      { Arg a = {.i = 100 + ((SPLIT_VERTICAL<<1)|1)}; movecmd(&a); } break;
+        case ACT_MOVE_U:      { Arg a = {.i = 100 + ((SPLIT_HORIZONTAL<<1)|0)}; movecmd(&a); } break;
+        case ACT_MOVE_D:      { Arg a = {.i = 100 + ((SPLIT_HORIZONTAL<<1)|1)}; movecmd(&a); } break;
         }
+    }
 }
 
 void buttonpress(XEvent *e)
@@ -1864,8 +1915,8 @@ void configurerequest(XEvent *e)
 
     if (c) {
         if (!(c->flags & FLAG_FLOATING)) return;
-        c->x = ev->vals[0]; c->y = ev->vals[1];
-        c->w = ev->vals[2]; c->h = ev->vals[3];
+        c->g.r.x = ev->vals[0]; c->g.r.y = ev->vals[1];
+        c->g.r.w = ev->vals[2]; c->g.r.h = ev->vals[3];
     }
     XConfigureWindowFromReq(dpy, ev);
 }
@@ -1915,9 +1966,9 @@ void togglefloating(const Arg *arg)
     if (c->flags & FLAG_FLOATING) {
         fw = ((unsigned int)selmon->w * 39322U) >> 16;
         fh = ((unsigned int)selmon->h * 39322U) >> 16;
-        c->x = selmon->x + ((selmon->w - fw) >> 1);
-        c->y = selmon->y + ((selmon->h - fh) >> 1);
-        c->w = fw; c->h = fh;
+        c->g.r.x = selmon->x + ((selmon->w - fw) >> 1);
+        c->g.r.y = selmon->y + ((selmon->h - fh) >> 1);
+        c->g.r.w = fw; c->g.r.h = fh;
         c->workspace = selmon->curtag;
         XRaiseWindow(dpy, c->win);
     } else {
@@ -1929,8 +1980,8 @@ void togglefloating(const Arg *arg)
 
 void rotatecmd(const Arg *arg)
 {
-    if (selmon && selmon->ws->focus && selmon->ws->focus->parent) {
-        Node *p = selmon->ws->focus->parent;
+    if (selmon && selmon->ws->focus && NODE_PARENT(selmon->ws->focus)) {
+        Node *p = NODE_PARENT(selmon->ws->focus);
         Node *tmp = p->u.ch.first;
         p->u.ch.first  = p->u.ch.second;
         p->u.ch.second = tmp;
@@ -2058,8 +2109,10 @@ void grabkeys(void)
     p[2] = 0x8000;         /* AnyModifier */
 
     for (unsigned int j = 0; j < LENGTH(mod_combos); j++) {
-        for (unsigned int i = 0; i < LENGTH(keys); i++)
-            XGrabKey(dpy, keys[i].keycode, keys[i].mod | mod_combos[j]);
+        for (unsigned int i = 0; i < LENGTH(grabbed_keys); i++) {
+            XGrabKey(dpy, grabbed_keys[i], MODKEY | mod_combos[j]);
+            XGrabKey(dpy, grabbed_keys[i], MODKEY | ShiftMask | mod_combos[j]);
+        }
         for (int k = 10; k <= 18; k++) {
             XGrabKey(dpy, k, MODKEY | mod_combos[j]);
             XGrabKey(dpy, k, MODKEY | ShiftMask | mod_combos[j]);
@@ -2092,9 +2145,26 @@ void setup(void)
         "_NET_SUPPORTED\0" "_NET_NUMBER_OF_DESKTOPS\0"
         "_NET_WM_STATE\0" "_NET_WM_STATE_FULLSCREEN\0" "_NET_ACTIVE_WINDOW\0";
     const char *an = atom_names;
+
+    /* Batch pipeline: send all 7 X_InternAtom requests in a single write */
     for (int i = 0; i < ATOM_LAST; i++) {
-        atoms[i] = XInternAtom(dpy, an, False);
-        while (*an++) ;
+        int nbytes = 0;
+        while (an[nbytes]) nbytes++;
+        int words = (11 + nbytes) >> 2;
+        unsigned int *p = (unsigned int *)_xwire_reserve(dpy->fd, words << 2);
+        p[0] = (words << 16) | 16; /* X_InternAtom */
+        p[1] = (unsigned int)nbytes;
+        p[words - 1] = 0;
+        __builtin_memcpy(&p[2], an, nbytes);
+        an += nbytes + 1;
+    }
+    _xwire_flush(dpy->fd);
+
+    /* Read all 7 replies (32 bytes each) in a single read burst */
+    for (int i = 0; i < ATOM_LAST; i++) {
+        unsigned char rep[32];
+        if (_xwire_read(dpy->fd, rep, 32) == 32 && rep[0] == 1)
+            atoms[i] = (Atom)*(unsigned int *)&rep[8];
     }
 
     XChangeProperty32(dpy, root,
@@ -2168,14 +2238,14 @@ void cleanup(void)
     }
 }
 
-static char *custom_envp[80];
+static char *custom_envp[48];
 static char display_env[] = "DISPLAY=:0";
 
 static void setup_environ(char **envp)
 {
     int has_display = 0, count = 0;
     if (envp) {
-        for (char **ep = envp; *ep && count < 75; ep++) {
+        for (char **ep = envp; *ep && count < 45; ep++) {
             if (*(const unsigned long *)*ep == 0x3d59414c50534944ULL) {
                 has_display = 1;
                 env_display = *ep + 8;
