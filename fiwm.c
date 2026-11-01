@@ -974,12 +974,7 @@ static inline int XQueryPointer(Display *d, Window w, Window *r, Window *c, int 
     return 1;
 }
 
-static inline XModifierKeymap *XGetModifierMapping(Display *d) {
-    (void)d;
-    static KeyCode dummy[8] = { 0, 0, 0, 0, 77 /* Mod2 = NumLock */, 0, 0, 0 };
-    static XModifierKeymap m = { 1, dummy };
-    return &m;
-}
+
 
 static inline KeyCode XKeysymToKeycode(Display *d, KeySym ks) {
     (void)d;
@@ -1199,7 +1194,7 @@ static Client *clients;
 static Atom wmatom[WM_LAST];
 static Atom netatom[NET_LAST];
 static int running = 1;
-static unsigned int numlockmask;
+static const unsigned int numlockmask = (1 << 4); /* Mod2Mask */
 static unsigned long border_active, border_inactive, bar_bg, bar_fg, bar_hl;
 static GC bar_gc;
 
@@ -2515,20 +2510,7 @@ void grabkeys(void)
 {
     unsigned int i, j;
     KeySym keysym;
-    unsigned int modifiers[] = { 0, LockMask, 0, LockMask };
-
-    {
-        XModifierKeymap *modmap = XGetModifierMapping(dpy);
-        for (i = 0; i < 8; i++)
-            for (j = 0; (int)j < modmap->max_keypermod; j++)
-                if (modmap->modifiermap[i * modmap->max_keypermod + j]
-                    == XKeysymToKeycode(dpy, XK_Num_Lock))
-                    numlockmask = (1 << i);
-    }
-
-    modifiers[2] = numlockmask;
-    modifiers[3] = numlockmask | LockMask;
-
+    unsigned int modifiers[] = { 0, LockMask, numlockmask, numlockmask | LockMask };
     XUngrabKey(dpy, AnyKey, AnyModifier, root);
 
     for (i = 0; i < LENGTH(keys); i++) {
