@@ -1718,12 +1718,7 @@ void focusworkspace(const Arg *arg)
     if (m->curtag == tag) {
         if (m->ws->focus && m->ws->focus->u.client)
             focus(m, m->ws->focus);
-        if (prev != m) { prev->dirty = 1; m->dirty = 1; }
-        arrange(m);
-        if (prev != m) {
-            arrange(prev);
-        }
-        return;
+        goto done;
     }
 
     int oldtag = m->curtag;
@@ -1742,17 +1737,14 @@ void focusworkspace(const Arg *arg)
         set_active_focus(0);
     }
 
-    arrange(m);
-
     for (Client *fc = clients; fc; fc = fc->next) {
         if (fc->workspace == oldtag)
             hide_window(dpy, fc->win);
     }
 
-    if (prev != m) {
-        prev->dirty = 1;
-        arrange(prev);
-    }
+done:
+    if (prev != m) { prev->dirty = 1; m->dirty = 1; arrange(prev); }
+    arrange(m);
 }
 
 void focusworkspace_step(const Arg *arg)
