@@ -1231,12 +1231,7 @@ static inline void hash_remove(Client *c)
 
 #define free(p) ((void)0)
 
-static void *memset(void *s, int c, size_t n)
-{
-    unsigned char *p = (unsigned char *)s;
-    while (n--) *p++ = (unsigned char)c;
-    return s;
-}
+
 
 #define HEAP_SIZE (1UL * 1024)          /* 1 KB — bump allocator */
 static char heap[HEAP_SIZE];
@@ -1573,7 +1568,7 @@ void manage(Window w, XWindowAttributes *wa)
     if (client_freelist) {
         c = client_freelist;
         client_freelist = c->next;
-        memset(c, 0, sizeof(Client));
+        c->flags = 0;
     } else {
         c = ecalloc(1, sizeof(Client));
     }
