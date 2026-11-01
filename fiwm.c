@@ -2571,29 +2571,18 @@ void run(void)
 
 void cleanup(void)
 {
-    Monitor *m, *mtmp;
-    Client *c;
-
-    while (clients) {
-        c = clients;
-        hash_remove(c);
+    for (Client *c = clients; c; c = c->next) {
         XSelectInput(dpy, c->win, NoEventMask);
         XUngrabButton(dpy, AnyButton, AnyModifier, c->win);
-        clients = c->next;
-        free(c);
     }
 
     if (bar_gc) XFreeGC(dpy, bar_gc);
 
-    m = mons;
-    while (m) {
+    for (Monitor *m = mons; m; m = m->next) {
         if (m->barpm)
             XFreePixmap(dpy, m->barpm);
         if (m->barwin)
             XDestroyWindow(dpy, m->barwin);
-        mtmp = m->next;
-        free(m);
-        m = mtmp;
     }
 
     XSync(dpy, False);
