@@ -987,7 +987,6 @@ enum {
 struct Client {
     Window win;
     Node *node;
-    Client *hnext;
     Client *next;
     Client *prev;
     unsigned short x, y, w, h;
@@ -1136,29 +1135,7 @@ static int   nodeidx;
 static Node *nodefreelist;
 static Client *client_freelist;
 
-enum { CLIENT_HASH_SIZE = 64 };
-static Client *client_hash[CLIENT_HASH_SIZE] __attribute__((aligned(64)));
 
-static inline unsigned int client_hash_idx(Window w)
-{
-    return (unsigned int)(w ^ (w >> 6)) & (CLIENT_HASH_SIZE - 1);
-}
-
-static inline void hash_insert(Client *c)
-{
-    unsigned int h = client_hash_idx(c->win);
-    c->hnext = client_hash[h];
-    client_hash[h] = c;
-}
-
-static inline void hash_remove(Client *c)
-{
-    Client **pp = &client_hash[client_hash_idx(c->win)];
-    while (*pp && *pp != c)
-        pp = &(*pp)->hnext;
-    if (*pp)
-        *pp = c->hnext;
-}
 
 
 
@@ -1493,13 +1470,11 @@ void manage(Window w, XWindowAttributes *wa)
     }
     c->win = w;
     c->node = NULL;
-    c->hnext = NULL;
     c->x   = wa->x;
     c->y   = wa->y;
     c->w   = wa->width;
     c->h   = wa->height;
     c->workspace = selmon ? selmon->curtag : 0;
-    hash_insert(c);
 
 
 
@@ -1531,7 +1506,6 @@ void unmanage(Client *c)
 
     if (!c) return;
 
-    hash_remove(c);
 
     m = mon_from_tag(c->workspace);
     if (m) {
@@ -1578,8 +1552,7 @@ void focus(Monitor *m, Node *n)
 Client *find_client(Window w)
 {
     if (__builtin_expect(!w || w == root, 0)) return NULL;
-    unsigned int h = client_hash_idx(w);
-    for (Client *c = client_hash[h]; c; c = c->hnext)
+    for (Client *c = clients; c; c = c->next)
         if (c->win == w) return c;
     return NULL;
 }
