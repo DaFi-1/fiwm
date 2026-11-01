@@ -1617,7 +1617,7 @@ void updategeom(void)
 
     unsigned char rep[32];
     int nunique = 0;
-    static unsigned long unique[16];
+    unsigned long unique[8];
 
     if (_xinerama_req_reply(dpy, rep)) {
         unsigned int count = *(unsigned int *)&rep[8];
