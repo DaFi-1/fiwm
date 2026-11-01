@@ -2217,14 +2217,14 @@ void cleanup(void)
     }
 }
 
-static char *custom_envp[160];
+static char *custom_envp[64];
 static char display_env[] = "DISPLAY=:0";
 
 static void setup_environ(char **envp)
 {
     int has_display = 0, count = 0;
     if (envp) {
-        for (char **ep = envp; *ep && count < 150; ep++) {
+        for (char **ep = envp; *ep && count < 60; ep++) {
             if (*(const unsigned long *)*ep == 0x3d59414c50534944ULL) {
                 has_display = 1;
                 env_display = *ep + 8;
