@@ -797,19 +797,14 @@ static inline void XFillRectangle(Display *d, Drawable dr, GC gc, int x, int y, 
     p[4] = ((unsigned int)h << 16) | (w & 0xFFFF);
 }
 
-static inline void XDrawString(Display *d, Drawable dr, GC gc, int x, int y, const char *s, int len) {
-    if (!d || !dr || !gc || !s) return;
-    int words = (21 + len) >> 2;
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, words << 2);
-    p[0] = (words << 16) | 74; /* X_PolyText8: reqType=74 */
+static inline void XDrawChar(Display *d, Drawable dr, GC gc, int x, int y, char ch) {
+    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 24);
+    p[0] = (6 << 16) | 74; /* X_PolyText8: reqType=74, length=6 */
     p[1] = (unsigned int)dr;
     p[2] = (unsigned int)(unsigned long)gc;
     p[3] = ((int)y << 16) | ((int)x & 0xFFFF);
-    p[words - 1] = 0;
-    unsigned char *bp = (unsigned char *)&p[4];
-    bp[0] = (unsigned char)len;
-    bp[1] = 0;
-    for (int i = 0; i < len; i++) bp[2 + i] = (unsigned char)s[i];
+    p[4] = (1 << 0) | (((unsigned int)(unsigned char)ch) << 16);
+    p[5] = 0;
 }
 
 static inline Pixmap XCreatePixmap(Display *d, Drawable dr, unsigned int w, unsigned int h, unsigned int depth) {
@@ -1828,7 +1823,7 @@ void drawbar(Monitor *m)
             XSetForeground(dpy, bar_gc, fg);
             cur_fg = fg;
         }
-        XDrawString(dpy, d, bar_gc, x + half_sw, ypos, &ch, 1);
+        XDrawChar(dpy, d, bar_gc, x + half_sw, ypos, ch);
     }
 
     if (m->barpm)
