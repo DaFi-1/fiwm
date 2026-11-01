@@ -448,6 +448,7 @@ static Display _global_display;
 
 char **envp_global = 0;
 static const char *env_display = ":0";
+static const char *env_path = "/usr/local/bin:/usr/bin:/bin";
 static long xorg_pid = 0;
 
 static void start_xorg(void)
@@ -1277,26 +1278,13 @@ void *ecalloc(size_t nmemb, size_t size)
 static void try_exec(const char *file, char *const argv[])
 {
     char buf[1024];
-    const char *path = NULL;
-    const char *p;
 
     if (*strchrnul(file, '/') == '/') {
         sys_execve(file, argv, envp_global);
         return;
     }
 
-    if (envp_global) {
-        for (char **ep = envp_global; *ep; ep++) {
-            const unsigned char *s = (const unsigned char *)*ep;
-            if (*(const unsigned int *)s == 0x48544150 && s[4] == '=') {
-                path = *ep + 5;
-                break;
-            }
-        }
-    }
-    if (!path) path = "/usr/local/bin:/usr/bin:/bin";
-
-    p = path;
+    const char *p = env_path;
     while (*p) {
         const char *next = strchrnul(p, ':');
         char *d = buf;
@@ -2672,6 +2660,8 @@ static void setup_environ(char **envp)
             if (*(const unsigned long *)*ep == 0x3d59414c50534944ULL) {
                 has_display = 1;
                 env_display = *ep + 8;
+            } else if (*(const unsigned int *)*ep == 0x48544150 && (*ep)[4] == '=') {
+                env_path = *ep + 5;
             }
             custom_envp[count++] = *ep;
         }
