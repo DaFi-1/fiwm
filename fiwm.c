@@ -669,17 +669,17 @@ static inline void configure_window_2d(Display *d, Window w, unsigned int mask, 
 #define XResizeWindow(d, w, width, height) configure_window_2d((d), (w), 12, (int)(width), (int)(height))
 #define hide_window(d, w) configure_window_2d((d), (w), 3, -9999, -9999)
 
-static inline void XMapWindow(Display *d, Window w) {
+static inline void xwire_op_resource(Display *d, unsigned int opcode, unsigned int id) {
+    if (!d || !id) return;
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
-    p[0] = (2 << 16) | 8;
-    p[1] = (unsigned int)w;
+    p[0] = (2 << 16) | opcode;
+    p[1] = id;
 }
 
-static inline void XUnmapWindow(Display *d, Window w) {
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
-    p[0] = (2 << 16) | 10;
-    p[1] = (unsigned int)w;
-}
+#define XMapWindow(d, w)      xwire_op_resource((d), 8, (unsigned int)(w))
+#define XUnmapWindow(d, w)    xwire_op_resource((d), 10, (unsigned int)(w))
+#define XDestroyWindow(d, w)  xwire_op_resource((d), 4, (unsigned int)(w))
+#define XFreePixmap(d, pm)    xwire_op_resource((d), 54, (unsigned int)(pm))
 
 static inline void set_input_focus(Display *d, Window w) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 12);
@@ -890,20 +890,6 @@ static inline Pixmap XCreatePixmap(Display *d, Drawable dr, unsigned int w, unsi
     p[2] = (unsigned int)dr;
     p[3] = ((unsigned int)h << 16) | (w & 0xFFFF);
     return (Pixmap)pid;
-}
-
-static inline void XFreePixmap(Display *d, Pixmap p) {
-    if (!d || !p) return;
-    unsigned int *req = (unsigned int *)_xwire_reserve(d->fd, 8);
-    req[0] = (2 << 16) | 54; /* X_FreePixmap: reqType=54, length=2 */
-    req[1] = (unsigned int)p;
-}
-
-static inline void XDestroyWindow(Display *d, Window w) {
-    if (!d || !w) return;
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
-    p[0] = (2 << 16) | 4; /* X_DestroyWindow: reqType=4, length=2 */
-    p[1] = (unsigned int)w;
 }
 
 static inline void XCopyArea(Display *d, Drawable src, Drawable dst, GC gc, int sx, int sy, unsigned int w, unsigned int h, int dx, int dy) {
