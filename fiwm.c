@@ -1340,9 +1340,6 @@ Node *node_detach(Node *n, Workspace *ws)
     Node *parent, *sibling, *grandparent, *newfocus = NULL;
 
     if (!n || !n->is_leaf) return NULL;
-    if (n->u.client && n->u.client->node == n)
-        n->u.client->node = NULL;
-
     parent = n->parent;
     if (!parent) {
         ws->root = NULL;
