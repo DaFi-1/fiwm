@@ -1913,10 +1913,7 @@ void drawbar(Monitor *m)
 
     sw = m->bar_width / m->ntags;
 
-    if (!bar_gc)
-        bar_gc = XCreateGC(dpy, m->barwin, 0, NULL);
-
-    d = m->barpm ? m->barpm : m->barwin;
+    d = m->barpm;
 
     XSetForeground(dpy, bar_gc, bar_bg);
     XFillRectangle(dpy, d, bar_gc, 0, 0, m->bar_width, BAR_HEIGHT);
@@ -1958,6 +1955,7 @@ void createbars(void)
         p[9] = ExposureMask | ButtonPressMask;
         m->barwin = wid;
         m->barpm = XCreatePixmap(dpy, root, m->w, BAR_HEIGHT, 24);
+        if (!bar_gc) bar_gc = XCreateGC(dpy, wid, 0, NULL);
 
         XMapWindow(dpy, m->barwin);
         XLowerWindow(dpy, m->barwin);
