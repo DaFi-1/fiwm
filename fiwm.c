@@ -670,7 +670,7 @@ static inline void configure_window_2d(Display *d, Window w, unsigned int mask, 
 #define hide_window(d, w) configure_window_2d((d), (w), 3, -9999, -9999)
 
 static inline void xwire_op_resource(Display *d, unsigned int opcode, unsigned int id) {
-    if (!d || !id) return;
+    if (!d) return;
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
     p[0] = (2 << 16) | opcode;
     p[1] = id;
@@ -681,6 +681,7 @@ static inline void xwire_op_resource(Display *d, unsigned int opcode, unsigned i
 #define XDestroyWindow(d, w)  xwire_op_resource((d), 4, (unsigned int)(w))
 #define XFreePixmap(d, pm)    xwire_op_resource((d), 54, (unsigned int)(pm))
 #define XFreeGC(d, gc)        xwire_op_resource((d), 60, (unsigned int)(unsigned long)(gc))
+#define ungrab_mouse(d)       xwire_op_resource((d), 27, 0)
 
 static inline void set_input_focus(Display *d, Window w) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 12);
@@ -956,12 +957,7 @@ static inline int grab_mouse_motion(Display *d) {
     return 0; /* GrabSuccess == 0 */
 }
 
-static inline void ungrab_mouse(Display *d) {
-    if (!d) return;
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
-    p[0] = (2 << 16) | 27; /* X_UngrabPointer */
-    p[1] = 0; /* CurrentTime */
-}
+
 
 static inline int XQueryPointer(Display *d, Window w, Window *r, Window *c, int *rx, int *ry, int *wx, int *wy, unsigned int *mask) {
     if (!d) return 0;
