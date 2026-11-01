@@ -755,7 +755,6 @@ static inline int XNextEvent(Display *d, XEvent *e) {
     }
 }
 
-#define XFree(p) ((void)0)
 
 static inline Atom intern_atom(Display *d, const char *name) {
     if (!d || !name) return 0;
@@ -880,16 +879,6 @@ static inline int XQueryTree(Display *d, Window w, Window *root_return, Window *
     return 1;
 }
 
-static inline int XGetWindowProperty(Display *d, Window w, Atom prop, long off, long len, int del, Atom req_t, Atom *act_t, int *act_f, unsigned long *nitems, unsigned long *bytes_after, unsigned char **prop_ret) {
-    (void)d; (void)w; (void)prop; (void)off; (void)len; (void)del; (void)req_t;
-    if (act_t) *act_t = 0;
-    if (act_f) *act_f = 0;
-    if (nitems) *nitems = 0;
-    if (bytes_after) *bytes_after = 0;
-    if (prop_ret) *prop_ret = NULL;
-    return 1;
-}
-
 static inline void XChangeProperty(Display *d, Window w, Atom prop, Atom type, int fmt, int mode, const unsigned char *data, int nelem) {
     if (!d || !w || !prop || !data || nelem <= 0) return;
     int data_bytes = (fmt == 32) ? (nelem << 2) : ((fmt == 16) ? (nelem << 1) : nelem);
@@ -967,7 +956,7 @@ enum { BAR_HEIGHT = 18 };
 enum { WM_PROTOCOLS, WM_DELETE_WINDOW, WM_LAST };
 enum { NET_SUPPORTED, NET_NUMBER_OF_DESKTOPS,
        NET_WM_STATE, NET_WM_STATE_FULLSCREEN, NET_ACTIVE_WINDOW,
-       NET_WM_WINDOW_TYPE, NET_WM_WINDOW_TYPE_DIALOG, NET_LAST };
+       NET_LAST };
 
 typedef union {
     int i;
@@ -997,7 +986,6 @@ typedef struct {
 enum {
     FLAG_FLOATING   = 1 << 0,
     FLAG_FULLSCREEN = 1 << 1,
-    FLAG_DIALOG     = 1 << 2,
 };
 
 struct Client {
@@ -1500,10 +1488,6 @@ void arrange(Monitor *m)
 void manage(Window w, XWindowAttributes *wa)
 {
     Client *c;
-    Atom actual, *atoms;
-    int format;
-    unsigned long n, left;
-    unsigned char *data;
 
     if (client_freelist) {
         c = client_freelist;
@@ -1522,15 +1506,7 @@ void manage(Window w, XWindowAttributes *wa)
     c->workspace = selmon ? selmon->curtag : 0;
     hash_insert(c);
 
-    if (XGetWindowProperty(dpy, w, netatom[NET_WM_WINDOW_TYPE], 0L, 2L,
-                           False, XA_ATOM, &actual, &format,
-                           &n, &left, &data) == Success && data) {
-        atoms = (Atom *)data;
-        for (unsigned long i = 0; i < n; i++)
-            if (atoms[i] == netatom[NET_WM_WINDOW_TYPE_DIALOG])
-                c->flags |= FLAG_DIALOG | FLAG_FLOATING;
-        XFree(data);
-    }
+
 
     if (clients) clients->prev = c;
     c->next = clients;
@@ -2447,8 +2423,6 @@ void setup(void)
     netatom[NET_WM_STATE]             = XInternAtom(dpy, "_NET_WM_STATE", False);
     netatom[NET_WM_STATE_FULLSCREEN]  = XInternAtom(dpy, "_NET_WM_STATE_FULLSCREEN", False);
     netatom[NET_ACTIVE_WINDOW]        = XInternAtom(dpy, "_NET_ACTIVE_WINDOW", False);
-    netatom[NET_WM_WINDOW_TYPE]       = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE", False);
-    netatom[NET_WM_WINDOW_TYPE_DIALOG]= XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DIALOG", False);
 
     XChangeProperty(dpy, root,
         netatom[NET_SUPPORTED],
