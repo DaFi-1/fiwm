@@ -621,6 +621,7 @@ static inline void configure_window_1d(Display *d, Window w, unsigned int mask, 
 }
 #define XRaiseWindow(d, w) configure_window_1d((d), (w), 64, 0)
 #define XLowerWindow(d, w) configure_window_1d((d), (w), 64, 1)
+#define XSetWindowBorderWidth(d, w, bw) configure_window_1d((d), (w), 16, (unsigned int)(bw))
 
 static inline void XConfigureWindowFromReq(Display *d, XConfigureRequestEvent *ev) {
     if (__builtin_expect(_xwire_outlen + 40 > sizeof(_xwire_outbuf), 0))
@@ -641,13 +642,15 @@ static inline void XConfigureWindowFromReq(Display *d, XConfigureRequestEvent *e
     _xwire_outlen += (unsigned long)(idx << 2);
 }
 
-static inline void XSelectInput(Display *d, Window w, long mask) {
+static inline void change_window_attributes_1d(Display *d, Window w, unsigned int mask, unsigned int val) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 2;
     p[1] = (unsigned int)w;
-    p[2] = 0x800;
-    p[3] = (unsigned int)mask;
+    p[2] = mask;
+    p[3] = val;
 }
+#define XSelectInput(d, w, mask) change_window_attributes_1d((d), (w), 0x800, (unsigned int)(mask))
+#define XSetWindowBorder(d, w, pixel) change_window_attributes_1d((d), (w), 8, (unsigned int)(pixel))
 
 static inline void client_set_attributes(Display *d, Window w, unsigned long bg) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 20);
@@ -656,16 +659,6 @@ static inline void client_set_attributes(Display *d, Window w, unsigned long bg)
     p[2] = (1 << 1) | (1 << 11);
     p[3] = (unsigned int)bg;
     p[4] = EnterWindowMask | FocusChangeMask | PropertyChangeMask | StructureNotifyMask;
-}
-
-#define XSetWindowBorderWidth(d, w, bw) configure_window_1d((d), (w), 16, (unsigned int)(bw))
-
-static inline void XSetWindowBorder(Display *d, Window w, unsigned long pixel) {
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
-    p[0] = (4 << 16) | 2;
-    p[1] = (unsigned int)w;
-    p[2] = 8;
-    p[3] = (unsigned int)pixel;
 }
 
 static inline void XMoveResizeWindow(Display *d, Window w, int x, int y, unsigned int width, unsigned int height) {
