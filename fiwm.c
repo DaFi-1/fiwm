@@ -1503,9 +1503,7 @@ void movemouse(const Arg *arg)
     if (!arg || !arg->v) return;
     const XEvent *bev = (const XEvent *)arg->v;
     c = find_client(bev->xbutton.window);
-    if (!c) {
-        if (!c) c = selclient();
-    }
+    if (!c) c = selclient();
 
     if (!(c->flags & FLAG_FLOATING)) {
         Arg a = {0};
@@ -1576,9 +1574,7 @@ void resizemouse(const Arg *arg)
         const XEvent *bev = (const XEvent *)arg->v;
         c = find_client(bev->xbutton.window);
     }
-    if (!c) {
-        if (!c) c = selclient();
-    }
+    if (!c) c = selclient();
 
     if (!(c->flags & FLAG_FLOATING)) {
         Arg a = {0};
