@@ -908,27 +908,6 @@ static inline int grab_mouse_motion(Display *d) {
 
 
 
-static inline int XQueryPointer(Display *d, Window w, Window *r, Window *c, int *rx, int *ry, int *wx, int *wy, unsigned int *mask) {
-    if (!d) return 0;
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
-    p[0] = (2 << 16) | 38;
-    p[1] = (unsigned int)w;
-    _xwire_flush(d->fd);
-
-    unsigned char rep[32];
-    if (_xwire_read(d->fd, rep, 32) != 32 || rep[0] != 1)
-        return 0;
-
-    if (r) *r = *(unsigned int *)&rep[8];
-    if (c) *c = *(unsigned int *)&rep[12];
-    if (rx) *rx = *(short *)&rep[16];
-    if (ry) *ry = *(short *)&rep[18];
-    if (wx) *wx = *(short *)&rep[20];
-    if (wy) *wy = *(short *)&rep[22];
-    if (mask) *mask = *(unsigned short *)&rep[24];
-    return 1;
-}
-
 
 
 
@@ -1567,15 +1546,12 @@ Monitor *mon_from_tag(short tag)
 void movemouse(const Arg *arg)
 {
     Client *c = NULL;
-    int di, ox = 0, oy = 0;
-    unsigned int du;
-    Window dw;
+    int ox, oy;
     XEvent ev;
 
-    if (arg && arg->v) {
-        const XEvent *bev = (const XEvent *)arg->v;
-        c = find_client(bev->xbutton.window);
-    }
+    if (!arg || !arg->v) return;
+    const XEvent *bev = (const XEvent *)arg->v;
+    c = find_client(bev->xbutton.window);
     if (!c) {
         SELCLIENT(c);
     }
@@ -1585,16 +1561,8 @@ void movemouse(const Arg *arg)
         togglefloating(&a);
     }
 
-    if (arg && arg->v) {
-        const XEvent *bev = (const XEvent *)arg->v;
-        ox = bev->xbutton.x_root - c->x;
-        oy = bev->xbutton.y_root - c->y;
-    } else {
-        if (!XQueryPointer(dpy, root, &dw, &dw, &ox, &oy, &di, &di, &du))
-            return;
-        ox -= c->x;
-        oy -= c->y;
-    }
+    ox = bev->xbutton.x_root - c->x;
+    oy = bev->xbutton.y_root - c->y;
 
     if (grab_mouse_motion(dpy) != GrabSuccess)
         return;
