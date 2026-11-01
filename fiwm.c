@@ -957,8 +957,6 @@ static void focusworkspace_step(const Arg *);
 static void focuscmd(const Arg *);
 static void movecmd(const Arg *);
 static void setlayoutcmd(const Arg *);
-static void movemouse(const Arg *);
-static void resizemouse(const Arg *);
 
 #define gappx 0
 #define borderpx 1
@@ -1539,16 +1537,6 @@ static void dragmouse(const Arg *arg, int is_resize)
     }
 }
 
-void movemouse(const Arg *arg)
-{
-    dragmouse(arg, 0);
-}
-
-void resizemouse(const Arg *arg)
-{
-    dragmouse(arg, 1);
-}
-
 static inline int _xinerama_req_reply(Display *d, unsigned char rep[32]) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 98;
@@ -1835,10 +1823,7 @@ void buttonpress(XEvent *e)
             focus(selmon, c->node);
 
         Arg a = {.v = e};
-        if (e->xbutton.button == Button1)
-            movemouse(&a);
-        else if (e->xbutton.button == Button3)
-            resizemouse(&a);
+        dragmouse(&a, e->xbutton.button == Button3);
         return;
     }
 
