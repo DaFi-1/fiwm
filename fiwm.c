@@ -637,17 +637,9 @@ static inline void xwire_op_resource(Display *d, unsigned int opcode, unsigned i
 #define XMapWindow(d, w)      xwire_op_resource((d), 8, (unsigned int)(w))
 #define XUnmapWindow(d, w)    xwire_op_resource((d), 10, (unsigned int)(w))
 #define XDestroyWindow(d, w)  xwire_op_resource((d), 4, (unsigned int)(w))
-#define XFreePixmap(d, pm)    xwire_op_resource((d), 54, (unsigned int)(pm))
-#define XFreeGC(d, gc)        xwire_op_resource((d), 60, (unsigned int)(unsigned long)(gc))
 #define ungrab_mouse(d)       xwire_op_resource((d), 27, 0)
 
-static inline void set_input_focus(Display *d, Window w) {
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 12);
-    p[0] = (3 << 16) | (1 << 8) | 42;
-    p[1] = (unsigned int)w;
-    p[2] = 0;
-}
-#define XSetInputFocus(d, w, r, t) set_input_focus(d, w)
+
 
 static inline void XGrabKey(Display *d, int keycode, unsigned int mod) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
@@ -1428,7 +1420,10 @@ void unmanage(Client *c)
 
 static void set_active_focus(Window w)
 {
-    set_input_focus(dpy, w ? w : root);
+    unsigned int *p = (unsigned int *)_xwire_reserve(dpy->fd, 12);
+    p[0] = (3 << 16) | (1 << 8) | 42; /* X_SetInputFocus: revert_to=PointerRoot (1) */
+    p[1] = (unsigned int)(w ? w : root);
+    p[2] = 0;
     unsigned int win_id = (unsigned int)w;
     XChangeProperty32(dpy, root, atoms[NET_ACTIVE_WINDOW],
                       XA_WINDOW, &win_id, 1);
