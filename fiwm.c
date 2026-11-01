@@ -1387,7 +1387,7 @@ Node *node_detach(Node *n, Workspace *ws)
         }
 
         node_free(parent);
-        newfocus = sibling->is_leaf ? sibling : node_first_leaf(sibling);
+        newfocus = node_first_leaf(sibling);
     }
     node_free(n);
     ws->focus = newfocus;
