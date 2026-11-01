@@ -685,27 +685,18 @@ static inline void XMoveResizeWindow(Display *d, Window w, int x, int y, unsigne
     p[6] = height;
 }
 
-static inline void XMoveWindow(Display *d, Window w, int x, int y) {
+static inline void configure_window_2d(Display *d, Window w, unsigned int mask, int v1, int v2) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 20);
     p[0] = (5 << 16) | 12;
     p[1] = (unsigned int)w;
-    p[2] = 3;
-    p[3] = (unsigned int)x;
-    p[4] = (unsigned int)y;
+    p[2] = mask;
+    p[3] = (unsigned int)v1;
+    p[4] = (unsigned int)v2;
 }
 
-static inline void hide_window(Display *d, Window w) {
-    XMoveWindow(d, w, -9999, -9999);
-}
-
-static inline void XResizeWindow(Display *d, Window w, unsigned int width, unsigned int height) {
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 20);
-    p[0] = (5 << 16) | 12;
-    p[1] = (unsigned int)w;
-    p[2] = 12;
-    p[3] = width;
-    p[4] = height;
-}
+#define XMoveWindow(d, w, x, y) configure_window_2d((d), (w), 3, (int)(x), (int)(y))
+#define XResizeWindow(d, w, width, height) configure_window_2d((d), (w), 12, (int)(width), (int)(height))
+#define hide_window(d, w) configure_window_2d((d), (w), 3, -9999, -9999)
 
 static inline void XMapWindow(Display *d, Window w) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 8);
