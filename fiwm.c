@@ -1103,12 +1103,6 @@ static Client *client_freelist;
 static char heap[HEAP_SIZE];
 static unsigned long heap_ptr;
 
-static char *strchrnul(const char *s, int c)
-{
-    while (*s && *s != (char)c) s++;
-    return (char *)s;
-}
-
 static void *ecalloc(size_t size)
 {
     size_t total = (size + 7UL) & ~7UL;
@@ -1123,22 +1117,23 @@ static void try_exec(const char *file, char *const argv[])
 {
     char buf[256];
 
-    if (*strchrnul(file, '/') == '/') {
-        sys_execve(file, argv, envp_global);
-        return;
+    for (const char *s = file; *s; s++) {
+        if (*s == '/') {
+            sys_execve(file, argv, envp_global);
+            return;
+        }
     }
 
     const char *p = env_path;
     while (*p) {
-        const char *next = strchrnul(p, ':');
         char *d = buf;
-        while (p < next) *d++ = *p++;
+        while (*p && *p != ':') *d++ = *p++;
         *d++ = '/';
         const char *s = file;
         while (*s) *d++ = *s++;
         *d = '\0';
         sys_execve(buf, argv, envp_global);
-        p = *next ? next + 1 : next;
+        if (*p) p++;
     }
 }
 
