@@ -1604,7 +1604,6 @@ void movemouse(const Arg *arg)
                 }
             }
             ungrab_mouse(dpy);
-            focus(selmon, selmon->ws->focus);
             arrange(selmon);
             return;
         }
@@ -1661,7 +1660,6 @@ void resizemouse(const Arg *arg)
                 c->h = MAX(1, c->h);
             }
             ungrab_mouse(dpy);
-            focus(selmon, selmon->ws->focus);
             arrange(selmon);
             return;
         }
@@ -2031,7 +2029,7 @@ void buttonpress(XEvent *e)
 
     if (c && c->node) {
         m = mon_from_tag(c->workspace);
-        if (m) {
+        if (m && m->ws->focus != c->node) {
             focus(m, c->node);
             arrange(m);
             return;
