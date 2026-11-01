@@ -1446,7 +1446,7 @@ Monitor *mon_from_tag(short tag)
     return NULL;
 }
 
-void movemouse(const Arg *arg)
+static void dragmouse(const Arg *arg, int is_resize)
 {
     Client *c = NULL;
     int ox, oy;
@@ -1456,34 +1456,56 @@ void movemouse(const Arg *arg)
     const XEvent *bev = (const XEvent *)arg->v;
     c = find_client(bev->xbutton.window);
     if (!c) c = selclient();
+    if (!c) return;
 
     if (!(c->flags & FLAG_FLOATING)) {
         Arg a = {0};
         togglefloating(&a);
     }
 
-    ox = bev->xbutton.x_root - c->x;
-    oy = bev->xbutton.y_root - c->y;
+    ox = is_resize ? c->x : bev->xbutton.x_root - c->x;
+    oy = is_resize ? c->y : bev->xbutton.y_root - c->y;
 
     if (grab_mouse_motion(dpy) != GrabSuccess)
         return;
 
     for (;;) {
         XNextEvent(dpy, &ev);
-        switch (ev.type) {
-        case MotionNotify:
-            XMoveWindow(dpy, c->win,
-                        ev.xmotion.x_root - ox,
-                        ev.xmotion.y_root - oy);
+        if (ev.type == MotionNotify) {
+            if (is_resize) {
+                XResizeWindow(dpy, c->win,
+                              MAX(1, ev.xmotion.x_root - ox),
+                              MAX(1, ev.xmotion.y_root - oy));
+            } else {
+                XMoveWindow(dpy, c->win,
+                            ev.xmotion.x_root - ox,
+                            ev.xmotion.y_root - oy);
+            }
             _xwire_flush(dpy->fd);
-            break;
-        case ButtonRelease:
-            c->x = ev.xbutton.x_root - ox;
-            c->y = ev.xbutton.y_root - oy;
-            {
+        } else if (ev.type == ButtonRelease) {
+            Monitor *target_mon = selmon;
+            if (is_resize) {
+                c->w = MAX(1, ev.xbutton.x_root - ox);
+                c->h = MAX(1, ev.xbutton.y_root - oy);
+                for (Monitor *tm = mons; tm; tm = tm->next) {
+                    if (c->x >= tm->x && c->x < tm->x + tm->w &&
+                        c->y >= tm->y && c->y < tm->y + tm->h) {
+                        target_mon = tm;
+                        break;
+                    }
+                }
+                int b2 = borderpx << 1;
+                if (c->x + c->w + b2 > target_mon->x + target_mon->w)
+                    c->w = target_mon->x + target_mon->w - c->x - b2;
+                if (c->y + c->h + b2 > target_mon->y + target_mon->h)
+                    c->h = target_mon->y + target_mon->h - c->y - b2;
+                c->w = MAX(1, c->w);
+                c->h = MAX(1, c->h);
+            } else {
+                c->x = ev.xbutton.x_root - ox;
+                c->y = ev.xbutton.y_root - oy;
                 int midx = c->x + (c->w >> 1);
                 int midy = c->y + (c->h >> 1);
-                Monitor *target_mon = selmon;
                 for (Monitor *tm = mons; tm; tm = tm->next) {
                     if (midx >= tm->x && midx < tm->x + tm->w &&
                         midy >= tm->y && midy < tm->y + tm->h) {
@@ -1517,59 +1539,16 @@ void movemouse(const Arg *arg)
     }
 }
 
+void movemouse(const Arg *arg)
+{
+    dragmouse(arg, 0);
+}
+
 void resizemouse(const Arg *arg)
 {
-    Client *c = NULL;
-    XEvent ev;
-
-    if (arg && arg->v) {
-        const XEvent *bev = (const XEvent *)arg->v;
-        c = find_client(bev->xbutton.window);
-    }
-    if (!c) c = selclient();
-
-    if (!(c->flags & FLAG_FLOATING)) {
-        Arg a = {0};
-        togglefloating(&a);
-    }
-
-    if (grab_mouse_motion(dpy) != GrabSuccess)
-        return;
-
-    for (;;) {
-        XNextEvent(dpy, &ev);
-        switch (ev.type) {
-        case MotionNotify:
-            XResizeWindow(dpy, c->win,
-                          MAX(1, ev.xmotion.x_root - c->x),
-                          MAX(1, ev.xmotion.y_root - c->y));
-            _xwire_flush(dpy->fd);
-            break;
-        case ButtonRelease:
-            c->w = MAX(1, ev.xbutton.x_root - c->x);
-            c->h = MAX(1, ev.xbutton.y_root - c->y);
-            {
-                Monitor *m = selmon;
-                for (Monitor *tm = mons; tm; tm = tm->next) {
-                    if (c->x >= tm->x && c->x < tm->x + tm->w &&
-                        c->y >= tm->y && c->y < tm->y + tm->h) {
-                        m = tm;
-                        break;
-                    }
-                }
-                if (c->x + c->w + (borderpx << 1) > m->x + m->w)
-                    c->w = m->x + m->w - c->x - (borderpx << 1);
-                if (c->y + c->h + (borderpx << 1) > m->y + m->h)
-                    c->h = m->y + m->h - c->y - (borderpx << 1);
-                c->w = MAX(1, c->w);
-                c->h = MAX(1, c->h);
-            }
-            ungrab_mouse(dpy);
-            arrange(selmon);
-            return;
-        }
-    }
+    dragmouse(arg, 1);
 }
+
 static inline int _xinerama_req_reply(Display *d, unsigned char rep[32]) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 98;
