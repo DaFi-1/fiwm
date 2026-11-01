@@ -1115,10 +1115,8 @@ Node *node_new(void)
     } else {
         n = &nodepool[nodeidx++];
     }
+    __builtin_memset(n, 0, sizeof(Node));
     n->is_leaf = 1;
-    n->split   = 0;
-    n->parent  = NULL;
-    n->u.client = NULL;
     return n;
 }
 
