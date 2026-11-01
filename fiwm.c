@@ -1549,10 +1549,6 @@ void arrange(Monitor *m)
         XRaiseWindow(dpy, fs->win);
     }
 
-    if (m->ws->focus && m->ws->focus->u.client && m->ws->focus->u.client != fs) {
-        XSetWindowBorder(dpy, m->ws->focus->u.client->win, border_active);
-    }
-
     drawbar(m);
     XFlush(dpy);
 }
