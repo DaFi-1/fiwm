@@ -1055,7 +1055,6 @@ struct Client {
     Client *next;
     Client *prev;
     unsigned short x, y, w, h;
-    unsigned short tile_x, tile_y, tile_w, tile_h;
     short workspace;
     unsigned short flags;
 };
@@ -2296,8 +2295,6 @@ void togglefloating(const Arg *arg)
 
     c->flags ^= FLAG_FLOATING;
     if (c->flags & FLAG_FLOATING) {
-        c->tile_x = c->x; c->tile_y = c->y;
-        c->tile_w = c->w; c->tile_h = c->h;
         fw = ((unsigned int)selmon->w * 39322U) >> 16;
         fh = ((unsigned int)selmon->h * 39322U) >> 16;
         c->x = selmon->x + ((selmon->w - fw) >> 1);
@@ -2306,8 +2303,6 @@ void togglefloating(const Arg *arg)
         c->workspace = selmon->curtag;
         XRaiseWindow(dpy, c->win);
     } else {
-        c->x = c->tile_x; c->y = c->tile_y;
-        c->w = c->tile_w; c->h = c->tile_h;
         if (!c->node)
             node_insert(selmon, c);
     }
