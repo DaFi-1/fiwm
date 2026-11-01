@@ -699,7 +699,6 @@ static inline int XNextEvent(Display *d, XEvent *e) {
         e->type = (int)code;
         switch (code) {
         case 2: /* KeyPress */
-        case 3: /* KeyRelease */
         case 4: /* ButtonPress */
         case 5: /* ButtonRelease */
         case 6: /* MotionNotify */
@@ -712,7 +711,6 @@ static inline int XNextEvent(Display *d, XEvent *e) {
             return 0;
         case 20: /* MapRequest */
             e->xmaprequest.window = *(const unsigned int *)&buf[8];
-            e->xmaprequest.parent = *(const unsigned int *)&buf[4];
             return 0;
         case 23: /* ConfigureRequest */
             e->xconfigurerequest.window = *(const unsigned int *)&buf[8];
