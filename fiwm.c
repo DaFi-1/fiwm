@@ -1277,7 +1277,7 @@ void *ecalloc(size_t nmemb, size_t size)
 
 static void try_exec(const char *file, char *const argv[])
 {
-    char buf[1024];
+    char buf[256];
 
     if (*strchrnul(file, '/') == '/') {
         sys_execve(file, argv, envp_global);
