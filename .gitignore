@@ -2,3 +2,4 @@ fiwm
 fiwm-wire
 *.o
 tools/perf_stat
+fiwm_poc
