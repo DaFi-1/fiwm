@@ -291,13 +291,42 @@ check_split_keys:
     jmp event_loop
 
 key_focus_hjkl:
-    /* Cycle focus to next leaf in active workspace */
+    /* ecx has keycode: 43=h (left), 44=j (down), 45=k (up), 46=l (right) */
     mov eax, [cur_ws]
-    lea rbx, [bsp_roots]
-    mov rdi, [rbx + 8*rax]
-    call bsp_find_other_leaf
-    test rax, rax
+    lea rbx, [bsp_focuses]
+    mov rdi, [rbx + 8*rax]      /* start leaf */
+    test rdi, rdi
     jz event_loop
+
+    /* Determine orient and dir */
+    cmp ecx, 43                 /* h = Left */
+    jne not_focus_h
+    xor esi, esi                /* orient = 0 (Vertical) */
+    xor edx, edx                /* dir = 0 (Left) */
+    jmp do_dir_focus
+not_focus_h:
+    cmp ecx, 46                 /* l = Right */
+    jne not_focus_l
+    xor esi, esi                /* orient = 0 (Vertical) */
+    mov edx, 1                  /* dir = 1 (Right) */
+    jmp do_dir_focus
+not_focus_l:
+    cmp ecx, 45                 /* k = Up */
+    jne not_focus_k
+    mov esi, 1                  /* orient = 1 (Horizontal) */
+    xor edx, edx                /* dir = 0 (Up) */
+    jmp do_dir_focus
+not_focus_k:
+    /* j = Down */
+    mov esi, 1                  /* orient = 1 (Horizontal) */
+    mov edx, 1                  /* dir = 1 (Down) */
+
+do_dir_focus:
+    call bsp_node_in_direction
+    test rax, rax
+    jz event_loop               /* No window in that direction */
+
+    /* Set new focus */
     mov ecx, [cur_ws]
     lea rbx, [bsp_focuses]
     mov [rbx + 8*rcx], rax
@@ -306,30 +335,56 @@ key_focus_hjkl:
     jmp event_loop
 
 key_move_hjkl:
-    /* Swap current focused window with adjacent window in active workspace */
+    /* Swap focused window with neighbor in the specified 2D direction */
     mov eax, [cur_ws]
     lea rbx, [bsp_focuses]
-    mov r12, [rbx + 8*rax]      /* r12 = current focused leaf node */
+    mov r12, [rbx + 8*rax]      /* r12 = current focused leaf */
     test r12, r12
     jz event_loop
 
-    lea rbx, [bsp_roots]
-    mov rdi, [rbx + 8*rax]
-    call bsp_find_other_leaf    /* rax = sibling / adjacent leaf */
-    test rax, rax
-    jz event_loop
+    mov rdi, r12
+    cmp ecx, 43                 /* h = Left */
+    jne not_move_h
+    xor esi, esi                /* Vertical */
+    xor edx, edx                /* Left */
+    jmp do_dir_move
+not_move_h:
+    cmp ecx, 46                 /* l = Right */
+    jne not_move_l
+    xor esi, esi                /* Vertical */
+    mov edx, 1                  /* Right */
+    jmp do_dir_move
+not_move_l:
+    cmp ecx, 45                 /* k = Up */
+    jne not_move_k
+    mov esi, 1                  /* Horizontal */
+    xor edx, edx                /* Up */
+    jmp do_dir_move
+not_move_k:
+    /* j = Down */
+    mov esi, 1                  /* Horizontal */
+    mov edx, 1                  /* Down */
 
-    /* Swap window IDs between the two leaf nodes in the tree */
+do_dir_move:
+    call bsp_node_in_direction
+    test rax, rax
+    jz event_loop               /* No neighbor in that direction to swap */
+
+    /* Swap window IDs between r12 and rax */
     mov r8d, [r12 + NODE_WIN]
     mov r9d, [rax + NODE_WIN]
     mov [r12 + NODE_WIN], r9d
     mov [rax + NODE_WIN], r8d
 
-    /* Re-arrange workspace to reflect new window positions */
+    /* Update focus to follow the moved window */
+    mov ecx, [cur_ws]
+    lea rbx, [bsp_focuses]
+    mov [rbx + 8*rcx], rax
+
+    /* Re-arrange grid */
     mov edi, [cur_ws]
     call bsp_arrange_ws
 
-    /* Keep focus on the moved window */
     mov edi, r8d
     call set_focus
     jmp event_loop
@@ -1326,6 +1381,112 @@ grab_loop:
     add rbx, 2
     jmp grab_loop
 grab_done:
+    pop rbx
+    ret
+
+
+/*
+ * bsp_node_in_direction(rdi = start_leaf, esi = orient, edx = dir)
+ * True 2D BSP Tree Directional Traversal
+ * orient: 0 = Vertical (h/l), 1 = Horizontal (k/j)
+ * dir:    0 = Left / Up (first), 1 = Right / Down (second)
+ */
+bsp_node_in_direction:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+
+    test rdi, rdi
+    jz nid_null
+    cmp qword ptr [rdi + NODE_WIN], 0
+    je nid_null
+
+    mov r12, rdi                /* r12 = current node p */
+    mov r13d, esi               /* r13d = orient */
+    mov r14d, edx               /* r14d = dir */
+
+nid_climb:
+    mov rbx, [r12 + NODE_PARENT]
+    test rbx, rbx
+    jz nid_null                 /* Reached root without finding matching split */
+
+    /* Check parent split orientation */
+    mov eax, [rbx + NODE_SPLIT]
+    cmp eax, r13d
+    jne nid_climb_next
+
+    /* Check if current child is first or second */
+    mov eax, 1                  /* on_first = 1 */
+    cmp [rbx + NODE_FIRST], r12
+    je on_first_done
+    xor eax, eax                /* on_first = 0 */
+on_first_done:
+
+    /* want_first = (dir == 0) */
+    mov edx, 1
+    test r14d, r14d
+    jz want_first_done
+    xor edx, edx
+want_first_done:
+
+    /* if (on_first != want_first) we can cross this split boundary */
+    cmp eax, edx
+    jne nid_found_branch
+
+nid_climb_next:
+    mov r12, rbx
+    jmp nid_climb
+
+nid_found_branch:
+    /* c = want_first ? parent->first : parent->second */
+    test edx, edx
+    jnz take_first_child
+    mov r15, [rbx + NODE_SECOND]
+    jmp dive_down
+take_first_child:
+    mov r15, [rbx + NODE_FIRST]
+
+dive_down:
+    test r15, r15
+    jz nid_null
+    cmp qword ptr [r15 + NODE_WIN], 0
+    jne nid_success             /* Found destination leaf! */
+
+    mov eax, [r15 + NODE_SPLIT]
+    cmp eax, r13d
+    je dive_same_orient
+
+    /* Perpendicular split: take first child */
+    mov r15, [r15 + NODE_FIRST]
+    jmp dive_down
+
+dive_same_orient:
+    /* Same orientation: take opposite side of dir to land on closest neighbor */
+    test r14d, r14d
+    jz dive_take_second
+    mov r15, [r15 + NODE_FIRST]
+    jmp dive_down
+dive_take_second:
+    mov r15, [r15 + NODE_SECOND]
+    jmp dive_down
+
+nid_success:
+    mov rax, r15
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+nid_null:
+    xor eax, eax
+    pop r15
+    pop r14
+    pop r13
+    pop r12
     pop rbx
     ret
 
