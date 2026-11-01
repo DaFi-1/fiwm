@@ -55,6 +55,15 @@ test-shortcuts: fiwm
 test-dual: fiwm
 	./test_dual_monitor.sh
 
+tools/perf_stat: tools/perf_stat.c
+	$(CC) -O2 tools/perf_stat.c -o tools/perf_stat
+
+perf-test-dual: fiwm tools/perf_stat
+	./tools/perf_stat ./test_dual_monitor.sh
+
+perf-test: fiwm tools/perf_stat
+	./tools/perf_stat ./test_all_shortcuts.sh
+
 test-all: test-shortcuts test-dual
 
-.PHONY: all clean install uninstall check-elf test test-shortcuts test-dual test-all
+.PHONY: all clean install uninstall check-elf test test-shortcuts test-dual test-all perf-test perf-test-dual
