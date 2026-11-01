@@ -443,11 +443,11 @@ do_dir_move:
     jmp event_loop
 
 key_split_h:
-    mov dword ptr [next_split_sel], 2   /* 2 = horizontal */
+    mov byte ptr [next_split_sel], 2   /* 2 = horizontal */
     jmp event_loop
 
 key_split_v:
-    mov dword ptr [next_split_sel], 1   /* 1 = vertical */
+    mov byte ptr [next_split_sel], 1   /* 1 = vertical */
     jmp event_loop
 
 key_ws_prev:
@@ -513,8 +513,8 @@ key_fullscreen:
     test edx, edx
     jz event_loop
 
-    xor dword ptr [is_fullscreen], 1
-    cmp dword ptr [is_fullscreen], 1
+    xor byte ptr [is_fullscreen], 1
+    cmp byte ptr [is_fullscreen], 1
     jne fs_restore
 
     /* Set fullscreen on target monitor */
@@ -1260,8 +1260,8 @@ ws_has_focus:
     mov [r13 + NODE_WS], r14b
 
     /* Determine split direction: 1 = V, 2 = H, 0 = auto */
-    mov ecx, [next_split_sel]
-    test ecx, ecx
+    movzx ecx, byte ptr [next_split_sel]
+    test cl, cl
     jnz ws_use_chosen
 
     /* Alternate split */
@@ -1276,8 +1276,8 @@ ws_def_v:
     jmp ws_apply_split
 
 ws_use_chosen:
-    dec ecx                     /* 1 -> 0 (V), 2 -> 1 (H) */
-    mov dword ptr [next_split_sel], 0
+    dec cl                      /* 1 -> 0 (V), 2 -> 1 (H) */
+    mov byte ptr [next_split_sel], 0
 
 ws_apply_split:
     mov dword ptr [r13 + NODE_WIN], 0
@@ -1618,45 +1618,63 @@ arrange_ret:
     ret
 
 /*
- * Helper: Grab key on root window
+ * grab_all_keys:
+ * Batches all X_GrabKey requests into `in_buf` (4096 bytes) and issues
+ * exactly ONE atomic `sys_write` syscall instead of 72 individual syscalls!
  */
-grab_one_key:
-    mov dword ptr [out_buf + 0], (4 << 16) | (1 << 8) | 33
-    mov eax, [root_win]
-    mov dword ptr [out_buf + 4], eax
-    shl edi, 16
+grab_all_keys:
+    push rbx
+    push r12
+    push r13
+
+    lea rbx, [shortcut_keys]
+    lea r12, [in_buf]           /* destination write pointer */
+    mov r13d, [root_win]
+
+grab_batch_loop:
+    movzx edi, byte ptr [rbx]   /* keycode */
+    test edi, edi
+    jz grab_batch_send
+    movzx esi, byte ptr [rbx + 1] /* modifiers */
+
+    /* Emit standard combo */
+    mov dword ptr [r12 + 0], (4 << 16) | (1 << 8) | 33
+    mov [r12 + 4], r13d
+    mov eax, edi
+    shl eax, 16
     and esi, 0xFFFF
-    or edi, esi
-    or edi, (1 << 24)
-    mov [out_buf + 8], edi
-    mov dword ptr [out_buf + 12], 1
+    or eax, esi
+    or eax, (1 << 24)
+    mov [r12 + 8], eax
+    mov dword ptr [r12 + 12], 1
+    add r12, 16
+
+    /* Emit NumLock/CapsLock combo (modifiers | 0x10) */
+    mov dword ptr [r12 + 0], (4 << 16) | (1 << 8) | 33
+    mov [r12 + 4], r13d
+    or eax, 0x10                /* add NumLock mask to modifiers word */
+    mov [r12 + 8], eax
+    mov dword ptr [r12 + 12], 1
+    add r12, 16
+
+    add rbx, 2
+    jmp grab_batch_loop
+
+grab_batch_send:
+    /* Calculate total bytes: r12 - in_buf */
+    lea rax, [in_buf]
+    sub r12, rax                /* r12 = total byte count */
+    jz grab_batch_done
 
     mov eax, SYS_WRITE
     mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, 16
+    lea rsi, [in_buf]
+    mov edx, r12d
     syscall
-    ret
 
-grab_all_keys:
-    push rbx
-    lea rbx, [shortcut_keys]
-grab_loop:
-    movzx rdi, byte ptr [rbx]
-    test rdi, rdi
-    jz grab_done
-    movzx rsi, byte ptr [rbx + 1]
-    push rbx
-    call grab_one_key
-    /* Also grab with CapsLock / NumLock */
-    movzx rdi, byte ptr [rbx]
-    movzx rsi, byte ptr [rbx + 1]
-    or esi, 0x10
-    call grab_one_key
-    pop rbx
-    add rbx, 2
-    jmp grab_loop
-grab_done:
+grab_batch_done:
+    pop r13
+    pop r12
     pop rbx
     ret
 
@@ -1892,8 +1910,9 @@ bar_gc:         .long 0
 saved_envp:     .quad 0
 
 cur_ws:         .long 0         /* Active Workspace (0..8) */
-next_split_sel: .long 0         /* 0 = auto, 1 = V, 2 = H */
-is_fullscreen:  .long 0
+next_split_sel: .byte 0         /* 0 = auto, 1 = V, 2 = H */
+is_fullscreen:  .byte 0
+                .align 4
 
 /* Monitor configuration: up to 2 monitors (16 bytes each: x, y, w, h) */
 mon_count:      .long 0
