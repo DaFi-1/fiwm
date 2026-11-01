@@ -846,24 +846,17 @@ static inline int XGetWindowAttributes(Display *d, Window w, XWindowAttributes *
     return 1;
 }
 
-static inline void XChangeProperty(Display *d, Window w, Atom prop, Atom type, int fmt, int mode, const unsigned char *data, int nelem) {
-    if (!d || !w || !prop || !data || nelem <= 0) return;
-    int data_bytes = (fmt == 32) ? (nelem << 2) : ((fmt == 16) ? (nelem << 1) : nelem);
-    int pad = (-data_bytes) & 3;
-    int total_bytes = 24 + data_bytes + pad;
-    int words = total_bytes >> 2;
-
+static inline void XChangeProperty32(Display *d, Window w, Atom prop, Atom type, const void *data, int nelem) {
+    int words = 6 + nelem;
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, words << 2);
-    p[0] = (words << 16) | ((mode & 0xFF) << 8) | 18; /* X_ChangeProperty */
+    p[0] = (words << 16) | 18; /* X_ChangeProperty: mode=PropModeReplace (0) */
     p[1] = (unsigned int)w;
     p[2] = (unsigned int)prop;
     p[3] = (unsigned int)type;
-    p[4] = ((unsigned int)fmt) & 0xFF;
+    p[4] = 32;
     p[5] = (unsigned int)nelem;
-
-    unsigned char *dp = (unsigned char *)&p[6];
-    for (int i = 0; i < data_bytes; i++) dp[i] = data[i];
-    for (int i = 0; i < pad; i++) dp[data_bytes + i] = 0;
+    const unsigned int *src = (const unsigned int *)data;
+    for (int i = 0; i < nelem; i++) p[6 + i] = src[i];
 }
 
 static inline int grab_mouse_motion(Display *d) {
@@ -1455,9 +1448,9 @@ void unmanage(Client *c)
 static void set_active_focus(Window w)
 {
     set_input_focus(dpy, w ? w : root);
-    XChangeProperty(dpy, root, atoms[NET_ACTIVE_WINDOW],
-                    XA_WINDOW, 32, PropModeReplace,
-                    (unsigned char *)&w, 1);
+    unsigned int win_id = (unsigned int)w;
+    XChangeProperty32(dpy, root, atoms[NET_ACTIVE_WINDOW],
+                      XA_WINDOW, &win_id, 1);
 }
 
 void focus(Monitor *m, Node *n)
@@ -2258,16 +2251,15 @@ void setup(void)
         while (*an++) ;
     }
 
-    XChangeProperty(dpy, root,
+    XChangeProperty32(dpy, root,
         atoms[NET_SUPPORTED],
-        XA_ATOM, 32, PropModeReplace,
-        (unsigned char *)&atoms[NET_WM_STATE], 3);
+        XA_ATOM, &atoms[NET_WM_STATE], 3);
 
     {
-        unsigned long nd = WORKSPACE_COUNT;
-        XChangeProperty(dpy, root,
+        unsigned int nd = WORKSPACE_COUNT;
+        XChangeProperty32(dpy, root,
             atoms[NET_NUMBER_OF_DESKTOPS],
-            XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&nd, 1);
+            XA_CARDINAL, &nd, 1);
     }
 
     XSelectInput(dpy, root, SubstructureRedirectMask | SubstructureNotifyMask |
