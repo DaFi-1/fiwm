@@ -2068,13 +2068,7 @@ void movecmd(const Arg *arg)
 
         c->workspace = tag;
         tree_insert(&workspaces[tag], c, SPLIT_VERTICAL);
-        Monitor *target_m = NULL;
-        for (Monitor *tm = mons; tm; tm = tm->next) {
-            if (tm->curtag == tag) {
-                target_m = tm;
-                break;
-            }
-        }
+        Monitor *target_m = mon_from_tag(tag);
         if (target_m) {
             arrange(target_m);
         } else {
