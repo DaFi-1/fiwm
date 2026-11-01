@@ -1594,36 +1594,19 @@ void resizemouse(const Arg *arg)
         }
     }
 }
-static int _xinerama_opcode = 0;
-
-static inline int _xwire_query_xinerama(Display *d) {
-    if (!d) return 0;
-    if (_xinerama_opcode > 0) return _xinerama_opcode;
-    if (_xinerama_opcode < 0) return 0;
+static inline int _xinerama_req_reply(Display *d, unsigned char rep[32]) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 98;
     p[1] = 8;
     *(unsigned long *)&p[2] = 0x414d4152454e4958ULL; /* "XINERAMA" */
     _xwire_flush(d->fd);
 
-    unsigned char rep[32];
-    if (_xwire_read(d->fd, rep, 32) != 32 || rep[0] != 1) {
-        _xinerama_opcode = -1;
+    if (_xwire_read(d->fd, rep, 32) != 32 || rep[0] != 1 || !rep[8])
         return 0;
-    }
-    if (!rep[8]) {
-        _xinerama_opcode = -1;
-        return 0;
-    }
-    _xinerama_opcode = (int)rep[9];
-    return _xinerama_opcode;
-}
 
-static inline int _xinerama_req_reply(Display *d, unsigned int minor, unsigned char rep[32]) {
-    int op = _xwire_query_xinerama(d);
-    if (!op) return 0;
-    unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 4);
-    *p = (1 << 16) | (minor << 8) | op;
+    unsigned int op = rep[9];
+    p = (unsigned int *)_xwire_reserve(d->fd, 4);
+    *p = (1 << 16) | (5 << 8) | op; /* minor 5: XineramaQueryScreens */
     _xwire_flush(d->fd);
     return (_xwire_read(d->fd, rep, 32) == 32 && rep[0] == 1);
 }
@@ -1659,7 +1642,7 @@ void updategeom(void)
     int nunique = 0;
     static unsigned long unique[16];
 
-    if (_xinerama_req_reply(dpy, 5, rep)) {
+    if (_xinerama_req_reply(dpy, rep)) {
         unsigned int count = *(unsigned int *)&rep[8];
         for (unsigned int i = 0; i < count && nunique < 16; i++) {
             unsigned char s[8];
