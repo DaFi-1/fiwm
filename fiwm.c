@@ -801,13 +801,7 @@ static inline Atom intern_atom(Display *d, const char *name) {
     _xwire_flush(d->fd);
 
     unsigned char rep[32];
-    int rep_read = 0;
-    while (rep_read < 32) {
-        int r = _xwire_read(d->fd, rep + rep_read, 32 - rep_read);
-        if (r <= 0) break;
-        rep_read += r;
-    }
-    if (rep_read == 32 && rep[0] == 1) {
+    if (_xwire_read(d->fd, rep, 32) == 32 && rep[0] == 1) {
         return (Atom)*(unsigned int *)&rep[8];
     }
     return 0;
