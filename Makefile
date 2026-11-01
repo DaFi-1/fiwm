@@ -10,7 +10,7 @@ CFLAGS  = -std=c99 -pedantic -Wall -Wextra -Wno-unused-parameter \
           -ffreestanding -fno-builtin -fno-stack-protector -fomit-frame-pointer \
           -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-ident \
           -fmerge-all-constants -fno-plt -flto -fwhole-program -march=${MARCH} \
-          -Os -ffunction-sections -fdata-sections
+          -Oz -ffunction-sections -fdata-sections
 
 LDFLAGS = -nostdlib -static -flto -Wl,--gc-sections -Wl,--build-id=none \
           -Wl,--no-eh-frame-hdr -Wl,-z,norelro -Wl,-n \
