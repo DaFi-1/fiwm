@@ -2248,13 +2248,15 @@ void setup(void)
     root = RootWindow(dpy, XDefaultScreen(dpy));
 
 
-    static const char *const atom_names[] = {
-        "WM_PROTOCOLS", "WM_DELETE_WINDOW",
-        "_NET_SUPPORTED", "_NET_NUMBER_OF_DESKTOPS",
-        "_NET_WM_STATE", "_NET_WM_STATE_FULLSCREEN", "_NET_ACTIVE_WINDOW"
-    };
-    for (int i = 0; i < ATOM_LAST; i++)
-        atoms[i] = XInternAtom(dpy, atom_names[i], False);
+    static const char atom_names[] =
+        "WM_PROTOCOLS\0" "WM_DELETE_WINDOW\0"
+        "_NET_SUPPORTED\0" "_NET_NUMBER_OF_DESKTOPS\0"
+        "_NET_WM_STATE\0" "_NET_WM_STATE_FULLSCREEN\0" "_NET_ACTIVE_WINDOW\0";
+    const char *an = atom_names;
+    for (int i = 0; i < ATOM_LAST; i++) {
+        atoms[i] = XInternAtom(dpy, an, False);
+        while (*an++) ;
+    }
 
     XChangeProperty(dpy, root,
         atoms[NET_SUPPORTED],
