@@ -47,21 +47,22 @@
 .equ BAR_HEIGHT,      18
 
 /*
- * Node Structure (64 bytes aligned):
- * offset 0:  qword client_win (if leaf) OR 0 (if internal split node)
- * offset 8:  qword first_child (pointer)
- * offset 16: qword second_child (pointer)
- * offset 24: qword parent (pointer)
- * offset 32: qword split_type (0 = vertical, 1 = horizontal)
- * offset 40: qword ws_idx (0..8)
+ * Compact Node Structure (32 bytes aligned - 50% smaller!):
+ * offset 0:  dword client_win (if leaf) OR 0 (if internal split node) [4 bytes]
+ * offset 4:  byte  split_type (0 = vertical, 1 = horizontal)          [1 byte]
+ * offset 5:  byte  ws_idx (0..8)                                      [1 byte]
+ * offset 6:  word  pad                                                [2 bytes]
+ * offset 8:  qword first_child (pointer)                              [8 bytes]
+ * offset 16: qword second_child (pointer)                             [8 bytes]
+ * offset 24: qword parent (pointer)                                   [8 bytes]
  */
 .equ NODE_WIN,     0
+.equ NODE_SPLIT,   4
+.equ NODE_WS,      5
 .equ NODE_FIRST,   8
 .equ NODE_SECOND,  16
 .equ NODE_PARENT,  24
-.equ NODE_SPLIT,   32
-.equ NODE_WS,      40
-.equ NODE_SIZE,    64
+.equ NODE_SIZE,    32
 
 .text
 _start:
@@ -721,7 +722,7 @@ mw_done:
 hide_tree_windows:
     test rdi, rdi
     jz htw_ret
-    cmp qword ptr [rdi + NODE_WIN], 0
+    cmp dword ptr [rdi + NODE_WIN], 0
     je htw_recurse
     mov edi, [rdi + NODE_WIN]
     call hide_single_win
@@ -759,7 +760,7 @@ hide_single_win:
 show_tree_windows:
     test rdi, rdi
     jz stw_ret
-    cmp qword ptr [rdi + NODE_WIN], 0
+    cmp dword ptr [rdi + NODE_WIN], 0
     je stw_recurse
     mov edi, [rdi + NODE_WIN]
     call show_single_win
@@ -1221,8 +1222,8 @@ bsp_tree_insert_into_ws:
     mov r14d, esi               /* ws_idx */
 
     call alloc_node
-    mov [rax + NODE_WIN], rdi
-    mov [rax + NODE_WS], r14
+    mov [rax + NODE_WIN], edi
+    mov [rax + NODE_WS], r14b
     mov qword ptr [rax + NODE_FIRST], 0
     mov qword ptr [rax + NODE_SECOND], 0
     mov qword ptr [rax + NODE_PARENT], 0
@@ -1256,7 +1257,7 @@ ws_split_leaf:
 ws_has_focus:
     call alloc_node
     mov r13, rax                /* r13 = new split node */
-    mov [r13 + NODE_WS], r14
+    mov [r13 + NODE_WS], r14b
 
     /* Determine split direction: 1 = V, 2 = H, 0 = auto */
     mov ecx, [next_split_sel]
@@ -1267,11 +1268,11 @@ ws_has_focus:
     mov rax, [rbx + NODE_PARENT]
     test rax, rax
     jz ws_def_v
-    mov rcx, [rax + NODE_SPLIT]
-    xor rcx, 1
+    movzx ecx, byte ptr [rax + NODE_SPLIT]
+    xor cl, 1
     jmp ws_apply_split
 ws_def_v:
-    xor ecx, ecx
+    xor cl, cl
     jmp ws_apply_split
 
 ws_use_chosen:
@@ -1279,8 +1280,8 @@ ws_use_chosen:
     mov dword ptr [next_split_sel], 0
 
 ws_apply_split:
-    mov qword ptr [r13 + NODE_WIN], 0
-    mov [r13 + NODE_SPLIT], rcx
+    mov dword ptr [r13 + NODE_WIN], 0
+    mov [r13 + NODE_SPLIT], cl
     mov rax, [rbx + NODE_PARENT]
     mov [r13 + NODE_PARENT], rax
 
@@ -1324,7 +1325,7 @@ bsp_tree_detach:
     push r14
 
     mov rbx, rdi
-    mov r14, [rbx + NODE_WS]    /* ws_idx */
+    movzx r14d, byte ptr [rbx + NODE_WS]    /* ws_idx */
     mov r12, [rbx + NODE_PARENT]
     test r12, r12
     jnz td_has_parent
@@ -1373,22 +1374,20 @@ td_done:
     ret
 
 /*
- * alloc_node() -> rax = pointer to new 64-byte aligned node
+ * alloc_node() -> rax = pointer to new 32-byte aligned node
  */
 alloc_node:
     mov eax, [node_idx]
     cmp eax, 63
     jge alloc_fail
     inc dword ptr [node_idx]
-    shl rax, 6                  /* rax * 64 bytes */
+    shl rax, 5                  /* rax * 32 bytes */
     lea rdx, [node_pool]
     add rax, rdx
-    mov qword ptr [rax + 0],  0
-    mov qword ptr [rax + 8],  0
-    mov qword ptr [rax + 16], 0
-    mov qword ptr [rax + 24], 0
-    mov qword ptr [rax + 32], 0
-    mov qword ptr [rax + 40], 0
+    mov qword ptr [rax + 0],  0  /* Clears NODE_WIN, NODE_SPLIT, NODE_WS, pad */
+    mov qword ptr [rax + 8],  0  /* Clears NODE_FIRST */
+    mov qword ptr [rax + 16], 0  /* Clears NODE_SECOND */
+    mov qword ptr [rax + 24], 0  /* Clears NODE_PARENT */
     ret
 alloc_fail:
     lea rax, [node_pool]
@@ -1398,7 +1397,7 @@ bsp_first_leaf:
     test rdi, rdi
     jz bfl_null
 bfl_loop:
-    cmp qword ptr [rdi + NODE_WIN], 0
+    cmp dword ptr [rdi + NODE_WIN], 0
     jne bfl_found
     mov rdi, [rdi + NODE_FIRST]
     test rdi, rdi
@@ -1414,7 +1413,7 @@ bsp_find_other_leaf:
     test rdi, rdi
     jz bfol_null
 bfol_loop:
-    cmp qword ptr [rdi + NODE_WIN], 0
+    cmp dword ptr [rdi + NODE_WIN], 0
     je bfol_down
     mov eax, [cur_ws]
     lea rbx, [bsp_focuses]
@@ -1445,7 +1444,7 @@ bsp_find_node_by_win:
     jz bfn_null
     cmp [rdi + NODE_WIN], esi
     je bfn_found
-    cmp qword ptr [rdi + NODE_WIN], 0
+    cmp dword ptr [rdi + NODE_WIN], 0
     jne bfn_null
 
     push rdi
@@ -1526,7 +1525,7 @@ bsp_arrange_node:
     mov [rbp - 32], r8
     mov [rbp - 40], r9
 
-    cmp qword ptr [rdi + NODE_WIN], 0
+    cmp dword ptr [rdi + NODE_WIN], 0
     jz do_ws_split
 
     /* Configure leaf window */
@@ -1555,8 +1554,7 @@ bsp_arrange_node:
     jmp arrange_ret
 
 do_ws_split:
-    mov rax, [rdi + NODE_SPLIT]
-    cmp rax, 1
+    cmp byte ptr [rdi + NODE_SPLIT], 1
     je ws_split_horizontal
 
     /* Vertical Split */
@@ -1678,7 +1676,7 @@ bsp_node_in_direction:
 
     test rdi, rdi
     jz nid_null
-    cmp qword ptr [rdi + NODE_WIN], 0
+    cmp dword ptr [rdi + NODE_WIN], 0
     je nid_null
 
     mov r12, rdi                /* r12 = current node p */
@@ -1691,7 +1689,7 @@ nid_climb:
     jz nid_null                 /* Reached root without finding matching split */
 
     /* Check parent split orientation */
-    mov eax, [rbx + NODE_SPLIT]
+    movzx eax, byte ptr [rbx + NODE_SPLIT]
     cmp eax, r13d
     jne nid_climb_next
 
@@ -1729,10 +1727,10 @@ take_first_child:
 dive_down:
     test r15, r15
     jz nid_null
-    cmp qword ptr [r15 + NODE_WIN], 0
+    cmp dword ptr [r15 + NODE_WIN], 0
     jne nid_success             /* Found destination leaf! */
 
-    mov eax, [r15 + NODE_SPLIT]
+    movzx eax, byte ptr [r15 + NODE_SPLIT]
     cmp eax, r13d
     je dive_same_orient
 
@@ -1907,9 +1905,9 @@ bsp_focuses:    .space 72       /* 9 x 8 bytes pointers */
 
 node_idx:       .long 0
 
-/* 64 nodes of 64 bytes = 4096 bytes */
-.align 64
-node_pool:      .space 4096
+/* 64 nodes of 32 bytes = 2048 bytes */
+.align 32
+node_pool:      .space 2048
 
 out_buf:        .space 512
 in_buf:         .space 4096
