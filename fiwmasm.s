@@ -138,15 +138,23 @@ display_done:
     jne exit_fail
 
     movzx ecx, word ptr [in_buf + 6]
-    shl ecx, 2
+    shl ecx, 2                  /* ecx = remaining setup reply bytes to drain */
 
+    /* Read first chunk into in_buf (up to 4096 bytes) */
     mov eax, SYS_READ
     mov edi, [sock_fd]
     lea rsi, [in_buf]
-    mov edx, ecx
+    mov edx, 4096
+    cmp edx, ecx
+    cmovg edx, ecx
+    push rcx
+    push rdx
     syscall
+    pop rdx
+    pop rcx
+    sub ecx, eax                /* remaining bytes */
 
-    /* Parse Screen Info */
+    /* Parse Screen Info from first chunk */
     movzx eax, word ptr [in_buf + 16]   /* vendor_len */
     add eax, 3
     and eax, -4
@@ -169,6 +177,25 @@ display_done:
     inc edx
     mov [bar_gc], edx
 
+    /* Drain all remaining setup reply bytes from socket */
+drain_setup_loop:
+    test ecx, ecx
+    jle setup_drained
+    mov edx, 4096
+    cmp edx, ecx
+    cmovg edx, ecx
+    push rcx
+    mov eax, SYS_READ
+    mov edi, [sock_fd]
+    lea rsi, [in_buf]
+    syscall
+    pop rcx
+    test eax, eax
+    jle setup_drained
+    sub ecx, eax
+    jmp drain_setup_loop
+
+setup_drained:
     /* Detect Dual Monitor (Xinerama) */
     call detect_monitors
 
@@ -1032,19 +1059,17 @@ mon_detect_done:
     ret
 
 /*
- * get_mon_for_ws(edi = ws_idx) -> eax = monitor index (0 or 1)
+ * get_mon_for_ws(edi = ws_idx 0..8) -> eax = monitor index (0 or 1)
  */
 get_mon_for_ws:
     cmp dword ptr [mon_count], 2
     jl single_mon
-    /* Monitor 1 gets WS 8 (Workspace 9), Monitor 0 gets WS 0..7 */
-    cmp edi, 8
-    je is_mon1
+    cmp edi, WORKSPACE_COUNT
+    jge single_mon
+    movzx eax, byte ptr [ws_mon_table + rdi]
+    ret
 single_mon:
     xor eax, eax
-    ret
-is_mon1:
-    mov eax, 1
     ret
 
 /*
@@ -1733,6 +1758,24 @@ sh_argv_term:
     .quad sh_arg_c
     .quad cmd_term
     .quad 0
+
+/*
+ * Workspace to Monitor Mapping Configuration Table:
+ * Define which monitor (0 or 1) hosts each workspace (WS 1 to 9).
+ * Index 0 = Workspace 1, Index 1 = Workspace 2, ..., Index 8 = Workspace 9.
+ * (Change the bytes below to customize your dual-monitor setup!)
+ */
+.align 8
+ws_mon_table:
+    .byte 0                     /* WS 1 -> Monitor 0 */
+    .byte 0                     /* WS 2 -> Monitor 0 */
+    .byte 0                     /* WS 3 -> Monitor 0 */
+    .byte 0                     /* WS 4 -> Monitor 0 */
+    .byte 0                     /* WS 5 -> Monitor 0 */
+    .byte 0                     /* WS 6 -> Monitor 0 */
+    .byte 0                     /* WS 7 -> Monitor 0 */
+    .byte 0                     /* WS 8 -> Monitor 0 */
+    .byte 1                     /* WS 9 -> Monitor 1 */
 
 /*
  * Table of Grabbed Shortcuts:

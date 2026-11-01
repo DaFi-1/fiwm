@@ -62,6 +62,11 @@ test-shortcuts: fiwm
 test-asm-shortcuts: fiwmasm
 	./tests/test_fiwmasm_shortcuts.sh
 
+test-asm-dual: fiwmasm
+	./tests/test_fiwmasm_dual_monitor.sh
+
+test-asm-all: test-asm-shortcuts test-asm-dual
+
 test-dual: fiwm
 	./tests/test_dual_monitor.sh
 
