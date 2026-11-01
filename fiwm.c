@@ -1107,11 +1107,8 @@ static unsigned long heap_ptr;
 
 static void *ecalloc(size_t size)
 {
-    size_t total = (size + 7UL) & ~7UL;
-    if (heap_ptr + total > HEAP_SIZE)
-        sys_exit(1);
     void *ptr = heap + heap_ptr;
-    heap_ptr += total;
+    heap_ptr += (size + 7UL) & ~7UL;
     return ptr;
 }
 
