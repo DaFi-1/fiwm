@@ -768,9 +768,7 @@ static inline Atom intern_atom(Display *d, const char *name) {
 
 static GC bar_gc;
 
-static inline GC XCreateGC(Display *d, Drawable dr, unsigned long valmask, void *val) {
-    (void)valmask; (void)val;
-    if (!d || !dr) return (GC)0;
+static inline GC XCreateGC(Display *d, Drawable dr) {
     unsigned int gcid = d->next_rid++;
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 16);
     p[0] = (4 << 16) | 55; /* X_CreateGC: reqType=55, length=4 */
@@ -1851,7 +1849,7 @@ void createbars(void)
         p[9] = ExposureMask | ButtonPressMask;
         m->barwin = wid;
         m->barpm = XCreatePixmap(dpy, root, m->w, BAR_HEIGHT, 24);
-        if (!bar_gc) bar_gc = XCreateGC(dpy, wid, 0, NULL);
+        if (!bar_gc) bar_gc = XCreateGC(dpy, wid);
 
         XMapWindow(dpy, m->barwin);
         XLowerWindow(dpy, m->barwin);
