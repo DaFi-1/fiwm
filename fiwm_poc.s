@@ -44,6 +44,7 @@
 .equ WORKSPACE_COUNT, 9
 .equ MAX_MONITORS,    2
 .equ GAP_PX,          4
+.equ BAR_HEIGHT,      18
 
 /*
  * Node Structure (64 bytes aligned):
@@ -162,8 +163,17 @@ display_done:
     movzx edx, word ptr [in_buf + rax + 22]
     mov [screen_h], edx
 
+    /* Extract resource_id_base */
+    mov edx, [in_buf + 4]
+    mov [bar_win], edx
+    inc edx
+    mov [bar_gc], edx
+
     /* Detect Dual Monitor (Xinerama) */
     call detect_monitors
+
+    /* Create and map top status bar */
+    call init_bar
 
     /* 5. SelectInput on root window (SubstructureRedirect | SubstructureNotify | KeyPress) */
     mov dword ptr [out_buf + 0], (4 << 16) | 2
@@ -197,6 +207,9 @@ event_loop:
     cmp al, 2                   /* KeyPress */
     je handle_key
 
+    cmp al, 12                  /* Expose */
+    je handle_expose
+
     cmp al, 20                  /* MapRequest */
     je handle_map
 
@@ -206,6 +219,13 @@ event_loop:
     cmp al, 17                  /* DestroyNotify */
     je handle_unmap
 
+    jmp event_loop
+
+handle_expose:
+    mov edx, [event_buf + 4]    /* drawable/window */
+    cmp edx, [bar_win]
+    jne event_loop
+    call draw_bar
     jmp event_loop
 
 /*
@@ -593,6 +613,9 @@ focus_workspace:
     /* Switch to new workspace */
     mov [cur_ws], r12d
 
+    /* Redraw top status bar */
+    call draw_bar
+
     /* Map (show) windows of new workspace */
     lea rax, [bsp_roots]
     mov rdi, [rax + 8*r12]
@@ -643,7 +666,7 @@ move_window_to_workspace:
     pop rdi
 
     /* Hide window from current view */
-    mov edi, [sock_fd]
+    mov edi, ebx
     call hide_single_win
 
     /* Re-arrange current workspace */
@@ -651,7 +674,7 @@ move_window_to_workspace:
     call bsp_arrange_ws
 
     /* Insert window into target workspace tree */
-    mov edi, [sock_fd]
+    mov edi, ebx
     mov esi, r12d
     call bsp_tree_insert_into_ws
 
@@ -731,6 +754,190 @@ show_single_win:
     syscall
     pop r11
     pop rcx
+    ret
+
+/*
+ * =========================================================================
+ * TOP STATUS BAR RENDERING (Pure X11 Wire Protocol)
+ * =========================================================================
+ */
+init_bar:
+    push rbx
+
+    /*
+     * 1. X_CreateWindow (Opcode 1, length 11 words = 44 bytes)
+     * bar placed on Monitor 0 at GAP_PX, GAP_PX
+     */
+    mov dword ptr [out_buf + 0], (11 << 16) | 1  /* reqType = 1, len = 11 */
+    mov eax, [bar_win]
+    mov [out_buf + 4], eax                       /* wid */
+    mov eax, [root_win]
+    mov [out_buf + 8], eax                       /* parent */
+
+    mov eax, [mon_geom + 0]
+    add eax, GAP_PX                              /* x */
+    mov edx, [mon_geom + 4]
+    add edx, GAP_PX                              /* y */
+    shl edx, 16
+    and eax, 0xFFFF
+    or eax, edx
+    mov [out_buf + 12], eax                      /* x, y */
+
+    mov eax, [mon_geom + 8]
+    sub eax, GAP_PX * 2                          /* w */
+    mov edx, BAR_HEIGHT                          /* h */
+    shl edx, 16
+    and eax, 0xFFFF
+    or eax, edx
+    mov [out_buf + 16], eax                      /* w, h */
+
+    mov dword ptr [out_buf + 20], (1 << 16) | 0  /* border_width = 0, class = InputOutput (1) */
+    mov dword ptr [out_buf + 24], 0              /* visual = CopyFromParent (0) */
+    mov dword ptr [out_buf + 28], 0x00000a02     /* CWBackPixel | CWOverrideRedirect | CWEventMask */
+    mov dword ptr [out_buf + 32], 0x181818       /* background pixel */
+    mov dword ptr [out_buf + 36], 1              /* override_redirect = True */
+    mov dword ptr [out_buf + 40], 0x00008000     /* ExposureMask */
+
+    mov eax, SYS_WRITE
+    mov edi, [sock_fd]
+    lea rsi, [out_buf]
+    mov edx, 44
+    syscall
+
+    /* 2. X_MapWindow (Opcode 8, len 2 words = 8 bytes) */
+    mov dword ptr [out_buf + 0], (2 << 16) | 8
+    mov eax, [bar_win]
+    mov [out_buf + 4], eax
+    mov eax, SYS_WRITE
+    mov edi, [sock_fd]
+    lea rsi, [out_buf]
+    mov edx, 8
+    syscall
+
+    /* 3. X_CreateGC (Opcode 55, len 6 words = 24 bytes) */
+    mov dword ptr [out_buf + 0], (6 << 16) | 55
+    mov eax, [bar_gc]
+    mov [out_buf + 4], eax                       /* gcid */
+    mov eax, [bar_win]
+    mov [out_buf + 8], eax                       /* drawable */
+    mov dword ptr [out_buf + 12], 12             /* GCForeground (4) | GCBackground (8) */
+    mov dword ptr [out_buf + 16], 0xc2c2b0       /* fg color */
+    mov dword ptr [out_buf + 20], 0x181818       /* bg color */
+
+    mov eax, SYS_WRITE
+    mov edi, [sock_fd]
+    lea rsi, [out_buf]
+    mov edx, 24
+    syscall
+
+    call draw_bar
+
+    pop rbx
+    ret
+
+/*
+ * draw_bar(): clears bar and renders numbers 1..9 with active workspace highlighted
+ */
+draw_bar:
+    push rbx
+    push r12
+    push r13
+
+    /* 1. Clear background: PolyFillRectangle (Opcode 70, len 5 words = 20 bytes) */
+    /* First set GC foreground to dark background 0x181818 */
+    mov dword ptr [out_buf + 0], (4 << 16) | 56  /* ChangeGC */
+    mov eax, [bar_gc]
+    mov [out_buf + 4], eax
+    mov dword ptr [out_buf + 8], 4               /* GCForeground */
+    mov dword ptr [out_buf + 12], 0x181818
+    mov eax, SYS_WRITE
+    mov edi, [sock_fd]
+    lea rsi, [out_buf]
+    mov edx, 16
+    syscall
+
+    /* Fill rect: x=0, y=0, w=mon0_w, h=BAR_HEIGHT */
+    mov dword ptr [out_buf + 0], (5 << 16) | 70  /* PolyFillRectangle */
+    mov eax, [bar_win]
+    mov [out_buf + 4], eax
+    mov eax, [bar_gc]
+    mov [out_buf + 8], eax
+    mov dword ptr [out_buf + 12], 0              /* x=0, y=0 */
+    mov eax, [mon_geom + 8]                      /* width */
+    mov edx, BAR_HEIGHT                          /* height */
+    shl edx, 16
+    and eax, 0xFFFF
+    or eax, edx
+    mov [out_buf + 16], eax
+
+    mov eax, SYS_WRITE
+    mov edi, [sock_fd]
+    lea rsi, [out_buf]
+    mov edx, 20
+    syscall
+
+    /* 2. Loop through 9 workspaces and render numbers 1..9 */
+    xor r12d, r12d                               /* r12d = ws_idx (0..8) */
+
+draw_ws_loop:
+    /* Compare with cur_ws to choose color */
+    mov eax, 0x685742                            /* inactive fg (gray/brown) */
+    cmp r12d, [cur_ws]
+    jne set_bar_color
+    mov eax, 0xc2c2b0                            /* active fg (bright cream/gold) */
+
+set_bar_color:
+    mov dword ptr [out_buf + 0], (4 << 16) | 56  /* ChangeGC */
+    mov edx, [bar_gc]
+    mov [out_buf + 4], edx
+    mov dword ptr [out_buf + 8], 4               /* GCForeground */
+    mov [out_buf + 12], eax                      /* color */
+
+    mov eax, SYS_WRITE
+    mov edi, [sock_fd]
+    lea rsi, [out_buf]
+    mov edx, 16
+    syscall
+
+    /* Calculate X position: 10 + r12d * 24 */
+    mov eax, r12d
+    imul eax, 24
+    add eax, 10                                  /* eax = x */
+
+    /* PolyText8 (Opcode 74, len 5 words = 20 bytes) */
+    mov dword ptr [out_buf + 0], (5 << 16) | 74
+    mov edx, [bar_win]
+    mov [out_buf + 4], edx
+    mov edx, [bar_gc]
+    mov [out_buf + 8], edx
+
+    /* x (int16), y (int16): y = 13 (vertical baseline in 18px bar) */
+    mov edx, 13
+    shl edx, 16
+    and eax, 0xFFFF
+    or eax, edx
+    mov [out_buf + 12], eax
+
+    /* Text Item: len = 1, delta = 0, char = '1' + r12d, pad = 0 */
+    mov ecx, r12d
+    add ecx, '1'
+    shl ecx, 16
+    or ecx, 1                                    /* len = 1 in low byte */
+    mov [out_buf + 16], ecx
+
+    mov eax, SYS_WRITE
+    mov edi, [sock_fd]
+    lea rsi, [out_buf]
+    mov edx, 20
+    syscall
+
+    inc r12d
+    cmp r12d, 9
+    jl draw_ws_loop
+
+    pop r13
+    pop r12
+    pop rbx
     ret
 
 /*
@@ -1218,11 +1425,11 @@ bsp_arrange_ws:
     mov esi, [rbx + 0]
     add esi, GAP_PX             /* x */
     mov edx, [rbx + 4]
-    add edx, GAP_PX             /* y */
+    add edx, GAP_PX + BAR_HEIGHT + GAP_PX  /* y (leave room for top bar!) */
     mov r8d, [rbx + 8]
     sub r8d, GAP_PX * 2         /* w */
     mov r9d, [rbx + 12]
-    sub r9d, GAP_PX * 2         /* h */
+    sub r9d, BAR_HEIGHT + GAP_PX * 3       /* h (leave room for top bar!) */
 
     call bsp_arrange_node
 
@@ -1593,6 +1800,8 @@ sock_fd:        .long 0
 root_win:       .long 0
 screen_w:       .long 0
 screen_h:       .long 0
+bar_win:        .long 0
+bar_gc:         .long 0
 saved_envp:     .quad 0
 
 cur_ws:         .long 0         /* Active Workspace (0..8) */
