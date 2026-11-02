@@ -32,6 +32,7 @@
 .equ SYS_CLOSE,   3
 .equ SYS_POLL,    7
 .equ SYS_FORK,    57
+.equ SYS_VFORK,   58
 .equ SYS_EXECVE,  59
 .equ SYS_EXIT,    60
 .equ SYS_WAIT4,   61
@@ -110,7 +111,7 @@ display_done:
     jne env_ok
     mov rsi, [saved_envp]
     lea rdi, [env_buf]
-    mov ecx, 60
+    mov ecx, 30
 env_copy:
     mov rax, [rsi]
     test rax, rax
@@ -200,11 +201,11 @@ connected_ok:
     movzx ecx, word ptr [in_buf + 6]
     shl ecx, 2                  /* ecx = remaining setup reply bytes to drain */
 
-    /* Read first chunk into in_buf (up to 4096 bytes) */
+    /* Read first chunk into in_buf (up to 576 bytes - fits in 1 KB I/O overlay!) */
     mov eax, SYS_READ
     mov edi, [sock_fd]
     lea rsi, [in_buf]
-    mov edx, 4096
+    mov edx, 576
     cmp edx, ecx
     cmovg edx, ecx
     push rcx
@@ -231,7 +232,7 @@ connected_ok:
     movzx edx, word ptr [in_buf + rax + 22]
     mov [screen_h], edx
 
-    /* Extract resource_id_base */
+    /* Extract resource_id_base (bar_win[0..1], bar_gc (bg), bar_gc+1 (act), bar_gc+2 (inact)) */
     mov edx, [in_buf + 4]
     mov [bar_win + 0], edx
     inc edx
@@ -243,7 +244,7 @@ connected_ok:
 drain_setup_loop:
     test ecx, ecx
     jle setup_drained
-    mov edx, 4096
+    mov edx, 576
     cmp edx, ecx
     cmovg edx, ecx
     push rcx
@@ -261,21 +262,8 @@ setup_drained:
     /* Detect Dual Monitor (Xinerama) */
     call detect_monitors
 
-    /* Create and map top status bar */
+    /* Create and map top status bar + SelectInput on root in ONE batched syscall */
     call init_bar
-
-    /* 5. SelectInput on root window (SubstructureRedirect | SubstructureNotify | KeyPress) */
-    mov dword ptr [out_buf + 0], (4 << 16) | 2
-    mov eax, [root_win]
-    mov dword ptr [out_buf + 4], eax
-    mov dword ptr [out_buf + 8], 0x00000800  /* CWEventMask bit 11 */
-    mov dword ptr [out_buf + 12], 0x00180001 /* SubstructureRedirect | SubstructureNotify | KeyPress */
-
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, 16
-    syscall
 
     /* 6. Grab Shortcut Keys (including Alt+1..9 and Alt+Shift+1..9) */
     call grab_all_keys
@@ -291,11 +279,11 @@ event_loop:
     cmp eax, [ev_q_tail]
     jl ev_pop_buffered
 
-    /* Buffer is empty, read next chunk of events (up to 32 events = 1024 bytes) */
+    /* Buffer is empty, read next chunk of events (up to 8 events = 256 bytes) */
     mov eax, SYS_READ
     mov edi, [sock_fd]
     lea rsi, [event_queue]
-    mov edx, 1024
+    mov edx, 256
     syscall
 
     test eax, eax
@@ -532,12 +520,14 @@ do_dir_move:
     lea rbx, [bsp_focuses]
     mov [rbx + 8*r14], rax
 
-    /* Re-arrange grid */
+    /* Re-arrange grid and set focus in ONE atomic syscall */
+    push r8
+    lea r15, [out_buf]
     mov edi, r14d
-    call bsp_arrange_ws
-
-    mov edi, r8d
-    call set_focus
+    call bsp_arrange_ws_buf
+    pop rdi
+    call set_focus_buf
+    call flush_out_buf
     jmp event_loop
 
 key_split_h:
@@ -688,21 +678,42 @@ key_focus_prev:
     jmp key_focus_next
 
 set_focus:
+    lea r15, [out_buf]
+    call set_focus_buf
+    jmp flush_out_buf
+
+/*
+ * set_focus_buf(edi = win_id, r15 = write cursor)
+ * Appends 12-byte X_SetInputFocus request to [r15]
+ */
+set_focus_buf:
     test edi, edi
     jz focus_ret
-    mov dword ptr [out_buf + 0], (3 << 16) | (1 << 8) | 42
-    mov [out_buf + 4], edi
-    mov dword ptr [out_buf + 8], 0
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, 12
-    syscall
+    mov dword ptr [r15 + 0], (3 << 16) | (1 << 8) | 42
+    mov [r15 + 4], edi
+    mov dword ptr [r15 + 8], 0
+    add r15, 12
 focus_ret:
     ret
 
 /*
+ * flush_out_buf(r15 = write cursor at end of out_buf)
+ * Sends all bytes accumulated in [out_buf .. r15) in ONE single sys_write!
+ */
+flush_out_buf:
+    lea rsi, [out_buf]
+    mov rdx, r15
+    sub rdx, rsi
+    jle flush_ret
+    mov eax, SYS_WRITE
+    mov edi, [sock_fd]
+    syscall
+flush_ret:
+    ret
+
+/*
  * spawn_cmd(rsi = argv_pointer)
+ * Uses SYS_VFORK (58) for the inner child to avoid page-table copying before execve!
  */
 spawn_cmd:
     push rsi
@@ -711,7 +722,7 @@ spawn_cmd:
     test eax, eax
     jnz parent_fork
 
-    mov eax, SYS_FORK
+    mov eax, SYS_VFORK
     syscall
     test eax, eax
     jnz child_exit
@@ -749,55 +760,63 @@ parent_fork:
 
 /*
  * focus_workspace(edi = target_ws 0..8)
+ * Super-Pipeline Batching: Combines hide_tree_collect + draw_all_bars_buf +
+ * bsp_arrange_ws_buf + set_focus_buf into ONE SINGLE atomic sys_write syscall!
+ * (Reduces workspace switching from 5 syscalls down to 1 syscall!)
  */
 focus_workspace:
     push rbx
     push r12
+    push r15
 
     mov r12d, edi               /* r12d = new_ws */
     mov ebx, r14d               /* ebx = old_ws */
     cmp r12d, ebx
     je fw_done
 
-    /* Unmap (hide) windows of old workspace */
+    lea r15, [out_buf]          /* r15 = unified batch write cursor */
+
+    /* 1. Hide windows of old workspace (move off-screen x=-9999, y=-9999) */
     lea rax, [bsp_roots]
     mov rdi, [rax + 8*rbx]
-    call hide_tree_windows
+    call hide_tree_collect
 
-    /* Switch to new workspace directly in permanent register r14! (Zero RAM) */
+    /* 2. Switch to new workspace directly in permanent register r14! (Zero RAM) */
     mov r14d, r12d
 
-    /* Redraw top status bars across monitors */
-    call draw_all_bars
+    /* 3. Redraw top status bars across monitors into [r15] */
+    call draw_all_bars_buf
 
-    /* Map (show) windows of new workspace */
-    lea rax, [bsp_roots]
-    mov rdi, [rax + 8*r12]
-    call show_tree_windows
-
-    /* Arrange new workspace */
+    /* 4. Arrange new workspace windows on-screen into [r15]
+       (No redundant MapWindow needed: windows stay mapped while off-screen!) */
     mov edi, r12d
-    call bsp_arrange_ws
+    call bsp_arrange_ws_buf
 
-    /* Focus active window on new workspace */
+    /* 5. Focus active window on new workspace into [r15] */
     lea rax, [bsp_focuses]
     mov rdi, [rax + 8*r12]
     test rdi, rdi
-    jz fw_done
+    jz fw_flush
     mov edi, [rdi + NODE_WIN]
-    call set_focus
+    call set_focus_buf
+
+fw_flush:
+    call flush_out_buf
 
 fw_done:
+    pop r15
     pop r12
     pop rbx
     ret
 
 /*
  * move_window_to_workspace(edi = target_ws 0..8)
+ * Batches hiding the moved window + rearranging the current workspace into 1 syscall!
  */
 move_window_to_workspace:
     push rbx
     push r12
+    push r15
 
     mov r12d, edi               /* target_ws */
     cmp r12d, r14d
@@ -818,13 +837,18 @@ move_window_to_workspace:
     call bsp_tree_detach
     pop rdi
 
-    /* Hide window from current view */
-    mov edi, ebx
-    call hide_single_win
+    /* Batch hide window + re-arrange current workspace in ONE syscall */
+    lea r15, [out_buf]
+    mov dword ptr [r15 + 0], (5 << 16) | 12  /* Opcode 12: ConfigureWindow */
+    mov [r15 + 4], ebx                       /* window ID */
+    mov dword ptr [r15 + 8], 3               /* CWX | CWY = 3 */
+    mov dword ptr [r15 + 12], -9999          /* x = -9999 (off-screen) */
+    mov dword ptr [r15 + 16], -9999          /* y = -9999 (off-screen) */
+    add r15, 20
 
-    /* Re-arrange current workspace */
     mov edi, r14d
-    call bsp_arrange_ws
+    call bsp_arrange_ws_buf
+    call flush_out_buf
 
     /* Insert window into target workspace tree */
     mov edi, ebx
@@ -832,50 +856,29 @@ move_window_to_workspace:
     call bsp_tree_insert_into_ws
 
 mw_done:
+    pop r15
     pop r12
     pop rbx
     ret
 
 /*
- * hide_tree_windows(rdi = node):
- * Batches ConfigureWindow (x=-9999, y=-9999) for all leaf windows in tree
- * into `out_buf` and sends them in ONE atomic sys_write syscall!
+ * hide_tree_collect(rdi = node, r15 = write cursor):
+ * Appends 20-byte ConfigureWindow (x=-9999, y=-9999) for all leaf windows in tree to [r15].
  */
-hide_tree_windows:
-    test rdi, rdi
-    jz htw_ret
-    push rbx
-    lea rbx, [out_buf]
-    call hide_tree_collect
-    lea rax, [out_buf]
-    sub rbx, rax                /* rbx = total bytes */
-    jz htw_pop_ret
-
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, ebx
-    syscall
-
-htw_pop_ret:
-    pop rbx
-htw_ret:
-    ret
-
 hide_tree_collect:
     test rdi, rdi
     jz htc_ret
     cmp dword ptr [rdi + NODE_WIN], 0
     je htc_recurse
 
-    /* Leaf window found: append 20-byte ConfigureWindow packet to [rbx] */
-    mov dword ptr [rbx + 0], (5 << 16) | 12  /* Opcode 12: ConfigureWindow */
+    /* Leaf window found: append 20-byte ConfigureWindow packet to [r15] */
+    mov dword ptr [r15 + 0], (5 << 16) | 12  /* Opcode 12: ConfigureWindow */
     mov eax, [rdi + NODE_WIN]
-    mov [rbx + 4], eax                       /* window ID */
-    mov dword ptr [rbx + 8], 3                /* CWX | CWY = 3 */
-    mov dword ptr [rbx + 12], -9999           /* x = -9999 (off-screen) */
-    mov dword ptr [rbx + 16], -9999           /* y = -9999 (off-screen) */
-    add rbx, 20
+    mov [r15 + 4], eax                       /* window ID */
+    mov dword ptr [r15 + 8], 3               /* CWX | CWY = 3 */
+    mov dword ptr [r15 + 12], -9999          /* x = -9999 (off-screen) */
+    mov dword ptr [r15 + 16], -9999          /* y = -9999 (off-screen) */
+    add r15, 20
     ret
 
 htc_recurse:
@@ -888,86 +891,6 @@ htc_recurse:
 htc_ret:
     ret
 
-hide_single_win:
-    push rcx
-    push r11
-    mov dword ptr [out_buf + 0], (5 << 16) | 12  /* Opcode 12: ConfigureWindow */
-    mov [out_buf + 4], edi                      /* window ID */
-    mov dword ptr [out_buf + 8], 3               /* CWX | CWY = 3 */
-    mov dword ptr [out_buf + 12], -9999          /* x = -9999 (off-screen) */
-    mov dword ptr [out_buf + 16], -9999          /* y = -9999 (off-screen) */
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, 20
-    syscall
-    pop r11
-    pop rcx
-    ret
-
-/*
- * show_tree_windows(rdi = node):
- * Batches MapWindow (Opcode 8) for all leaf windows in tree
- * into `out_buf` and sends them in ONE atomic sys_write syscall!
- */
-show_tree_windows:
-    test rdi, rdi
-    jz stw_ret
-    push rbx
-    lea rbx, [out_buf]
-    call show_tree_collect
-    lea rax, [out_buf]
-    sub rbx, rax                /* rbx = total bytes */
-    jz stw_pop_ret
-
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, ebx
-    syscall
-
-stw_pop_ret:
-    pop rbx
-stw_ret:
-    ret
-
-show_tree_collect:
-    test rdi, rdi
-    jz stc_ret
-    cmp dword ptr [rdi + NODE_WIN], 0
-    je stc_recurse
-
-    /* Leaf window found: append 8-byte MapWindow packet to [rbx] */
-    mov dword ptr [rbx + 0], (2 << 16) | 8   /* Opcode 8: MapWindow */
-    mov eax, [rdi + NODE_WIN]
-    mov [rbx + 4], eax
-    add rbx, 8
-    ret
-
-stc_recurse:
-    push rdi
-    mov rdi, [rdi + NODE_FIRST]
-    call show_tree_collect
-    pop rdi
-    mov rdi, [rdi + NODE_SECOND]
-    call show_tree_collect
-stc_ret:
-    ret
-
-show_single_win:
-    push rcx
-    push r11
-    mov dword ptr [out_buf + 0], (2 << 16) | 8
-    mov [out_buf + 4], edi
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, 8
-    syscall
-    pop r11
-    pop rcx
-    ret
-
 /*
  * =========================================================================
  * TOP STATUS BAR RENDERING (Pure X11 Wire Protocol)
@@ -977,8 +900,9 @@ show_single_win:
 init_bar:
     push rbx
     push r12
+    push r15
 
-    /* Loop through each detected monitor and create its top status bar */
+    lea r15, [out_buf]                          /* r15 = unified batch write cursor */
     xor r12d, r12d                              /* r12d = monitor index (0 or 1) */
 
 create_bar_loop:
@@ -988,149 +912,163 @@ create_bar_loop:
     add rbx, rax
 
     /* 1. X_CreateWindow (Opcode 1, length 11 words = 44 bytes) */
-    mov dword ptr [out_buf + 0], (11 << 16) | 1
+    mov dword ptr [r15 + 0], (11 << 16) | 1
     mov eax, [bar_win + 4*r12]
-    mov [out_buf + 4], eax                       /* wid */
+    mov [r15 + 4], eax                          /* wid */
     mov eax, [root_win]
-    mov [out_buf + 8], eax                       /* parent */
+    mov [r15 + 8], eax                          /* parent */
 
     mov eax, [rbx + 0]
-    add eax, GAP_PX                              /* x */
+    add eax, GAP_PX                             /* x */
     mov edx, [rbx + 4]
-    add edx, GAP_PX                              /* y */
+    add edx, GAP_PX                             /* y */
     shl edx, 16
     and eax, 0xFFFF
     or eax, edx
-    mov [out_buf + 12], eax                      /* x, y */
+    mov [r15 + 12], eax                         /* x, y */
 
     mov eax, [rbx + 8]
-    sub eax, GAP_PX * 2                          /* w */
-    mov edx, BAR_HEIGHT                          /* h */
+    sub eax, GAP_PX * 2                         /* w */
+    mov edx, BAR_HEIGHT                         /* h */
     shl edx, 16
     and eax, 0xFFFF
     or eax, edx
-    mov [out_buf + 16], eax                      /* w, h */
+    mov [r15 + 16], eax                         /* w, h */
 
-    mov dword ptr [out_buf + 20], (1 << 16) | 0  /* border_width = 0, class = InputOutput (1) */
-    mov dword ptr [out_buf + 24], 0              /* visual = CopyFromParent (0) */
-    mov dword ptr [out_buf + 28], 0x00000a02     /* CWBackPixel | CWOverrideRedirect | CWEventMask */
-    mov dword ptr [out_buf + 32], 0x181818       /* background pixel */
-    mov dword ptr [out_buf + 36], 1              /* override_redirect = True */
-    mov dword ptr [out_buf + 40], 0x00008000     /* ExposureMask */
-
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, 44
-    syscall
+    mov dword ptr [r15 + 20], (1 << 16) | 0     /* border_width = 0, class = InputOutput (1) */
+    mov dword ptr [r15 + 24], 0                 /* visual = CopyFromParent (0) */
+    mov dword ptr [r15 + 28], 0x00000a02        /* CWBackPixel | CWOverrideRedirect | CWEventMask */
+    mov dword ptr [r15 + 32], 0x181818          /* background pixel */
+    mov dword ptr [r15 + 36], 1                 /* override_redirect = True */
+    mov dword ptr [r15 + 40], 0x00008000        /* ExposureMask */
 
     /* 2. X_MapWindow (Opcode 8, len 2 words = 8 bytes) */
-    mov dword ptr [out_buf + 0], (2 << 16) | 8
+    mov dword ptr [r15 + 44], (2 << 16) | 8
     mov eax, [bar_win + 4*r12]
-    mov [out_buf + 4], eax
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, 8
-    syscall
+    mov [r15 + 48], eax
+    add r15, 52
 
     inc r12d
     cmp r12d, [mon_count]
     jl create_bar_loop
 
-    /* 3. X_CreateGC (Opcode 55, len 6 words = 24 bytes) */
-    mov dword ptr [out_buf + 0], (6 << 16) | 55
-    mov eax, [bar_gc]
-    mov [out_buf + 4], eax                       /* gcid */
-    mov eax, [bar_win + 0]
-    mov [out_buf + 8], eax                       /* drawable */
-    mov dword ptr [out_buf + 12], 12             /* GCForeground (4) | GCBackground (8) */
-    mov dword ptr [out_buf + 16], 0xc2c2b0       /* fg color */
-    mov dword ptr [out_buf + 20], 0x181818       /* bg color */
+    /* 3. Pre-create 3 static GCs (Eliminates all runtime ChangeGC packets!):
+       - bar_gc + 0: background fill GC (fg = 0x181818)
+       - bar_gc + 1: active workspace digit GC (fg = 0xc2c2b0)
+       - bar_gc + 2: inactive workspace digit GC (fg = 0x685742)
+     */
+    mov ecx, [bar_gc]
+    mov edx, [bar_win + 0]
 
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, 24
-    syscall
+    /* GC 0: Background (24 bytes) */
+    mov dword ptr [r15 + 0], (6 << 16) | 55
+    mov [r15 + 4], ecx
+    mov [r15 + 8], edx
+    mov dword ptr [r15 + 12], 12                /* GCForeground (4) | GCBackground (8) */
+    mov dword ptr [r15 + 16], 0x181818          /* fg = bg = 0x181818 */
+    mov dword ptr [r15 + 20], 0x181818
 
-    call draw_all_bars
+    /* GC 1: Active text (24 bytes) */
+    inc ecx
+    mov dword ptr [r15 + 24], (6 << 16) | 55
+    mov [r15 + 28], ecx
+    mov [r15 + 32], edx
+    mov dword ptr [r15 + 36], 12
+    mov dword ptr [r15 + 40], 0xc2c2b0          /* fg = active cream/gold */
+    mov dword ptr [r15 + 44], 0x181818
 
+    /* GC 2: Inactive text (24 bytes) */
+    inc ecx
+    mov dword ptr [r15 + 48], (6 << 16) | 55
+    mov [r15 + 52], ecx
+    mov [r15 + 56], edx
+    mov dword ptr [r15 + 60], 12
+    mov dword ptr [r15 + 64], 0x685742          /* fg = inactive brown/gray */
+    mov dword ptr [r15 + 68], 0x181818
+
+    /* 4. SelectInput on root window (16 bytes) */
+    mov dword ptr [r15 + 72], (4 << 16) | 2
+    mov eax, [root_win]
+    mov [r15 + 76], eax
+    mov dword ptr [r15 + 80], 0x00000800        /* CWEventMask bit 11 */
+    mov dword ptr [r15 + 84], 0x00180001        /* SubstructureRedirect | SubstructureNotify | KeyPress */
+    add r15, 88
+
+    /* 5. Append initial bar render and flush everything in ONE atomic sys_write! */
+    call draw_all_bars_buf
+    call flush_out_buf
+
+    pop r15
     pop r12
     pop rbx
     ret
 
 /*
  * draw_all_bars():
- * Frame Batching: Concatenates status bar rendering commands for ALL monitors
- * into `out_buf` and dispatches everything in ONE atomic sys_write syscall!
- * Guarantees tear-free synchronized updates across multiple monitors.
+ * Standalone entry point for Expose events: renders bars into out_buf and flushes.
  */
 draw_all_bars:
+    push r15
+    lea r15, [out_buf]
+    call draw_all_bars_buf
+    call flush_out_buf
+    pop r15
+    ret
+
+/*
+ * draw_all_bars_buf(r15 = write cursor):
+ * Zero-ChangeGC Bar Renderer: Uses the 3 pre-created GCs (bar_gc+0, bar_gc+1, bar_gc+2)
+ * so every workspace digit takes only 20 bytes (PolyText8) with ZERO ChangeGC overhead!
+ * Appends directly to [r15] so it can be combined with workspace switching in 1 syscall!
+ */
+draw_all_bars_buf:
     push rbx
     push r12
     push r13
-    push r15
 
-    lea rbx, [out_buf]                          /* rbx = output buffer write pointer */
-    xor r15d, r15d                              /* r15d = mon_idx (0 or 1) */
+    xor ebx, ebx                                /* ebx = mon_idx (0 or 1) */
 
 dab_mon_loop:
-    /* 1. Clear background: ChangeGC (16 bytes) */
-    mov dword ptr [rbx + 0], (4 << 16) | 56     /* ChangeGC */
-    mov eax, [bar_gc]
-    mov [rbx + 4], eax
-    mov dword ptr [rbx + 8], 4                  /* GCForeground */
-    mov dword ptr [rbx + 12], 0x181818
-
-    /* 2. PolyFillRectangle (20 bytes) */
-    mov dword ptr [rbx + 16], (5 << 16) | 70    /* PolyFillRectangle */
-    mov eax, [bar_win + 4*r15]
-    mov [rbx + 20], eax
-    mov eax, [bar_gc]
-    mov [rbx + 24], eax
-    mov dword ptr [rbx + 28], 0                 /* x=0, y=0 */
-    mov eax, r15d
+    /* 1. Clear background with PolyFillRectangle using bar_gc + 0 (20 bytes, no ChangeGC!) */
+    mov dword ptr [r15 + 0], (5 << 16) | 70     /* PolyFillRectangle */
+    mov eax, [bar_win + 4*rbx]
+    mov [r15 + 4], eax
+    mov eax, [bar_gc]                           /* bar_gc + 0 = 0x181818 */
+    mov [r15 + 8], eax
+    mov dword ptr [r15 + 12], 0                 /* x=0, y=0 */
+    mov eax, ebx
     shl eax, 4
     mov eax, [mon_geom + rax + 8]               /* mon width */
     mov edx, BAR_HEIGHT                         /* height */
     shl edx, 16
     and eax, 0xFFFF
     or eax, edx
-    mov [rbx + 32], eax
+    mov [r15 + 16], eax
+    add r15, 20
 
-    add rbx, 36
-
-    /* 3. Loop through workspaces 0..8 and draw ONLY those assigned to mon_idx */
+    /* 2. Loop through workspaces 0..8 and draw ONLY those assigned to mon_idx */
     xor r12d, r12d                              /* r12d = ws_idx (0..8) */
     xor r13d, r13d                              /* r13d = display slot counter for this bar */
 
 draw_ws_mon_loop:
     /* Check if this workspace belongs to this monitor */
     movzx eax, byte ptr [ws_mon_table + r12]
-    cmp eax, r15d
+    cmp eax, ebx
     jne skip_ws_mon                             /* Not on this monitor, skip! */
 
-    /* Compare with active workspace in r14d to choose color */
-    mov eax, 0x685742                           /* inactive fg (gray/brown) */
+    /* Select pre-created GC: bar_gc + 1 (active) or bar_gc + 2 (inactive) */
+    mov edx, [bar_gc]
+    add edx, 2                                  /* default: bar_gc + 2 (inactive) */
     cmp r12d, r14d
-    jne set_bar_mon_color
-    mov eax, 0xc2c2b0                           /* active fg (bright cream/gold) */
+    jne emit_polytext
+    dec edx                                     /* active: bar_gc + 1 */
 
-set_bar_mon_color:
-    /* ChangeGC (16 bytes) */
-    mov dword ptr [rbx + 0], (4 << 16) | 56
-    mov edx, [bar_gc]
-    mov [rbx + 4], edx
-    mov dword ptr [rbx + 8], 4
-    mov [rbx + 12], eax
-
+emit_polytext:
     /* PolyText8 (20 bytes) */
-    mov dword ptr [rbx + 16], (5 << 16) | 74
-    mov edx, [bar_win + 4*r15]
-    mov [rbx + 20], edx
-    mov edx, [bar_gc]
-    mov [rbx + 24], edx
+    mov dword ptr [r15 + 0], (5 << 16) | 74
+    mov eax, [bar_win + 4*rbx]
+    mov [r15 + 4], eax
+    mov [r15 + 8], edx                          /* pre-configured GC! */
 
     /* X position: 10 + r13d * 24, Y: 13 */
     mov eax, r13d
@@ -1140,16 +1078,16 @@ set_bar_mon_color:
     shl edx, 16
     and eax, 0xFFFF
     or eax, edx
-    mov [rbx + 28], eax
+    mov [r15 + 12], eax
 
     /* Text Item: len = 1, delta = 0, char = '1' + r12d, pad = 0 */
     mov ecx, r12d
     add ecx, '1'
     shl ecx, 16
     or ecx, 1                                   /* len = 1 in low byte */
-    mov [rbx + 32], ecx
+    mov [r15 + 16], ecx
 
-    add rbx, 36
+    add r15, 20
     inc r13d                                    /* Advance slot counter */
 
 skip_ws_mon:
@@ -1157,23 +1095,10 @@ skip_ws_mon:
     cmp r12d, 9
     jl draw_ws_mon_loop
 
-    inc r15d
-    cmp r15d, [mon_count]
+    inc ebx
+    cmp ebx, [mon_count]
     jl dab_mon_loop
 
-    /* Emit all frames across all monitors in a SINGLE atomic syscall */
-    lea rax, [out_buf]
-    sub rbx, rax                                /* rbx = total byte count */
-    jz dab_done
-
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, ebx
-    syscall
-
-dab_done:
-    pop r15
     pop r13
     pop r12
     pop rbx
@@ -1343,26 +1268,23 @@ handle_map:
     jz event_loop
     mov r12d, edx
 
-    /* MapWindow */
-    mov dword ptr [out_buf + 0], (2 << 16) | 8
-    mov dword ptr [out_buf + 4], r12d
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, 8
-    syscall
-
     /* Insert into active workspace BSP tree */
     mov edi, r12d
     mov esi, r14d
     call bsp_tree_insert_into_ws
 
-    /* Focus new window */
+    /* Batch MapWindow + set_focus + bsp_arrange_ws into ONE atomic syscall! */
+    lea r15, [out_buf]
+    mov dword ptr [r15 + 0], (2 << 16) | 8
+    mov dword ptr [r15 + 4], r12d
+    add r15, 8
+
     mov edi, r12d
-    call set_focus
+    call set_focus_buf
 
     mov edi, r14d
-    call bsp_arrange_ws
+    call bsp_arrange_ws_buf
+    call flush_out_buf
     jmp event_loop
 
 handle_unmap:
@@ -1393,10 +1315,11 @@ found_unmap_node:
     mov rdi, rax
     call bsp_tree_detach
 
-    /* If it was in active workspace, re-arrange */
+    /* If it was in active workspace, re-arrange and focus in ONE syscall */
     cmp ecx, r14d
     jne event_loop
 
+    lea r15, [out_buf]
     lea rax, [bsp_roots]
     mov rdi, [rax + 8*rcx]
     call bsp_first_leaf
@@ -1405,10 +1328,11 @@ found_unmap_node:
     test rax, rax
     jz no_focus_left
     mov edi, [rax + NODE_WIN]
-    call set_focus
+    call set_focus_buf
 no_focus_left:
     mov edi, r14d
-    call bsp_arrange_ws
+    call bsp_arrange_ws_buf
+    call flush_out_buf
     jmp event_loop
 
 /*
@@ -1579,7 +1503,7 @@ td_done:
  */
 alloc_node:
     mov eax, [node_idx]
-    cmp eax, 63
+    cmp eax, 15
     jge alloc_fail
     inc dword ptr [node_idx]
     shl rax, 5                  /* rax * 32 bytes */
@@ -1668,16 +1592,25 @@ bfn_ret:
 
 /*
  * bsp_arrange_ws(edi = ws_idx)
- * Arranges workspace onto its specific monitor geometry!
- * Batches all ConfigureWindow (28 bytes) packets into `out_buf` and
- * sends them to the X server in ONE atomic sys_write syscall!
+ * Standalone entry point: arranges workspace into out_buf and flushes.
  */
 bsp_arrange_ws:
+    push r15
+    lea r15, [out_buf]
+    call bsp_arrange_ws_buf
+    call flush_out_buf
+    pop r15
+    ret
+
+/*
+ * bsp_arrange_ws_buf(edi = ws_idx, r15 = write cursor)
+ * Appends ConfigureWindow (28 bytes) packets for all windows in ws_idx to [r15].
+ */
+bsp_arrange_ws_buf:
     push rbx
     push r12
     push r13
     push r14
-    push r15
 
     mov r12d, edi               /* ws_idx */
 
@@ -1693,8 +1626,6 @@ bsp_arrange_ws:
     lea rbx, [mon_geom]
     add rbx, rax
 
-    lea r15, [out_buf]          /* r15 = write cursor in out_buf */
-
     mov rdi, r13                /* rdi = root node */
     mov esi, [rbx + 0]
     add esi, GAP_PX             /* x */
@@ -1707,19 +1638,7 @@ bsp_arrange_ws:
 
     call bsp_arrange_node
 
-    /* Calculate total bytes batched */
-    lea rax, [out_buf]
-    sub r15, rax                /* r15 = total bytes */
-    jz arrange_ws_done
-
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, r15d
-    syscall
-
 arrange_ws_done:
-    pop r15
     pop r14
     pop r13
     pop r12
@@ -2209,15 +2128,12 @@ root_win:       .long 0
 screen_w:       .long 0
 screen_h:       .long 0
 bar_win:        .long 0, 0      /* bar_win for Monitor 0 and Monitor 1 */
-bar_gc:         .long 0
+bar_gc:         .long 0         /* base GC ID (bar_gc+0=bg, +1=active, +2=inactive) */
 atom_wm_proto:  .long 0         /* WM_PROTOCOLS atom */
 atom_wm_del:    .long 0         /* WM_DELETE_WINDOW atom */
 saved_envp:     .quad 0
 xorg_pid:       .quad 0
 disp_found:     .byte 0
-env_buf:        .space 496
-tty_buf:        .space 32
-
 /* cur_ws lives permanently in register r14 (Zero RAM!) */
 next_split_sel: .byte 0         /* 0 = auto, 1 = V, 2 = H - 1 byte! */
 is_fullscreen:  .byte 0         /* 0 = normal, 1 = fullscreen - 1 byte! */
@@ -2232,22 +2148,25 @@ bsp_roots:      .space 72       /* 9 x 8 bytes pointers */
 bsp_focuses:    .space 72       /* 9 x 8 bytes pointers */
 
 node_idx:       .long 0
-
-/* 64 nodes of 32 bytes = 2048 bytes */
-.align 32
-node_pool:      .space 2048
+ev_q_head:      .long 0         /* Current read offset in event_queue */
+ev_q_tail:      .long 0         /* Total bytes available in event_queue */
+event_buf:      .space 32       /* Single X11 event = 32 bytes */
 
 /*
- * Shared I/O Buffer (4096 bytes total):
- * Memory Overlay optimization:
- * - During startup: `in_buf` uses all 4096 bytes to read X11 setup reply.
- * - During runtime: `out_buf` uses first 2048 bytes, `event_queue` uses next 2048 bytes.
- * Saves 2048 bytes of RAM!
+ * Shared I/O Buffer (832 bytes total - compacted so the ENTIRE hot binary
+ * (.text + .data + hot .bss) fits inside 2 physical 4 KB pages [0x400000..0x401fff]!):
+ * - `out_buf` uses first 576 bytes (during startup `grab_all_keys` uses 1152B across in_buf+event_queue+node_pool)
+ * - `event_queue` uses next 256 bytes (8 X11 events * 32 bytes)
  */
 .align 32
 out_buf:
-in_buf:         .space 2048
-event_queue:    .space 2048     /* Buffer for up to 64 X11 events (32 bytes each) */
-ev_q_head:      .long 0         /* Current read offset in event_queue */
-ev_q_tail:      .long 0         /* Total bytes available in event_queue */
-event_buf:      .space 64
+in_buf:         .space 576
+event_queue:    .space 256      /* Buffer for up to 8 X11 events (32 bytes each) */
+
+/* 16 nodes of 32 bytes = 512 bytes (fits hot .bss completely inside page 0x401000..0x401fff!) */
+.align 32
+node_pool:      .space 512
+
+/* Cold TTY-only buffers placed at very end of .bss so they are never faulted in X sessions */
+env_buf:        .space 256
+tty_buf:        .space 32
