@@ -111,7 +111,7 @@ display_done:
     jne env_ok
     mov rsi, [saved_envp]
     lea rdi, [env_buf]
-    mov ecx, 30
+    mov ecx, 18
 env_copy:
     mov rax, [rsi]
     test rax, rax
@@ -260,11 +260,8 @@ setup_drained:
     /* Detect Dual Monitor (Xinerama) */
     call detect_monitors
 
-    /* Create and map top status bar + SelectInput on root in ONE batched syscall */
+    /* Create and map top status bar + SelectInput on root + Grab all 72 keys in ONE batched syscall! */
     call init_bar
-
-    /* 6. Grab Shortcut Keys (including Alt+1..9 and Alt+Shift+1..9) */
-    call grab_all_keys
 
     /* 7. Autostart (i3 parity): keyboard layout + repeat rate.
        setxkbmap resets X auto-repeat, so xset must run after it. */
@@ -981,8 +978,42 @@ create_bar_loop:
     mov dword ptr [r15 + 84], 0x00180001        /* SubstructureRedirect | SubstructureNotify | KeyPress */
     add r15, 88
 
-    /* 5. Append initial bar render and flush everything in ONE atomic sys_write! */
+    /* 5. Append initial bar render into [r15] */
     call draw_all_bars_buf
+
+    /* 6. Append all 72 X_GrabKey requests (1152 bytes) into [r15] and flush in ONE syscall! */
+    lea rbx, [shortcut_keys]
+    mov r12d, [root_win]
+
+grab_batch_loop:
+    movzx edi, byte ptr [rbx]                   /* keycode */
+    test edi, edi
+    jz grab_batch_send
+    movzx esi, byte ptr [rbx + 1]               /* modifiers */
+
+    /* Emit standard combo (16 bytes) */
+    mov dword ptr [r15 + 0], (4 << 16) | (1 << 8) | 33
+    mov [r15 + 4], r12d
+    mov eax, edi
+    shl eax, 16
+    and esi, 0xFFFF
+    or eax, esi
+    or eax, (1 << 24)
+    mov [r15 + 8], eax
+    mov dword ptr [r15 + 12], 1
+
+    /* Emit NumLock/CapsLock combo (modifiers | 0x10) (16 bytes) */
+    mov dword ptr [r15 + 16], (4 << 16) | (1 << 8) | 33
+    mov [r15 + 20], r12d
+    or eax, 0x10
+    mov [r15 + 24], eax
+    mov dword ptr [r15 + 28], 1
+
+    add r15, 32
+    add rbx, 2
+    jmp grab_batch_loop
+
+grab_batch_send:
     call flush_out_buf
 
     pop r15
@@ -1730,67 +1761,6 @@ arrange_ret:
     leave
     ret
 
-/*
- * grab_all_keys:
- * Batches all X_GrabKey requests into `in_buf` (4096 bytes) and issues
- * exactly ONE atomic `sys_write` syscall instead of 72 individual syscalls!
- */
-grab_all_keys:
-    push rbx
-    push r12
-    push r13
-
-    lea rbx, [shortcut_keys]
-    lea r12, [in_buf]           /* destination write pointer */
-    mov r13d, [root_win]
-
-grab_batch_loop:
-    movzx edi, byte ptr [rbx]   /* keycode */
-    test edi, edi
-    jz grab_batch_send
-    movzx esi, byte ptr [rbx + 1] /* modifiers */
-
-    /* Emit standard combo */
-    mov dword ptr [r12 + 0], (4 << 16) | (1 << 8) | 33
-    mov [r12 + 4], r13d
-    mov eax, edi
-    shl eax, 16
-    and esi, 0xFFFF
-    or eax, esi
-    or eax, (1 << 24)
-    mov [r12 + 8], eax
-    mov dword ptr [r12 + 12], 1
-    add r12, 16
-
-    /* Emit NumLock/CapsLock combo (modifiers | 0x10) */
-    mov dword ptr [r12 + 0], (4 << 16) | (1 << 8) | 33
-    mov [r12 + 4], r13d
-    or eax, 0x10                /* add NumLock mask to modifiers word */
-    mov [r12 + 8], eax
-    mov dword ptr [r12 + 12], 1
-    add r12, 16
-
-    add rbx, 2
-    jmp grab_batch_loop
-
-grab_batch_send:
-    /* Calculate total bytes: r12 - in_buf */
-    pop r13                     /* restore permanent socket fd in r13d! */
-    lea rax, [in_buf]
-    sub r12, rax                /* r12 = total byte count */
-    jz grab_batch_done
-
-    mov eax, SYS_WRITE
-    mov edi, r13d
-    lea rsi, [in_buf]
-    mov edx, r12d
-    syscall
-
-grab_batch_done:
-    pop r12
-    pop rbx
-    ret
-
 
 /*
  * bsp_node_in_direction(rdi = start_leaf, esi = orient, edx = dir)
@@ -2139,20 +2109,18 @@ ev_q_head:      .long 0         /* Current read offset in event_queue */
 ev_q_tail:      .long 0         /* Total bytes available in event_queue */
 
 /*
- * Shared I/O Buffer (832 bytes total - compacted so the ENTIRE hot binary
- * (.text + .data + hot .bss) fits inside 2 physical 4 KB pages [0x400000..0x401fff]!):
- * - `out_buf` uses first 544 bytes (during startup `grab_all_keys` uses 1152B across in_buf+event_queue+node_pool)
- * - `event_queue` uses next 288 bytes (9 X11 events * 32 bytes - zero-copy in-place dispatch!)
+ * Shared I/O Buffer (1056 bytes total) + node_pool (512 bytes) = 1568 bytes contiguous!
+ * Entire ELF binary (.text + .data + ALL .bss) fits inside 2 physical 4 KB pages [0x400000..0x401fff]!
  */
+.align 8
+env_buf:        .space 160      /* Up to 19 env vars + DISPLAY=:0 + NULL for TTY login */
+tty_buf:        .space 32
+
 .align 32
 out_buf:
-in_buf:         .space 544
+in_buf:         .space 768
 event_queue:    .space 288      /* Buffer for up to 9 X11 events (32 bytes each) */
 
-/* 16 nodes of 32 bytes = 512 bytes (fits hot .bss completely inside page 0x401000..0x401fff!) */
+/* 16 nodes of 32 bytes = 512 bytes (allocated only when windows map after init_bar!) */
 .align 32
 node_pool:      .space 512
-
-/* Cold TTY-only buffers placed at very end of .bss so they are never faulted in X sessions */
-env_buf:        .space 256
-tty_buf:        .space 32
