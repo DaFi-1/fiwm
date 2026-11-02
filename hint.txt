@@ -1,0 +1,30 @@
+===============================================================================
+HINT: MICRO-OTIMIZAÇÃO DE ZERO RAM PARA VARIÁVEIS GLOBAIS VIA REGISTRADORES
+===============================================================================
+
+1. CONCEITO:
+Na arquitetura x86_64, a CPU disponibiliza 16 registradores de 64 bits:
+rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8, r9, r10, r11, r12, r13, r14, r15.
+
+Cada registrador é um circuito físico de flip-flop dentro do silício do núcleo,
+com latência de 0 ciclos de barramento de memória externa.
+
+Em código tradicional C/Assembly, estados como `cur_ws`, `next_split_sel`,
+`is_fullscreen` residem na seção .bss (memória RAM) e requerem acessos
+`mov reg, [mem]` e `mov [mem], reg`.
+
+2. MAPEAMENTO PROPOSTO:
+Alocar registradores dedicados que preservam o estado durante o loop principal
+de eventos:
+
+- `cur_ws`: em vez de `.bss`, manter o workspace ativo diretamente em registrador
+  de 1 byte (ex: `r14b`).
+- `next_split_sel`: manter em `r15b` ou sub-registrador.
+- `is_fullscreen`: manter como flag de bit.
+
+3. VANTAGENS:
+- Zero acessos à memória RAM / Cache L1 para checagem e alteração de workspace.
+- Redução do tamanho das instruções x86_64 de 5-7 bytes para 2-3 bytes.
+- Eliminação de variáveis na seção .bss.
+- Execução em 1 ciclo de clock de silício puro.
+===============================================================================
