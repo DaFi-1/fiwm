@@ -1457,7 +1457,11 @@ bsp_tree_detach:
     test r12, r12
     jnz td_has_parent
 
-    /* Removing root */
+    /* Removing root: push leaf node (rbx) onto O(1) free-list! */
+    mov rax, [free_node_head]
+    mov [rbx + NODE_FIRST], rax
+    mov [free_node_head], rbx
+
     lea rax, [bsp_roots]
     mov qword ptr [rax + 8*r14], 0
     lea rax, [bsp_focuses]
@@ -1494,6 +1498,12 @@ td_sib_root:
     mov [rax + 8*r14], r13
 
 td_done:
+    /* Push both detached leaf (rbx) and split parent (r12) onto O(1) free-list! */
+    mov rax, [free_node_head]
+    mov [r12 + NODE_FIRST], rax
+    mov [rbx + NODE_FIRST], r12
+    mov [free_node_head], rbx
+
     pop r14
     pop r13
     pop r12
@@ -1502,8 +1512,17 @@ td_done:
 
 /*
  * alloc_node() -> rax = pointer to new 32-byte aligned node
+ * O(1) L1-hot Free-List recycler with fallback to bump allocator in node_pool.
  */
 alloc_node:
+    mov rax, [free_node_head]
+    test rax, rax
+    jz alloc_from_pool
+    mov rdx, [rax + NODE_FIRST]
+    mov [free_node_head], rdx
+    jmp alloc_zero_node
+
+alloc_from_pool:
     mov eax, [node_idx]
     cmp eax, 15
     jge alloc_fail
@@ -1511,6 +1530,7 @@ alloc_node:
     shl rax, 5                  /* rax * 32 bytes */
     lea rdx, [node_pool]
     add rax, rdx
+alloc_zero_node:
     mov qword ptr [rax + 0],  0  /* Clears NODE_WIN, NODE_SPLIT, NODE_WS, pad */
     mov qword ptr [rax + 8],  0  /* Clears NODE_FIRST */
     mov qword ptr [rax + 16], 0  /* Clears NODE_SECOND */
@@ -2061,6 +2081,7 @@ mon_geom:       .space 32
 /* 9 Workspaces state */
 bsp_roots:      .space 72       /* 9 x 8 bytes pointers */
 bsp_focuses:    .space 72       /* 9 x 8 bytes pointers */
+free_node_head: .quad 0         /* O(1) recycled BSP node free-list head */
 
 node_idx:       .long 0
 ev_q_head:      .long 0         /* Current read offset in event_queue */
