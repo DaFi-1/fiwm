@@ -1045,37 +1045,22 @@ dab_ws_loop:
 
 /*
  * draw_single_ws_buf(edi = ws_idx 0..8, r15 = write cursor):
- * Surgical O(1) Single-Digit Bar Renderer via X_ImageText8 (Opcode 76, 20 bytes):
- * Computes the monitor bar window and X slot position for `ws_idx` and emits a single
- * 20-byte X_ImageText8 packet using active GC (if ws_idx == r14d) or inactive GC.
+ * Surgical O(1) Branchless Single-Digit Bar Renderer via X_ImageText8 (Opcode 76, 20 bytes):
+ * Looks up monitor and precomputed X coordinate directly in O(1) without any loop!
  */
 draw_single_ws_buf:
     push rbx
     mov ebx, edi                                /* ebx = target ws_idx (0..8) */
 
-    /* 1. Determine monitor (0 or 1) for this workspace */
-    call get_mon_for_ws                         /* eax = mon_idx (0 or 1) */
-    mov ecx, eax                                /* ecx = mon_idx */
+    xor ecx, ecx                                /* default single-monitor: mon_idx = 0 */
+    imul esi, ebx, 24
+    add esi, 10                                 /* default single-monitor X = 10 + ws_idx * 24 */
 
-    /* 2. Count slot index (how many workspaces < ebx share the same monitor) */
-    xor esi, esi                                /* esi = slot counter */
     cmp dword ptr [mon_count], 2
-    jl dsw_single_mon
+    jl dsw_emit
 
-    xor edx, edx                                /* edx = scan index 0..ebx-1 */
-dsw_slot_loop:
-    cmp edx, ebx
-    jge dsw_emit
-    movzx eax, byte ptr [ws_mon_table + rdx]
-    cmp eax, ecx
-    jne dsw_slot_next
-    inc esi
-dsw_slot_next:
-    inc edx
-    jmp dsw_slot_loop
-
-dsw_single_mon:
-    mov esi, ebx                                /* On 1 monitor, slot == ws_idx */
+    movzx ecx, byte ptr [ws_mon_table + rbx]    /* O(1) monitor lookup */
+    movzx esi, byte ptr [ws_x_table + rbx]      /* O(1) precomputed X coordinate lookup! */
 
 dsw_emit:
     /* Select pre-created GC: bar_gc + 0 (active) or bar_gc + 1 (inactive) */
@@ -1090,9 +1075,8 @@ dsw_gc_ok:
     mov [r15 + 4], eax
     mov [r15 + 8], edx
 
-    /* X position: 10 + esi * 24, Y: 13 */
-    imul esi, 24
-    add esi, (13 << 16) | 10
+    /* Pack X (low 16b) and Y=13 (high 16b) */
+    or esi, (13 << 16)
     mov [r15 + 12], esi
 
     /* Character byte '1' + ebx */
@@ -2006,6 +1990,10 @@ ws_mon_table:
     .byte 1                     /* WS 7 -> Monitor 1 */
     .byte 1                     /* WS 8 -> Monitor 1 */
     .byte 0                     /* WS 9 -> Monitor 0 */
+
+/* Precomputed X pixel offset (10 + slot * 24) for each workspace in dual-monitor mode */
+ws_x_table:
+    .byte 10, 34, 58, 82, 106, 130, 154, 178, 10
 
 /*
  * Table of Grabbed Shortcuts:
