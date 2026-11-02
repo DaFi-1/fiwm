@@ -281,10 +281,21 @@ ev_pop_buffered:
 handle_expose:
     mov edx, [event_buf + 4]    /* drawable/window */
     cmp edx, [bar_win + 0]
-    je do_handle_expose
+    je check_expose_count
     cmp edx, [bar_win + 4]
     jne event_loop
-do_handle_expose:
+
+check_expose_count:
+    /*
+     * Frame Optimization: Expose Compacting
+     * In X11 wire protocol, bytes 16-17 of Expose event is `count` (uint16_t).
+     * `count` indicates how many more Expose events for this window are queued.
+     * If count > 0, discard intermediate frames and wait for count == 0!
+     */
+    movzx eax, word ptr [event_buf + 16]
+    test eax, eax
+    jnz event_loop              /* More expose events incoming, don't redraw yet! */
+
     call draw_all_bars
     jmp event_loop
 
@@ -968,38 +979,22 @@ create_bar_loop:
     ret
 
 /*
- * draw_all_bars(): renders status bar on each active monitor
+ * draw_all_bars():
+ * Frame Batching: Concatenates status bar rendering commands for ALL monitors
+ * into `out_buf` and dispatches everything in ONE atomic sys_write syscall!
+ * Guarantees tear-free synchronized updates across multiple monitors.
  */
 draw_all_bars:
-    push rbx
-    push r14
-    xor r14d, r14d                              /* monitor index */
-dab_loop:
-    mov edi, r14d
-    call draw_mon_bar
-    inc r14d
-    cmp r14d, [mon_count]
-    jl dab_loop
-    pop r14
-    pop rbx
-    ret
-
-/*
- * draw_mon_bar(edi = mon_idx):
- * Renders the top status bar for monitor `edi`.
- * Displays ONLY the workspaces mapped to this monitor in `ws_mon_table`!
- */
-draw_mon_bar:
     push rbx
     push r12
     push r13
     push r14
     push r15
 
-    mov r14d, edi                               /* r14d = mon_idx (0 or 1) */
+    lea rbx, [out_buf]                          /* rbx = output buffer write pointer */
+    xor r14d, r14d                              /* r14d = mon_idx (0 or 1) */
 
-    lea rbx, [out_buf]
-
+dab_mon_loop:
     /* 1. Clear background: ChangeGC (16 bytes) */
     mov dword ptr [rbx + 0], (4 << 16) | 56     /* ChangeGC */
     mov eax, [bar_gc]
@@ -1023,7 +1018,7 @@ draw_mon_bar:
     or eax, edx
     mov [rbx + 32], eax
 
-    add rbx, 36                                 /* rbx now points to first WS packet */
+    add rbx, 36
 
     /* 3. Loop through workspaces 0..8 and draw ONLY those assigned to mon_idx */
     xor r12d, r12d                              /* r12d = ws_idx (0..8) */
@@ -1081,18 +1076,22 @@ skip_ws_mon:
     cmp r12d, 9
     jl draw_ws_mon_loop
 
-    /* Emit ENTIRE frame in a single atomic syscall */
-    /* Total bytes = 36 + r13d * 36 */
-    mov eax, r13d
-    imul eax, 36
-    add eax, 36
-    mov edx, eax                                /* edx = total write length */
+    inc r14d
+    cmp r14d, [mon_count]
+    jl dab_mon_loop
+
+    /* Emit all frames across all monitors in a SINGLE atomic syscall */
+    lea rax, [out_buf]
+    sub rbx, rax                                /* rbx = total byte count */
+    jz dab_done
 
     mov eax, SYS_WRITE
     mov edi, [sock_fd]
     lea rsi, [out_buf]
+    mov edx, ebx
     syscall
 
+dab_done:
     pop r15
     pop r14
     pop r13
