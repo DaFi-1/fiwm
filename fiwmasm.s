@@ -768,8 +768,12 @@ focus_workspace:
     /* 2. Switch to new workspace directly in permanent register r14! (Zero RAM) */
     mov r14d, r12d
 
-    /* 3. Redraw top status bars across monitors into [r15] */
-    call draw_all_bars_buf
+    /* 3. Surgical 2-Digit Delta Update on Status Bar into [r15] (40 bytes instead of 180!):
+       - Redraw ONLY old_ws (ebx) as inactive and new_ws (r12d) as active! */
+    mov edi, ebx
+    call draw_single_ws_buf
+    mov edi, r12d
+    call draw_single_ws_buf
 
     /* 4. Arrange new workspace windows on-screen into [r15]
        (No redundant MapWindow needed: windows stay mapped while off-screen!) */
@@ -1025,70 +1029,77 @@ draw_all_bars:
 
 /*
  * draw_all_bars_buf(r15 = write cursor):
- * Zero-Blanking / Zero-Flicker Bar Renderer via X_ImageText8 (Opcode 76, 16 bytes):
- * Each digit atomically paints BOTH its foreground glyph AND its 0x181818 background cell!
- * No PolyFillRectangle clear pass needed, zero ChangeGC packets, 144 bytes total for 9 workspaces!
+ * Full 9-digit bar redraw (used on initial boot and Expose events).
  */
 draw_all_bars_buf:
     push rbx
-    push r12
-    push r13
+    xor ebx, ebx                                /* ebx = ws_idx (0..8) */
+dab_ws_loop:
+    mov edi, ebx
+    call draw_single_ws_buf
+    inc ebx
+    cmp ebx, WORKSPACE_COUNT
+    jl dab_ws_loop
+    pop rbx
+    ret
 
-    xor ebx, ebx                                /* ebx = mon_idx (0 or 1) */
+/*
+ * draw_single_ws_buf(edi = ws_idx 0..8, r15 = write cursor):
+ * Surgical O(1) Single-Digit Bar Renderer via X_ImageText8 (Opcode 76, 20 bytes):
+ * Computes the monitor bar window and X slot position for `ws_idx` and emits a single
+ * 20-byte X_ImageText8 packet using active GC (if ws_idx == r14d) or inactive GC.
+ */
+draw_single_ws_buf:
+    push rbx
+    mov ebx, edi                                /* ebx = target ws_idx (0..8) */
 
-dab_mon_loop:
-    /* Loop through workspaces 0..8 and draw ONLY those assigned to mon_idx */
-    xor r12d, r12d                              /* r12d = ws_idx (0..8) */
-    xor r13d, r13d                              /* r13d = display slot counter for this bar */
+    /* 1. Determine monitor (0 or 1) for this workspace */
+    call get_mon_for_ws                         /* eax = mon_idx (0 or 1) */
+    mov ecx, eax                                /* ecx = mon_idx */
 
-draw_ws_mon_loop:
-    /* Check if this workspace belongs to this monitor */
-    movzx eax, byte ptr [ws_mon_table + r12]
-    cmp eax, ebx
-    jne skip_ws_mon                             /* Not on this monitor, skip! */
+    /* 2. Count slot index (how many workspaces < ebx share the same monitor) */
+    xor esi, esi                                /* esi = slot counter */
+    cmp dword ptr [mon_count], 2
+    jl dsw_single_mon
 
+    xor edx, edx                                /* edx = scan index 0..ebx-1 */
+dsw_slot_loop:
+    cmp edx, ebx
+    jge dsw_emit
+    movzx eax, byte ptr [ws_mon_table + rdx]
+    cmp eax, ecx
+    jne dsw_slot_next
+    inc esi
+dsw_slot_next:
+    inc edx
+    jmp dsw_slot_loop
+
+dsw_single_mon:
+    mov esi, ebx                                /* On 1 monitor, slot == ws_idx */
+
+dsw_emit:
     /* Select pre-created GC: bar_gc + 0 (active) or bar_gc + 1 (inactive) */
     mov edx, [bar_gc]
-    cmp r12d, r14d
-    je emit_imagetext
+    cmp ebx, r14d
+    je dsw_gc_ok
     inc edx                                     /* inactive: bar_gc + 1 */
-
-emit_imagetext:
+dsw_gc_ok:
     /* X_ImageText8 (Opcode 76, n=1 char, length=5 words = 20 bytes) */
     mov dword ptr [r15 + 0], (5 << 16) | (1 << 8) | 76
-    mov eax, [bar_win + 4*rbx]
+    mov eax, [bar_win + 4*rcx]
     mov [r15 + 4], eax
-    mov [r15 + 8], edx                          /* pre-configured GC (fg + bg)! */
+    mov [r15 + 8], edx
 
-    /* X position: 10 + r13d * 24, Y: 13 */
-    mov eax, r13d
-    imul eax, 24
-    add eax, 10
-    mov edx, 13
-    shl edx, 16
-    and eax, 0xFFFF
-    or eax, edx
-    mov [r15 + 12], eax
+    /* X position: 10 + esi * 24, Y: 13 */
+    imul esi, 24
+    add esi, (13 << 16) | 10
+    mov [r15 + 12], esi
 
-    /* Character byte '1' + r12d (padded to 4-byte word) */
-    mov ecx, r12d
-    add ecx, '1'
-    mov [r15 + 16], ecx
+    /* Character byte '1' + ebx */
+    lea eax, [rbx + '1']
+    mov [r15 + 16], eax
 
     add r15, 20
-    inc r13d                                    /* Advance slot counter */
-
-skip_ws_mon:
-    inc r12d
-    cmp r12d, 9
-    jl draw_ws_mon_loop
-
-    inc ebx
-    cmp ebx, [mon_count]
-    jl dab_mon_loop
-
-    pop r13
-    pop r12
     pop rbx
     ret
 
