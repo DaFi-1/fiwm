@@ -936,47 +936,37 @@ create_bar_loop:
     cmp r12d, [mon_count]
     jl create_bar_loop
 
-    /* 3. Pre-create 3 static GCs (Eliminates all runtime ChangeGC packets!):
-       - bar_gc + 0: background fill GC (fg = 0x181818)
-       - bar_gc + 1: active workspace digit GC (fg = 0xc2c2b0)
-       - bar_gc + 2: inactive workspace digit GC (fg = 0x685742)
+    /* 3. Pre-create 2 static GCs for X_ImageText8 (Eliminates PolyFillRectangle AND ChangeGC!):
+       - bar_gc + 0: active workspace digit GC (fg = 0xc2c2b0, bg = 0x181818)
+       - bar_gc + 1: inactive workspace digit GC (fg = 0x685742, bg = 0x181818)
      */
     mov ecx, [bar_gc]
     mov edx, [bar_win + 0]
 
-    /* GC 0: Background (24 bytes) */
+    /* GC 0: Active text + background cell (24 bytes) */
     mov dword ptr [r15 + 0], (6 << 16) | 55
     mov [r15 + 4], ecx
     mov [r15 + 8], edx
     mov dword ptr [r15 + 12], 12                /* GCForeground (4) | GCBackground (8) */
-    mov dword ptr [r15 + 16], 0x181818          /* fg = bg = 0x181818 */
-    mov dword ptr [r15 + 20], 0x181818
+    mov dword ptr [r15 + 16], 0xc2c2b0          /* fg = active cream/gold */
+    mov dword ptr [r15 + 20], 0x181818          /* bg = bar dark background */
 
-    /* GC 1: Active text (24 bytes) */
+    /* GC 1: Inactive text + background cell (24 bytes) */
     inc ecx
     mov dword ptr [r15 + 24], (6 << 16) | 55
     mov [r15 + 28], ecx
     mov [r15 + 32], edx
     mov dword ptr [r15 + 36], 12
-    mov dword ptr [r15 + 40], 0xc2c2b0          /* fg = active cream/gold */
-    mov dword ptr [r15 + 44], 0x181818
-
-    /* GC 2: Inactive text (24 bytes) */
-    inc ecx
-    mov dword ptr [r15 + 48], (6 << 16) | 55
-    mov [r15 + 52], ecx
-    mov [r15 + 56], edx
-    mov dword ptr [r15 + 60], 12
-    mov dword ptr [r15 + 64], 0x685742          /* fg = inactive brown/gray */
-    mov dword ptr [r15 + 68], 0x181818
+    mov dword ptr [r15 + 40], 0x685742          /* fg = inactive brown/gray */
+    mov dword ptr [r15 + 44], 0x181818          /* bg = bar dark background */
 
     /* 4. SelectInput on root window (16 bytes) */
-    mov dword ptr [r15 + 72], (4 << 16) | 2
+    mov dword ptr [r15 + 48], (4 << 16) | 2
     mov eax, [root_win]
-    mov [r15 + 76], eax
-    mov dword ptr [r15 + 80], 0x00000800        /* CWEventMask bit 11 */
-    mov dword ptr [r15 + 84], 0x00180001        /* SubstructureRedirect | SubstructureNotify | KeyPress */
-    add r15, 88
+    mov [r15 + 52], eax
+    mov dword ptr [r15 + 56], 0x00000800        /* CWEventMask bit 11 */
+    mov dword ptr [r15 + 60], 0x00180001        /* SubstructureRedirect | SubstructureNotify | KeyPress */
+    add r15, 64
 
     /* 5. Append initial bar render into [r15] */
     call draw_all_bars_buf
@@ -1035,9 +1025,9 @@ draw_all_bars:
 
 /*
  * draw_all_bars_buf(r15 = write cursor):
- * Zero-ChangeGC Bar Renderer: Uses the 3 pre-created GCs (bar_gc+0, bar_gc+1, bar_gc+2)
- * so every workspace digit takes only 20 bytes (PolyText8) with ZERO ChangeGC overhead!
- * Appends directly to [r15] so it can be combined with workspace switching in 1 syscall!
+ * Zero-Blanking / Zero-Flicker Bar Renderer via X_ImageText8 (Opcode 76, 16 bytes):
+ * Each digit atomically paints BOTH its foreground glyph AND its 0x181818 background cell!
+ * No PolyFillRectangle clear pass needed, zero ChangeGC packets, 144 bytes total for 9 workspaces!
  */
 draw_all_bars_buf:
     push rbx
@@ -1047,24 +1037,7 @@ draw_all_bars_buf:
     xor ebx, ebx                                /* ebx = mon_idx (0 or 1) */
 
 dab_mon_loop:
-    /* 1. Clear background with PolyFillRectangle using bar_gc + 0 (20 bytes, no ChangeGC!) */
-    mov dword ptr [r15 + 0], (5 << 16) | 70     /* PolyFillRectangle */
-    mov eax, [bar_win + 4*rbx]
-    mov [r15 + 4], eax
-    mov eax, [bar_gc]                           /* bar_gc + 0 = 0x181818 */
-    mov [r15 + 8], eax
-    mov dword ptr [r15 + 12], 0                 /* x=0, y=0 */
-    mov eax, ebx
-    shl eax, 4
-    mov eax, [mon_geom + rax + 8]               /* mon width */
-    mov edx, BAR_HEIGHT                         /* height */
-    shl edx, 16
-    and eax, 0xFFFF
-    or eax, edx
-    mov [r15 + 16], eax
-    add r15, 20
-
-    /* 2. Loop through workspaces 0..8 and draw ONLY those assigned to mon_idx */
+    /* Loop through workspaces 0..8 and draw ONLY those assigned to mon_idx */
     xor r12d, r12d                              /* r12d = ws_idx (0..8) */
     xor r13d, r13d                              /* r13d = display slot counter for this bar */
 
@@ -1074,19 +1047,18 @@ draw_ws_mon_loop:
     cmp eax, ebx
     jne skip_ws_mon                             /* Not on this monitor, skip! */
 
-    /* Select pre-created GC: bar_gc + 1 (active) or bar_gc + 2 (inactive) */
+    /* Select pre-created GC: bar_gc + 0 (active) or bar_gc + 1 (inactive) */
     mov edx, [bar_gc]
-    add edx, 2                                  /* default: bar_gc + 2 (inactive) */
     cmp r12d, r14d
-    jne emit_polytext
-    dec edx                                     /* active: bar_gc + 1 */
+    je emit_imagetext
+    inc edx                                     /* inactive: bar_gc + 1 */
 
-emit_polytext:
-    /* PolyText8 (20 bytes) */
-    mov dword ptr [r15 + 0], (5 << 16) | 74
+emit_imagetext:
+    /* X_ImageText8 (Opcode 76, n=1 char, length=5 words = 20 bytes) */
+    mov dword ptr [r15 + 0], (5 << 16) | (1 << 8) | 76
     mov eax, [bar_win + 4*rbx]
     mov [r15 + 4], eax
-    mov [r15 + 8], edx                          /* pre-configured GC! */
+    mov [r15 + 8], edx                          /* pre-configured GC (fg + bg)! */
 
     /* X position: 10 + r13d * 24, Y: 13 */
     mov eax, r13d
@@ -1098,11 +1070,9 @@ emit_polytext:
     or eax, edx
     mov [r15 + 12], eax
 
-    /* Text Item: len = 1, delta = 0, char = '1' + r12d, pad = 0 */
+    /* Character byte '1' + r12d (padded to 4-byte word) */
     mov ecx, r12d
     add ecx, '1'
-    shl ecx, 16
-    or ecx, 1                                   /* len = 1 in low byte */
     mov [r15 + 16], ecx
 
     add r15, 20
