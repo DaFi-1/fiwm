@@ -1291,17 +1291,20 @@ handle_map:
     mov esi, r14d
     call bsp_tree_insert_into_ws
 
-    /* Batch MapWindow + set_focus + bsp_arrange_ws into ONE atomic syscall! */
+    /* Zero-Flicker Map Pipeline:
+       1. ConfigureWindow (bsp_arrange_ws_buf) FIRST while new window is still unmapped!
+       2. MapWindow SECOND so window appears directly at its final tiled geometry!
+       3. SetInputFocus THIRD, all flushed in ONE atomic sys_write! */
     lea r15, [out_buf]
+    mov edi, r14d
+    call bsp_arrange_ws_buf
+
     mov dword ptr [r15 + 0], (2 << 16) | 8
     mov dword ptr [r15 + 4], r12d
     add r15, 8
 
     mov edi, r12d
     call set_focus_buf
-
-    mov edi, r14d
-    call bsp_arrange_ws_buf
     call flush_out_buf
     jmp event_loop
 
