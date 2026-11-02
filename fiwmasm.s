@@ -222,14 +222,41 @@ setup_drained:
     call grab_all_keys
 
 event_loop:
+    /* Check if event_queue still has buffered events */
+    mov eax, [ev_q_head]
+    cmp eax, [ev_q_tail]
+    jl ev_pop_buffered
+
+    /* Buffer is empty, read next chunk of events (up to 32 events = 1024 bytes) */
     mov eax, SYS_READ
     mov edi, [sock_fd]
-    lea rsi, [event_buf]
-    mov edx, 32
+    lea rsi, [event_queue]
+    mov edx, 1024
     syscall
 
     test eax, eax
     jle exit_clean
+
+    /* Initialize queue head = 0, tail = bytes read */
+    mov dword ptr [ev_q_head], 0
+    mov [ev_q_tail], eax
+
+ev_pop_buffered:
+    /* Copy next 32-byte event from event_queue[ev_q_head] to event_buf */
+    mov ecx, [ev_q_head]
+    lea rsi, [event_queue + rcx]
+    lea rdi, [event_buf]
+    /* 32 bytes = 4 quadwords */
+    mov rax, [rsi + 0]
+    mov [rdi + 0], rax
+    mov rax, [rsi + 8]
+    mov [rdi + 8], rax
+    mov rax, [rsi + 16]
+    mov [rdi + 16], rax
+    mov rax, [rsi + 24]
+    mov [rdi + 24], rax
+
+    add dword ptr [ev_q_head], 32
 
     movzx eax, byte ptr [event_buf]
     and al, 0x7F
@@ -1996,4 +2023,7 @@ node_pool:      .space 2048
 
 out_buf:        .space 1024
 in_buf:         .space 4096
+event_queue:    .space 1024     /* Buffer for up to 32 X11 events (32 bytes each) */
+ev_q_head:      .long 0         /* Current read offset in event_queue */
+ev_q_tail:      .long 0         /* Total bytes available in event_queue */
 event_buf:      .space 64
