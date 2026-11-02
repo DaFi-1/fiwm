@@ -575,10 +575,17 @@ key_fullscreen:
     mov eax, [rbx + 12]         /* h */
     mov [out_buf + 24], eax
 
+    /* X_RaiseWindow (ConfigureWindow, stack mode = Above) so the
+       fullscreen window actually covers splits from other columns */
+    mov dword ptr [out_buf + 28], (4 << 16) | 12
+    mov [out_buf + 32], edx
+    mov dword ptr [out_buf + 36], 64
+    mov dword ptr [out_buf + 40], 0
+
     mov eax, SYS_WRITE
     mov edi, [sock_fd]
     lea rsi, [out_buf]
-    mov edx, 28
+    mov edx, 44
     syscall
     jmp event_loop
 
