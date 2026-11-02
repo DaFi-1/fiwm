@@ -66,6 +66,7 @@
 
 .text
 _start:
+    xor r14d, r14d              /* r14 = permanent zero-RAM state register (cur_ws=0) */
     mov r8, [rsp]               /* argc */
     lea r9, [rsp + 8*r8 + 16]   /* r9 = envp */
     mov [saved_envp], r9
@@ -446,9 +447,8 @@ check_split_keys:
 
 key_focus_hjkl:
     /* ecx has keycode: 43=h (left), 44=j (down), 45=k (up), 46=l (right) */
-    movzx eax, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
-    mov rdi, [rbx + 8*rax]      /* start leaf */
+    mov rdi, [rbx + 8*r14]      /* start leaf */
     test rdi, rdi
     jz event_loop
 
@@ -481,18 +481,16 @@ do_dir_focus:
     jz event_loop               /* No window in that direction */
 
     /* Set new focus */
-    movzx ecx, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
-    mov [rbx + 8*rcx], rax
+    mov [rbx + 8*r14], rax
     mov edi, [rax + NODE_WIN]
     call set_focus
     jmp event_loop
 
 key_move_hjkl:
     /* Swap focused window with neighbor in the specified 2D direction */
-    movzx eax, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
-    mov r12, [rbx + 8*rax]      /* r12 = current focused leaf */
+    mov r12, [rbx + 8*r14]      /* r12 = current focused leaf */
     test r12, r12
     jz event_loop
 
@@ -531,12 +529,11 @@ do_dir_move:
     mov [rax + NODE_WIN], r8d
 
     /* Update focus to follow the moved window */
-    movzx ecx, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
-    mov [rbx + 8*rcx], rax
+    mov [rbx + 8*r14], rax
 
     /* Re-arrange grid */
-    movzx edi, byte ptr [cur_ws]
+    mov edi, r14d
     call bsp_arrange_ws
 
     mov edi, r8d
@@ -552,7 +549,7 @@ key_split_v:
     jmp event_loop
 
 key_ws_prev:
-    movzx eax, byte ptr [cur_ws]
+    mov eax, r14d
     dec eax
     test eax, eax
     jns ws_prev_ok
@@ -563,7 +560,7 @@ ws_prev_ok:
     jmp event_loop
 
 key_ws_next:
-    movzx eax, byte ptr [cur_ws]
+    mov eax, r14d
     inc eax
     cmp eax, WORKSPACE_COUNT
     jl ws_next_ok
@@ -584,9 +581,8 @@ key_term:
     jmp event_loop
 
 key_kill:
-    movzx eax, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
-    mov rax, [rbx + 8*rax]
+    mov rax, [rbx + 8*r14]
     test rax, rax
     jz event_loop
     mov edx, [rax + NODE_WIN]
@@ -613,9 +609,8 @@ key_kill:
     jmp event_loop
 
 key_fullscreen:
-    movzx eax, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
-    mov rax, [rbx + 8*rax]
+    mov rax, [rbx + 8*r14]
     test rax, rax
     jz event_loop
     mov edx, [rax + NODE_WIN]
@@ -627,7 +622,7 @@ key_fullscreen:
     jne fs_restore
 
     /* Set fullscreen on target monitor */
-    movzx edi, byte ptr [cur_ws]
+    mov edi, r14d
     call get_mon_for_ws         /* eax = monitor index */
     mov ecx, eax
     shl ecx, 4                  /* 16 bytes per monitor */
@@ -661,20 +656,18 @@ key_fullscreen:
     jmp event_loop
 
 fs_restore:
-    movzx edi, byte ptr [cur_ws]
+    mov edi, r14d
     call bsp_arrange_ws
     jmp event_loop
 
 key_focus_next:
-    movzx eax, byte ptr [cur_ws]
     lea rbx, [bsp_roots]
-    mov rdi, [rbx + 8*rax]
+    mov rdi, [rbx + 8*r14]
     call bsp_find_other_leaf
     test rax, rax
     jz event_loop
-    movzx ecx, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
-    mov [rbx + 8*rcx], rax
+    mov [rbx + 8*r14], rax
     mov edi, [rax + NODE_WIN]
     call set_focus
     jmp event_loop
@@ -750,7 +743,7 @@ focus_workspace:
     push r12
 
     mov r12d, edi               /* r12d = new_ws */
-    movzx ebx, byte ptr [cur_ws] /* ebx = old_ws */
+    mov ebx, r14d               /* ebx = old_ws */
     cmp r12d, ebx
     je fw_done
 
@@ -759,8 +752,8 @@ focus_workspace:
     mov rdi, [rax + 8*rbx]
     call hide_tree_windows
 
-    /* Switch to new workspace */
-    mov byte ptr [cur_ws], r12b
+    /* Switch to new workspace directly in permanent register r14! (Zero RAM) */
+    mov r14d, r12d
 
     /* Redraw top status bars across monitors */
     call draw_all_bars
@@ -795,13 +788,12 @@ move_window_to_workspace:
     push r12
 
     mov r12d, edi               /* target_ws */
-    movzx eax, byte ptr [cur_ws]
-    cmp r12d, eax
+    cmp r12d, r14d
     je mw_done
 
     /* Get current focused leaf */
     lea rbx, [bsp_focuses]
-    mov rdi, [rbx + 8*rax]
+    mov rdi, [rbx + 8*r14]
     test rdi, rdi
     jz mw_done
 
@@ -819,7 +811,7 @@ move_window_to_workspace:
     call hide_single_win
 
     /* Re-arrange current workspace */
-    movzx edi, byte ptr [cur_ws]
+    mov edi, r14d
     call bsp_arrange_ws
 
     /* Insert window into target workspace tree */
@@ -1066,11 +1058,10 @@ draw_all_bars:
     push rbx
     push r12
     push r13
-    push r14
     push r15
 
     lea rbx, [out_buf]                          /* rbx = output buffer write pointer */
-    xor r14d, r14d                              /* r14d = mon_idx (0 or 1) */
+    xor r15d, r15d                              /* r15d = mon_idx (0 or 1) */
 
 dab_mon_loop:
     /* 1. Clear background: ChangeGC (16 bytes) */
@@ -1082,12 +1073,12 @@ dab_mon_loop:
 
     /* 2. PolyFillRectangle (20 bytes) */
     mov dword ptr [rbx + 16], (5 << 16) | 70    /* PolyFillRectangle */
-    mov eax, [bar_win + 4*r14]
+    mov eax, [bar_win + 4*r15]
     mov [rbx + 20], eax
     mov eax, [bar_gc]
     mov [rbx + 24], eax
     mov dword ptr [rbx + 28], 0                 /* x=0, y=0 */
-    mov eax, r14d
+    mov eax, r15d
     shl eax, 4
     mov eax, [mon_geom + rax + 8]               /* mon width */
     mov edx, BAR_HEIGHT                         /* height */
@@ -1105,12 +1096,12 @@ dab_mon_loop:
 draw_ws_mon_loop:
     /* Check if this workspace belongs to this monitor */
     movzx eax, byte ptr [ws_mon_table + r12]
-    cmp eax, r14d
+    cmp eax, r15d
     jne skip_ws_mon                             /* Not on this monitor, skip! */
 
-    /* Compare with cur_ws to choose color */
+    /* Compare with active workspace in r14d to choose color */
     mov eax, 0x685742                           /* inactive fg (gray/brown) */
-    cmp r12b, byte ptr [cur_ws]
+    cmp r12d, r14d
     jne set_bar_mon_color
     mov eax, 0xc2c2b0                           /* active fg (bright cream/gold) */
 
@@ -1124,7 +1115,7 @@ set_bar_mon_color:
 
     /* PolyText8 (20 bytes) */
     mov dword ptr [rbx + 16], (5 << 16) | 74
-    mov edx, [bar_win + 4*r14]
+    mov edx, [bar_win + 4*r15]
     mov [rbx + 20], edx
     mov edx, [bar_gc]
     mov [rbx + 24], edx
@@ -1154,8 +1145,8 @@ skip_ws_mon:
     cmp r12d, 9
     jl draw_ws_mon_loop
 
-    inc r14d
-    cmp r14d, [mon_count]
+    inc r15d
+    cmp r15d, [mon_count]
     jl dab_mon_loop
 
     /* Emit all frames across all monitors in a SINGLE atomic syscall */
@@ -1171,7 +1162,6 @@ skip_ws_mon:
 
 dab_done:
     pop r15
-    pop r14
     pop r13
     pop r12
     pop rbx
@@ -1316,14 +1306,14 @@ handle_map:
 
     /* Insert into active workspace BSP tree */
     mov edi, r12d
-    movzx esi, byte ptr [cur_ws]
+    mov esi, r14d
     call bsp_tree_insert_into_ws
 
     /* Focus new window */
     mov edi, r12d
     call set_focus
 
-    movzx edi, byte ptr [cur_ws]
+    mov edi, r14d
     call bsp_arrange_ws
     jmp event_loop
 
@@ -1356,7 +1346,7 @@ found_unmap_node:
     call bsp_tree_detach
 
     /* If it was in active workspace, re-arrange */
-    cmp cl, byte ptr [cur_ws]
+    cmp ecx, r14d
     jne event_loop
 
     lea rax, [bsp_roots]
@@ -1369,7 +1359,7 @@ found_unmap_node:
     mov edi, [rax + NODE_WIN]
     call set_focus
 no_focus_left:
-    movzx edi, byte ptr [cur_ws]
+    mov edi, r14d
     call bsp_arrange_ws
     jmp event_loop
 
@@ -1578,9 +1568,8 @@ bsp_find_other_leaf:
 bfol_loop:
     cmp dword ptr [rdi + NODE_WIN], 0
     je bfol_down
-    movzx eax, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
-    cmp rdi, [rbx + 8*rax]
+    cmp rdi, [rbx + 8*r14]
     jne bfol_found
     xor eax, eax
     ret
@@ -2179,7 +2168,7 @@ disp_found:     .byte 0
 env_buf:        .space 496
 tty_buf:        .space 32
 
-cur_ws:         .byte 0         /* Active Workspace (0..8) - 1 byte! */
+/* cur_ws lives permanently in register r14 (Zero RAM!) */
 next_split_sel: .byte 0         /* 0 = auto, 1 = V, 2 = H - 1 byte! */
 is_fullscreen:  .byte 0         /* 0 = normal, 1 = fullscreen - 1 byte! */
                 .align 4
