@@ -590,21 +590,33 @@ key_kill:
     jz event_loop
 
     /*
-     * Terminate client window:
-     * 1. Opcode 4: DestroyWindow (len 2 words = 8 bytes)
-     * 2. Opcode 113: KillClient (len 2 words = 8 bytes)
-     * Both batched in a single 16-byte packet: closes the X11 connection,
-     * forcing the kernel to kill the process and all its audio/render threads!
+     * Terminate client window and process tree (52 bytes batched in 1 syscall):
+     * 1. X_SendEvent (Opcode 25, len=11 words = 44 bytes): sends ICCCM ClientMessage
+     *    WM_PROTOCOLS / WM_DELETE_WINDOW so apps like Brave/Chrome cleanly shut down
+     *    all background audio and renderer processes.
+     * 2. X_KillClient (Opcode 113, len=2 words = 8 bytes): forces the X server to
+     *    sever the client's socket connection so non-ICCCM apps die immediately too.
      */
-    mov dword ptr [out_buf + 0], (2 << 16) | 4
-    mov [out_buf + 4], edx
-    mov dword ptr [out_buf + 8], (2 << 16) | 113
-    mov [out_buf + 12], edx
+    mov dword ptr [out_buf + 0],  (11 << 16) | 25   /* X_SendEvent: propagate=0, len=11 */
+    mov [out_buf + 4],  edx                         /* destination = win */
+    mov dword ptr [out_buf + 8],  0                 /* event_mask = NoEventMask */
+    mov dword ptr [out_buf + 12], (32 << 8) | 33    /* ClientMessage (33), format=32 */
+    mov [out_buf + 16], edx                         /* window = win */
+    mov eax, [atom_wm_proto]
+    mov [out_buf + 20], eax                         /* message_type = WM_PROTOCOLS */
+    mov eax, [atom_wm_del]
+    mov [out_buf + 24], eax                         /* data.l[0] = WM_DELETE_WINDOW */
+    mov qword ptr [out_buf + 28], 0                 /* data.l[1..2] = 0 */
+    mov qword ptr [out_buf + 36], 0                 /* data.l[3..4] = 0 */
+
+    /* Also append X_KillClient (8 bytes) */
+    mov dword ptr [out_buf + 44], (2 << 16) | 113
+    mov [out_buf + 48], edx
 
     mov eax, SYS_WRITE
     mov edi, [sock_fd]
     lea rsi, [out_buf]
-    mov edx, 16
+    mov edx, 52
     syscall
     jmp event_loop
 
@@ -1266,6 +1278,42 @@ detect_monitors:
     mov dword ptr [mon_count], 2
 
 mon_detect_done:
+    /*
+     * Intern ICCCM atoms in ONE pipelined batch (44 bytes total):
+     * 1. X_InternAtom "WM_PROTOCOLS" (20 bytes)
+     * 2. X_InternAtom "WM_DELETE_WINDOW" (24 bytes)
+     */
+    mov dword ptr [out_buf + 0],  (5 << 16) | 16    /* Opcode 16, only_if_exists=0, len=5 */
+    mov dword ptr [out_buf + 4],  12                /* name_len = 12 */
+    mov rax, 0x4f544f52505f4d57                     /* "WM_PROTO" */
+    mov [out_buf + 8], rax
+    mov dword ptr [out_buf + 16], 0x534c4f43        /* "COLS" */
+
+    mov dword ptr [out_buf + 20], (6 << 16) | 16    /* Opcode 16, only_if_exists=0, len=6 */
+    mov dword ptr [out_buf + 24], 16                /* name_len = 16 */
+    mov rax, 0x54454c45445f4d57                     /* "WM_DELET" */
+    mov [out_buf + 28], rax
+    mov rax, 0x574f444e49575f45                     /* "E_WINDOW" */
+    mov [out_buf + 36], rax
+
+    mov eax, SYS_WRITE
+    mov edi, [sock_fd]
+    lea rsi, [out_buf]
+    mov edx, 44
+    syscall
+
+    /* Read both 32-byte replies (64 bytes total) */
+    mov eax, SYS_READ
+    mov edi, [sock_fd]
+    lea rsi, [in_buf]
+    mov edx, 64
+    syscall
+
+    mov eax, [in_buf + 8]
+    mov [atom_wm_proto], eax
+    mov eax, [in_buf + 40]
+    mov [atom_wm_del], eax
+
     pop rbx
     ret
 
@@ -2162,6 +2210,8 @@ screen_w:       .long 0
 screen_h:       .long 0
 bar_win:        .long 0, 0      /* bar_win for Monitor 0 and Monitor 1 */
 bar_gc:         .long 0
+atom_wm_proto:  .long 0         /* WM_PROTOCOLS atom */
+atom_wm_del:    .long 0         /* WM_DELETE_WINDOW atom */
 saved_envp:     .quad 0
 xorg_pid:       .quad 0
 disp_found:     .byte 0
