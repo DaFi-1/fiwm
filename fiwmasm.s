@@ -279,11 +279,11 @@ event_loop:
     cmp eax, [ev_q_tail]
     jl ev_pop_buffered
 
-    /* Buffer is empty, read next chunk of events (up to 8 events = 256 bytes) */
+    /* Buffer is empty, read next chunk of events (up to 9 events = 288 bytes) */
     mov eax, SYS_READ
     mov edi, [sock_fd]
     lea rsi, [event_queue]
-    mov edx, 256
+    mov edx, 288
     syscall
 
     test eax, eax
@@ -294,23 +294,12 @@ event_loop:
     mov [ev_q_tail], eax
 
 ev_pop_buffered:
-    /* Copy next 32-byte event from event_queue[ev_q_head] to event_buf */
+    /* Zero-Copy Event Dispatch: read directly from [event_queue + rcx] in rsi! */
     mov ecx, [ev_q_head]
     lea rsi, [event_queue + rcx]
-    lea rdi, [event_buf]
-    /* 32 bytes = 4 quadwords */
-    mov rax, [rsi + 0]
-    mov [rdi + 0], rax
-    mov rax, [rsi + 8]
-    mov [rdi + 8], rax
-    mov rax, [rsi + 16]
-    mov [rdi + 16], rax
-    mov rax, [rsi + 24]
-    mov [rdi + 24], rax
-
     add dword ptr [ev_q_head], 32
 
-    movzx eax, byte ptr [event_buf]
+    movzx eax, byte ptr [rsi]
     and al, 0x7F
 
     cmp al, 2                   /* KeyPress */
@@ -331,7 +320,7 @@ ev_pop_buffered:
     jmp event_loop
 
 handle_expose:
-    mov edx, [event_buf + 4]    /* drawable/window */
+    mov edx, [rsi + 4]          /* drawable/window */
     cmp edx, [bar_win + 0]
     je check_expose_count
     cmp edx, [bar_win + 4]
@@ -344,7 +333,7 @@ check_expose_count:
      * `count` indicates how many more Expose events for this window are queued.
      * If count > 0, discard intermediate frames and wait for count == 0!
      */
-    movzx eax, word ptr [event_buf + 16]
+    movzx eax, word ptr [rsi + 16]
     test eax, eax
     jnz event_loop              /* More expose events incoming, don't redraw yet! */
 
@@ -357,8 +346,8 @@ check_expose_count:
  * =========================================================================
  */
 handle_key:
-    movzx ecx, byte ptr [event_buf + 1]  /* keycode */
-    movzx edx, word ptr [event_buf + 28] /* state/modifiers */
+    movzx ecx, byte ptr [rsi + 1]   /* keycode */
+    movzx edx, word ptr [rsi + 28]  /* state/modifiers */
 
     /* Check Alt+1..9 (keycodes 10 to 18) */
     cmp ecx, 10
@@ -1263,7 +1252,7 @@ single_mon:
  */
 
 handle_map:
-    mov edx, [event_buf + 8]
+    mov edx, [rsi + 8]
     test edx, edx
     jz event_loop
     mov r12d, edx
@@ -1288,7 +1277,7 @@ handle_map:
     jmp event_loop
 
 handle_unmap:
-    mov edx, [event_buf + 8]
+    mov edx, [rsi + 8]
     test edx, edx
     jz event_loop
 
@@ -2150,18 +2139,17 @@ bsp_focuses:    .space 72       /* 9 x 8 bytes pointers */
 node_idx:       .long 0
 ev_q_head:      .long 0         /* Current read offset in event_queue */
 ev_q_tail:      .long 0         /* Total bytes available in event_queue */
-event_buf:      .space 32       /* Single X11 event = 32 bytes */
 
 /*
  * Shared I/O Buffer (832 bytes total - compacted so the ENTIRE hot binary
  * (.text + .data + hot .bss) fits inside 2 physical 4 KB pages [0x400000..0x401fff]!):
- * - `out_buf` uses first 576 bytes (during startup `grab_all_keys` uses 1152B across in_buf+event_queue+node_pool)
- * - `event_queue` uses next 256 bytes (8 X11 events * 32 bytes)
+ * - `out_buf` uses first 544 bytes (during startup `grab_all_keys` uses 1152B across in_buf+event_queue+node_pool)
+ * - `event_queue` uses next 288 bytes (9 X11 events * 32 bytes - zero-copy in-place dispatch!)
  */
 .align 32
 out_buf:
-in_buf:         .space 576
-event_queue:    .space 256      /* Buffer for up to 8 X11 events (32 bytes each) */
+in_buf:         .space 544
+event_queue:    .space 288      /* Buffer for up to 9 X11 events (32 bytes each) */
 
 /* 16 nodes of 32 bytes = 512 bytes (fits hot .bss completely inside page 0x401000..0x401fff!) */
 .align 32
