@@ -875,7 +875,7 @@ htc_recurse:
     call hide_tree_collect
     pop rdi
     mov rdi, [rdi + NODE_SECOND]
-    call hide_tree_collect
+    jmp hide_tree_collect
 htc_ret:
     ret
 
@@ -1555,8 +1555,7 @@ bfol_down:
     test rax, rax
     jnz bfol_ret
     mov rdi, [rdi + NODE_SECOND]
-    call bsp_find_other_leaf
-    ret
+    jmp bsp_find_other_leaf
 bfol_found:
     mov rax, rdi
     ret
@@ -1581,8 +1580,7 @@ bsp_find_node_by_win:
     jnz bfn_ret
 
     mov rdi, [rdi + NODE_SECOND]
-    call bsp_find_node_by_win
-    ret
+    jmp bsp_find_node_by_win
 
 bfn_found:
     mov rax, rdi
@@ -1696,9 +1694,8 @@ do_ws_split:
     sub r8d, esi
     add r8d, [rsp + 24]         /* w2 = w - (x2 - x) */
     mov r9d, [rsp + 0]
-    call bsp_arrange_node
     add rsp, 40
-    ret
+    jmp bsp_arrange_node
 
 ws_split_horizontal:
     /* Horizontal Split */
@@ -1719,9 +1716,8 @@ ws_split_horizontal:
     mov r9d, [rsp + 0]
     sub r9d, edx
     add r9d, [rsp + 16]         /* h2 = h - (y2 - y) */
-    call bsp_arrange_node
     add rsp, 40
-    ret
+    jmp bsp_arrange_node
 
 
 /*
