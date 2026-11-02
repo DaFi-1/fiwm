@@ -383,7 +383,7 @@ check_split_keys:
 
 key_focus_hjkl:
     /* ecx has keycode: 43=h (left), 44=j (down), 45=k (up), 46=l (right) */
-    mov eax, [cur_ws]
+    movzx eax, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
     mov rdi, [rbx + 8*rax]      /* start leaf */
     test rdi, rdi
@@ -418,7 +418,7 @@ do_dir_focus:
     jz event_loop               /* No window in that direction */
 
     /* Set new focus */
-    mov ecx, [cur_ws]
+    movzx ecx, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
     mov [rbx + 8*rcx], rax
     mov edi, [rax + NODE_WIN]
@@ -427,7 +427,7 @@ do_dir_focus:
 
 key_move_hjkl:
     /* Swap focused window with neighbor in the specified 2D direction */
-    mov eax, [cur_ws]
+    movzx eax, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
     mov r12, [rbx + 8*rax]      /* r12 = current focused leaf */
     test r12, r12
@@ -468,12 +468,12 @@ do_dir_move:
     mov [rax + NODE_WIN], r8d
 
     /* Update focus to follow the moved window */
-    mov ecx, [cur_ws]
+    movzx ecx, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
     mov [rbx + 8*rcx], rax
 
     /* Re-arrange grid */
-    mov edi, [cur_ws]
+    movzx edi, byte ptr [cur_ws]
     call bsp_arrange_ws
 
     mov edi, r8d
@@ -489,7 +489,7 @@ key_split_v:
     jmp event_loop
 
 key_ws_prev:
-    mov eax, [cur_ws]
+    movzx eax, byte ptr [cur_ws]
     dec eax
     test eax, eax
     jns ws_prev_ok
@@ -500,7 +500,7 @@ ws_prev_ok:
     jmp event_loop
 
 key_ws_next:
-    mov eax, [cur_ws]
+    movzx eax, byte ptr [cur_ws]
     inc eax
     cmp eax, WORKSPACE_COUNT
     jl ws_next_ok
@@ -521,7 +521,7 @@ key_term:
     jmp event_loop
 
 key_kill:
-    mov eax, [cur_ws]
+    movzx eax, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
     mov rax, [rbx + 8*rax]
     test rax, rax
@@ -542,7 +542,7 @@ key_kill:
     jmp event_loop
 
 key_fullscreen:
-    mov eax, [cur_ws]
+    movzx eax, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
     mov rax, [rbx + 8*rax]
     test rax, rax
@@ -556,7 +556,7 @@ key_fullscreen:
     jne fs_restore
 
     /* Set fullscreen on target monitor */
-    mov edi, [cur_ws]
+    movzx edi, byte ptr [cur_ws]
     call get_mon_for_ws         /* eax = monitor index */
     mov ecx, eax
     shl ecx, 4                  /* 16 bytes per monitor */
@@ -583,18 +583,18 @@ key_fullscreen:
     jmp event_loop
 
 fs_restore:
-    mov edi, [cur_ws]
+    movzx edi, byte ptr [cur_ws]
     call bsp_arrange_ws
     jmp event_loop
 
 key_focus_next:
-    mov eax, [cur_ws]
+    movzx eax, byte ptr [cur_ws]
     lea rbx, [bsp_roots]
     mov rdi, [rbx + 8*rax]
     call bsp_find_other_leaf
     test rax, rax
     jz event_loop
-    mov ecx, [cur_ws]
+    movzx ecx, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
     mov [rbx + 8*rcx], rax
     mov edi, [rax + NODE_WIN]
@@ -672,7 +672,7 @@ focus_workspace:
     push r12
 
     mov r12d, edi               /* r12d = new_ws */
-    mov ebx, [cur_ws]           /* ebx = old_ws */
+    movzx ebx, byte ptr [cur_ws] /* ebx = old_ws */
     cmp r12d, ebx
     je fw_done
 
@@ -682,7 +682,7 @@ focus_workspace:
     call hide_tree_windows
 
     /* Switch to new workspace */
-    mov [cur_ws], r12d
+    mov byte ptr [cur_ws], r12b
 
     /* Redraw top status bars across monitors */
     call draw_all_bars
@@ -717,7 +717,7 @@ move_window_to_workspace:
     push r12
 
     mov r12d, edi               /* target_ws */
-    mov eax, [cur_ws]
+    movzx eax, byte ptr [cur_ws]
     cmp r12d, eax
     je mw_done
 
@@ -741,7 +741,7 @@ move_window_to_workspace:
     call hide_single_win
 
     /* Re-arrange current workspace */
-    mov edi, [cur_ws]
+    movzx edi, byte ptr [cur_ws]
     call bsp_arrange_ws
 
     /* Insert window into target workspace tree */
@@ -1032,7 +1032,7 @@ draw_ws_mon_loop:
 
     /* Compare with cur_ws to choose color */
     mov eax, 0x685742                           /* inactive fg (gray/brown) */
-    cmp r12d, [cur_ws]
+    cmp r12b, byte ptr [cur_ws]
     jne set_bar_mon_color
     mov eax, 0xc2c2b0                           /* active fg (bright cream/gold) */
 
@@ -1238,14 +1238,14 @@ handle_map:
 
     /* Insert into active workspace BSP tree */
     mov edi, r12d
-    mov esi, [cur_ws]
+    movzx esi, byte ptr [cur_ws]
     call bsp_tree_insert_into_ws
 
     /* Focus new window */
     mov edi, r12d
     call set_focus
 
-    mov edi, [cur_ws]
+    movzx edi, byte ptr [cur_ws]
     call bsp_arrange_ws
     jmp event_loop
 
@@ -1278,7 +1278,7 @@ found_unmap_node:
     call bsp_tree_detach
 
     /* If it was in active workspace, re-arrange */
-    cmp ecx, [cur_ws]
+    cmp cl, byte ptr [cur_ws]
     jne event_loop
 
     lea rax, [bsp_roots]
@@ -1291,7 +1291,7 @@ found_unmap_node:
     mov edi, [rax + NODE_WIN]
     call set_focus
 no_focus_left:
-    mov edi, [cur_ws]
+    movzx edi, byte ptr [cur_ws]
     call bsp_arrange_ws
     jmp event_loop
 
@@ -1500,7 +1500,7 @@ bsp_find_other_leaf:
 bfol_loop:
     cmp dword ptr [rdi + NODE_WIN], 0
     je bfol_down
-    mov eax, [cur_ws]
+    movzx eax, byte ptr [cur_ws]
     lea rbx, [bsp_focuses]
     cmp rdi, [rbx + 8*rax]
     jne bfol_found
@@ -1932,15 +1932,15 @@ sh_argv_term:
  */
 .align 8
 ws_mon_table:
-    .byte 0                     /* WS 1 -> Monitor 0 */
-    .byte 0                     /* WS 2 -> Monitor 0 */
-    .byte 0                     /* WS 3 -> Monitor 0 */
-    .byte 0                     /* WS 4 -> Monitor 0 */
-    .byte 0                     /* WS 5 -> Monitor 0 */
-    .byte 0                     /* WS 6 -> Monitor 0 */
-    .byte 0                     /* WS 7 -> Monitor 0 */
-    .byte 0                     /* WS 8 -> Monitor 0 */
-    .byte 1                     /* WS 9 -> Monitor 1 */
+    .byte 1                     /* WS 1 -> Monitor 1 */
+    .byte 1                     /* WS 2 -> Monitor 1 */
+    .byte 1                     /* WS 3 -> Monitor 1 */
+    .byte 1                     /* WS 4 -> Monitor 1 */
+    .byte 1                     /* WS 5 -> Monitor 1 */
+    .byte 1                     /* WS 6 -> Monitor 1 */
+    .byte 1                     /* WS 7 -> Monitor 1 */
+    .byte 1                     /* WS 8 -> Monitor 1 */
+    .byte 0                     /* WS 9 -> Monitor 0 */
 
 /*
  * Table of Grabbed Shortcuts:
@@ -2001,9 +2001,9 @@ bar_win:        .long 0, 0      /* bar_win for Monitor 0 and Monitor 1 */
 bar_gc:         .long 0
 saved_envp:     .quad 0
 
-cur_ws:         .long 0         /* Active Workspace (0..8) */
-next_split_sel: .byte 0         /* 0 = auto, 1 = V, 2 = H */
-is_fullscreen:  .byte 0
+cur_ws:         .byte 0         /* Active Workspace (0..8) - 1 byte! */
+next_split_sel: .byte 0         /* 0 = auto, 1 = V, 2 = H - 1 byte! */
+is_fullscreen:  .byte 0         /* 0 = normal, 1 = fullscreen - 1 byte! */
                 .align 4
 
 /* Monitor configuration: up to 2 monitors (16 bytes each: x, y, w, h) */

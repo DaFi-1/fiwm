@@ -73,42 +73,42 @@ if ! kill -0 "$WM_PID" 2>/dev/null; then
 fi
 report_pass "fiwmasm started cleanly on dual-head display"
 
-# 4. Test Workspace 1 (configured in ws_mon_table for Monitor 0 @ X < 800)
+# 4. Test Workspace 1 (configured in ws_mon_table for Monitor 1 @ X >= 800)
 DISPLAY="$TEST_DISP" xdotool key alt+Return
 sleep 0.6
 
 W1_OFFSET=$(xwininfo -root -tree -display "$TEST_DISP" 2>/dev/null | grep 'st' | grep -v '\-9999' | head -n 1 | awk '{print $NF}')
-if [ -n "$W1_OFFSET" ] && [[ "$W1_OFFSET" =~ \+([0-9]+)\+([0-9]+) ]] && [ "${BASH_REMATCH[1]}" -lt 800 ]; then
-    report_pass "Workspace 1 mapped to Monitor 0 according to ws_mon_table (Window at $W1_OFFSET, X < 800)"
+if [ -n "$W1_OFFSET" ] && [[ "$W1_OFFSET" =~ \+([0-9]+)\+([0-9]+) ]] && [ "${BASH_REMATCH[1]}" -ge 800 ]; then
+    report_pass "Workspace 1 mapped to Monitor 1 according to ws_mon_table (Window at $W1_OFFSET, X >= 800)"
 else
-    report_fail "Workspace 1 mapping" "Expected window on Monitor 0 (X < 800), got $W1_OFFSET"
+    report_fail "Workspace 1 mapping" "Expected window on Monitor 1 (X >= 800), got $W1_OFFSET"
 fi
 
-# 5. Switch to Workspace 9 (configured in ws_mon_table for Monitor 1 @ X >= 800)
+# 5. Switch to Workspace 9 (configured in ws_mon_table for Monitor 0 @ X < 800)
 DISPLAY="$TEST_DISP" xdotool key alt+9
 sleep 0.4
 DISPLAY="$TEST_DISP" xdotool key alt+Return
 sleep 0.6
 
 W9_OFFSET=$(xwininfo -root -tree -display "$TEST_DISP" 2>/dev/null | grep 'st' | grep -v '\-9999' | head -n 1 | awk '{print $NF}')
-if [ -n "$W9_OFFSET" ] && [[ "$W9_OFFSET" =~ \+([0-9]+)\+([0-9]+) ]] && [ "${BASH_REMATCH[1]}" -ge 800 ]; then
-    report_pass "Workspace 9 mapped to Monitor 1 according to ws_mon_table (Window at $W9_OFFSET, X >= 800)"
+if [ -n "$W9_OFFSET" ] && [[ "$W9_OFFSET" =~ \+([0-9]+)\+([0-9]+) ]] && [ "${BASH_REMATCH[1]}" -lt 800 ]; then
+    report_pass "Workspace 9 mapped to Monitor 0 according to ws_mon_table (Window at $W9_OFFSET, X < 800)"
 else
-    report_fail "Workspace 9 mapping" "Expected window on Monitor 1 (X >= 800), got $W9_OFFSET"
+    report_fail "Workspace 9 mapping" "Expected window on Monitor 0 (X < 800), got $W9_OFFSET"
 fi
 
-# 6. Cross-Monitor Move: Send focused window on Workspace 9 to Workspace 1 (Monitor 1 -> Monitor 0)
+# 6. Cross-Monitor Move: Send focused window on Workspace 9 to Workspace 1 (Monitor 0 -> Monitor 1)
 DISPLAY="$TEST_DISP" xdotool key alt+shift+1
 sleep 0.4
 DISPLAY="$TEST_DISP" xdotool key alt+1
 sleep 0.4
 
-# Verify both windows are now on Monitor 0 (X < 800)
-COUNT_MON0=$(xwininfo -root -tree -display "$TEST_DISP" 2>/dev/null | grep 'st' | grep -v '\-9999' | wc -l)
-if [ "$COUNT_MON0" -eq 2 ]; then
-    report_pass "Cross-monitor transfer (Alt+Shift+1): Window successfully moved from Monitor 1 to Monitor 0"
+# Verify both windows are now on Workspace 1 (Monitor 1)
+COUNT_WS1=$(xwininfo -root -tree -display "$TEST_DISP" 2>/dev/null | grep 'st' | grep -v '\-9999' | wc -l)
+if [ "$COUNT_WS1" -eq 2 ]; then
+    report_pass "Cross-monitor transfer (Alt+Shift+1): Window successfully moved from Monitor 0 to Monitor 1"
 else
-    report_fail "Cross-monitor transfer" "Expected 2 windows on Workspace 1 (Monitor 0), found $COUNT_MON0"
+    report_fail "Cross-monitor transfer" "Expected 2 windows on Workspace 1 (Monitor 1), found $COUNT_WS1"
 fi
 
 # 7. Clean exit
