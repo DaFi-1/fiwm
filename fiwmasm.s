@@ -83,6 +83,7 @@ find_display:
     lea r10, [r10 + 8]
     cmp byte ptr [r10], ':'
     jne next_env
+    mov byte ptr [disp_found], 1
     inc r10
 
     lea rdi, [sock_path_num]
@@ -102,6 +103,32 @@ next_env:
     jmp find_display
 
 display_done:
+    /* No DISPLAY in the environment (TTY login): give children DISPLAY=:0,
+       otherwise st & co. cannot connect to the X server we talk to. */
+    cmp byte ptr [disp_found], 0
+    jne env_ok
+    mov rsi, [saved_envp]
+    lea rdi, [env_buf]
+    mov ecx, 60
+env_copy:
+    mov rax, [rsi]
+    test rax, rax
+    jz env_copied
+    mov [rdi], rax
+    add rsi, 8
+    add rdi, 8
+    dec ecx
+    jnz env_copy
+env_copied:
+    lea rax, [disp_env_str]
+    mov [rdi], rax
+    mov qword ptr [rdi + 8], 0
+    lea rax, [env_buf]
+    mov [saved_envp], rax
+env_ok:
+    xor r12d, r12d              /* r12d = connect attempts (0 = Xorg not spawned) */
+
+do_connect:
     /* 1. sys_socket(AF_UNIX, SOCK_STREAM, 0) */
     mov eax, SYS_SOCKET
     mov edi, AF_UNIX
@@ -111,7 +138,6 @@ display_done:
     test eax, eax
     js exit_fail
     mov [sock_fd], eax
-    mov ebx, eax
 
     /* 2. sys_connect(sock_fd, &sock_addr, sizeof(sock_addr)) */
     mov eax, SYS_CONNECT
@@ -120,7 +146,39 @@ display_done:
     mov edx, 110
     syscall
     test eax, eax
-    js exit_fail
+    jns connected_ok
+
+    /* Connect failed: close the socket */
+    mov eax, SYS_CLOSE
+    mov edi, [sock_fd]
+    syscall
+
+    /* Autostart: only for display ":0" and only once */
+    test r12d, r12d
+    jnz retry_wait
+    cmp byte ptr [sock_path_num], '0'
+    jne exit_fail
+    cmp byte ptr [sock_path_num + 1], 0
+    jne exit_fail
+    call start_xorg
+    test rax, rax
+    jle exit_fail
+    mov [xorg_pid], rax
+    mov r12d, 1
+
+retry_wait:
+    cmp r12d, 151               /* up to 150 retries x 20ms = 3s */
+    jg exit_fail
+    inc r12d
+    mov eax, SYS_POLL           /* poll(NULL, 0, 20): sleep 20ms */
+    xor edi, edi
+    xor esi, esi
+    mov edx, 20
+    syscall
+    jmp do_connect
+
+connected_ok:
+    mov ebx, [sock_fd]
 
     /* 3. Send X11 Setup Request (12 bytes) */
     mov eax, SYS_WRITE
@@ -220,6 +278,11 @@ setup_drained:
 
     /* 6. Grab Shortcut Keys (including Alt+1..9 and Alt+Shift+1..9) */
     call grab_all_keys
+
+    /* 7. Autostart (i3 parity): keyboard layout + repeat rate.
+       setxkbmap resets X auto-repeat, so xset must run after it. */
+    lea rsi, [sh_argv_autostart]
+    call spawn_cmd
 
 event_loop:
     /* Check if event_queue still has buffered events */
@@ -530,14 +593,22 @@ key_kill:
     test edx, edx
     jz event_loop
 
-    /* Opcode 4: DestroyWindow (len 2 words = 8 bytes) */
+    /*
+     * Terminate client window:
+     * 1. Opcode 4: DestroyWindow (len 2 words = 8 bytes)
+     * 2. Opcode 113: KillClient (len 2 words = 8 bytes)
+     * Both batched in a single 16-byte packet: closes the X11 connection,
+     * forcing the kernel to kill the process and all its audio/render threads!
+     */
     mov dword ptr [out_buf + 0], (2 << 16) | 4
     mov [out_buf + 4], edx
+    mov dword ptr [out_buf + 8], (2 << 16) | 113
+    mov [out_buf + 12], edx
 
     mov eax, SYS_WRITE
     mov edi, [sock_fd]
     lea rsi, [out_buf]
-    mov edx, 8
+    mov edx, 16
     syscall
     jmp event_loop
 
@@ -1884,14 +1955,83 @@ nid_null:
     ret
 
 exit_clean:
+    call kill_xorg
     mov eax, SYS_EXIT
     xor edi, edi
     syscall
 
 exit_fail:
+    call kill_xorg
     mov eax, SYS_EXIT
     mov edi, 1
     syscall
+
+/* kill_xorg: if we spawned Xorg, SIGTERM it and reap it */
+kill_xorg:
+    mov rdi, [xorg_pid]
+    test rdi, rdi
+    jle 1f
+    mov eax, 62                 /* SYS_KILL */
+    mov esi, 15                 /* SIGTERM */
+    syscall
+    mov rdi, [xorg_pid]
+    mov eax, SYS_WAIT4
+    xor esi, esi
+    xor edx, edx
+    xor r10d, r10d
+    syscall
+    mov qword ptr [xorg_pid], 0
+1:  ret
+
+/*
+ * start_xorg: fork + exec "/usr/bin/X :0 -ac [vtN] -keeptty".
+ * vtN is derived from stdin's tty (/proc/self/fd/0 -> /dev/ttyN); the child
+ * inherits stdin so Xorg.wrap sees a console user.
+ * Returns child pid in rax (<= 0 on failure).
+ */
+start_xorg:
+    mov eax, 89                 /* SYS_READLINK */
+    lea rdi, [proc_fd0]
+    lea rsi, [tty_buf]
+    mov edx, 31
+    syscall
+    cmp rax, 9                  /* need at least "/dev/ttyN" */
+    jl 2f
+    mov byte ptr [tty_buf + rax], 0
+    mov ecx, [tty_buf + 5]
+    and ecx, 0xffffff
+    cmp ecx, 0x797474           /* "tty" */
+    jne 2f
+    lea rsi, [tty_buf + 8]
+    lea rdi, [vt_arg + 2]
+3:  mov al, [rsi]
+    cmp al, '0'
+    jb 4f
+    cmp al, '9'
+    ja 4f
+    mov [rdi], al
+    inc rsi
+    inc rdi
+    jmp 3b
+4:  cmp rdi, offset vt_arg + 2
+    je 2f                       /* no digits: tty is not /dev/ttyN */
+    lea rax, [vt_arg]
+    mov [x_argv + 24], rax      /* ... -ac vtN -keeptty */
+    lea rax, [x_keep_str]
+    mov [x_argv + 32], rax
+2:  mov eax, SYS_FORK
+    syscall
+    test rax, rax
+    jnz 5f
+    lea rdi, [x_path]
+    lea rsi, [x_argv]
+    mov rdx, [saved_envp]
+    mov eax, SYS_EXECVE
+    syscall
+    mov eax, SYS_EXIT
+    mov edi, 1
+    syscall
+5:  ret
 
 .data
 sock_addr:
@@ -1907,6 +2047,24 @@ x11_setup_req:
     .byte 0, 0, 0, 0
     .byte 0, 0, 0, 0
 
+disp_env_str:
+    .asciz "DISPLAY=:0"
+x_path:
+    .asciz "/usr/bin/X"
+x_disp:
+    .asciz ":0"
+x_ac:
+    .asciz "-ac"
+x_keep_str:
+    .asciz "-keeptty"
+proc_fd0:
+    .asciz "/proc/self/fd/0"
+vt_arg:
+    .asciz "vt\0\0\0\0\0\0\0\0\0\0\0\0"
+.align 8
+x_argv:
+    .quad x_path, x_disp, x_ac, x_keep_str, 0, 0
+
 sh_bin:
     .asciz "/bin/sh"
 sh_arg_c:
@@ -1917,6 +2075,9 @@ cmd_menu:
 
 cmd_term:
     .asciz "st || alacritty || kitty"
+
+cmd_autostart:
+    .asciz "command -v setxkbmap >/dev/null 2>&1 && setxkbmap -option caps:escape; command -v xset >/dev/null 2>&1 && xset r rate 180 250"
 
 .align 8
 sh_argv_menu:
@@ -1929,6 +2090,12 @@ sh_argv_term:
     .quad sh_bin
     .quad sh_arg_c
     .quad cmd_term
+    .quad 0
+
+sh_argv_autostart:
+    .quad sh_bin
+    .quad sh_arg_c
+    .quad cmd_autostart
     .quad 0
 
 /*
@@ -2007,6 +2174,10 @@ screen_h:       .long 0
 bar_win:        .long 0, 0      /* bar_win for Monitor 0 and Monitor 1 */
 bar_gc:         .long 0
 saved_envp:     .quad 0
+xorg_pid:       .quad 0
+disp_found:     .byte 0
+env_buf:        .space 496
+tty_buf:        .space 32
 
 cur_ws:         .byte 0         /* Active Workspace (0..8) - 1 byte! */
 next_split_sel: .byte 0         /* 0 = auto, 1 = V, 2 = H - 1 byte! */
