@@ -2021,9 +2021,17 @@ node_idx:       .long 0
 .align 32
 node_pool:      .space 2048
 
-out_buf:        .space 1024
-in_buf:         .space 4096
-event_queue:    .space 1024     /* Buffer for up to 32 X11 events (32 bytes each) */
+/*
+ * Shared I/O Buffer (4096 bytes total):
+ * Memory Overlay optimization:
+ * - During startup: `in_buf` uses all 4096 bytes to read X11 setup reply.
+ * - During runtime: `out_buf` uses first 2048 bytes, `event_queue` uses next 2048 bytes.
+ * Saves 2048 bytes of RAM!
+ */
+.align 32
+out_buf:
+in_buf:         .space 2048
+event_queue:    .space 2048     /* Buffer for up to 64 X11 events (32 bytes each) */
 ev_q_head:      .long 0         /* Current read offset in event_queue */
 ev_q_tail:      .long 0         /* Total bytes available in event_queue */
 event_buf:      .space 64
