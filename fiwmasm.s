@@ -1528,6 +1528,8 @@ bfn_ret:
 /*
  * bsp_arrange_ws(edi = ws_idx)
  * Arranges workspace onto its specific monitor geometry!
+ * Batches all ConfigureWindow (28 bytes) packets into `out_buf` and
+ * sends them to the X server in ONE atomic sys_write syscall!
  */
 bsp_arrange_ws:
     push rbx
@@ -1550,7 +1552,9 @@ bsp_arrange_ws:
     lea rbx, [mon_geom]
     add rbx, rax
 
-    mov rdi, r13                /* rdi = root node (RESTORED!) */
+    lea r15, [out_buf]          /* r15 = write cursor in out_buf */
+
+    mov rdi, r13                /* rdi = root node */
     mov esi, [rbx + 0]
     add esi, GAP_PX             /* x */
     mov edx, [rbx + 4]
@@ -1562,6 +1566,17 @@ bsp_arrange_ws:
 
     call bsp_arrange_node
 
+    /* Calculate total bytes batched */
+    lea rax, [out_buf]
+    sub r15, rax                /* r15 = total bytes */
+    jz arrange_ws_done
+
+    mov eax, SYS_WRITE
+    mov edi, [sock_fd]
+    lea rsi, [out_buf]
+    mov edx, r15d
+    syscall
+
 arrange_ws_done:
     pop r15
     pop r14
@@ -1572,6 +1587,7 @@ arrange_ws_done:
 
 /*
  * bsp_arrange_node(rdi=node, esi=x, edx=y, r8=w, r9=h)
+ * Writes ConfigureWindow packets to [r15] cursor.
  */
 bsp_arrange_node:
     push rbp
@@ -1587,29 +1603,20 @@ bsp_arrange_node:
     cmp dword ptr [rdi + NODE_WIN], 0
     jz do_ws_split
 
-    /* Configure leaf window */
+    /* Configure leaf window: append 28-byte packet to [r15] */
+    mov dword ptr [r15 + 0], (7 << 16) | 12
     mov eax, [rdi + NODE_WIN]
-    mov [out_buf + 4], eax
-    mov dword ptr [out_buf + 0], (7 << 16) | 12
-    mov dword ptr [out_buf + 8], 15
+    mov [r15 + 4], eax
+    mov dword ptr [r15 + 8], 15
     mov eax, [rbp - 16]
-    mov [out_buf + 12], eax
+    mov [r15 + 12], eax
     mov eax, [rbp - 24]
-    mov [out_buf + 16], eax
+    mov [r15 + 16], eax
     mov eax, [rbp - 32]
-    mov [out_buf + 20], eax
+    mov [r15 + 20], eax
     mov eax, [rbp - 40]
-    mov [out_buf + 24], eax
-
-    push rcx
-    push r11
-    mov eax, SYS_WRITE
-    mov edi, [sock_fd]
-    lea rsi, [out_buf]
-    mov edx, 28
-    syscall
-    pop r11
-    pop rcx
+    mov [r15 + 24], eax
+    add r15, 28
     jmp arrange_ret
 
 do_ws_split:
@@ -1987,6 +1994,6 @@ node_idx:       .long 0
 .align 32
 node_pool:      .space 2048
 
-out_buf:        .space 512
+out_buf:        .space 1024
 in_buf:         .space 4096
 event_buf:      .space 64
