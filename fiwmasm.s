@@ -139,11 +139,11 @@ do_connect:
     syscall
     test eax, eax
     js exit_fail
-    mov [sock_fd], eax
+    mov r13d, eax               /* r13d = permanent zero-RAM socket fd! */
 
     /* 2. sys_connect(sock_fd, &sock_addr, sizeof(sock_addr)) */
     mov eax, SYS_CONNECT
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [sock_addr]
     mov edx, 110
     syscall
@@ -152,7 +152,7 @@ do_connect:
 
     /* Connect failed: close the socket */
     mov eax, SYS_CLOSE
-    mov edi, [sock_fd]
+    mov edi, r13d
     syscall
 
     /* Autostart: only for display ":0" and only once */
@@ -180,18 +180,16 @@ retry_wait:
     jmp do_connect
 
 connected_ok:
-    mov ebx, [sock_fd]
-
     /* 3. Send X11 Setup Request (12 bytes) */
     mov eax, SYS_WRITE
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [x11_setup_req]
     mov edx, 12
     syscall
 
     /* 4. Read X11 Setup Reply Header (8 bytes) */
     mov eax, SYS_READ
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [in_buf]
     mov edx, 8
     syscall
@@ -203,7 +201,7 @@ connected_ok:
 
     /* Read first chunk into in_buf (up to 576 bytes - fits in 1 KB I/O overlay!) */
     mov eax, SYS_READ
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [in_buf]
     mov edx, 576
     cmp edx, ecx
@@ -249,7 +247,7 @@ drain_setup_loop:
     cmovg edx, ecx
     push rcx
     mov eax, SYS_READ
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [in_buf]
     syscall
     pop rcx
@@ -281,7 +279,7 @@ event_loop:
 
     /* Buffer is empty, read next chunk of events (up to 9 events = 288 bytes) */
     mov eax, SYS_READ
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [event_queue]
     mov edx, 288
     syscall
@@ -593,7 +591,7 @@ key_kill:
     mov [out_buf + 48], edx
 
     mov eax, SYS_WRITE
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [out_buf]
     mov edx, 52
     syscall
@@ -640,7 +638,7 @@ key_fullscreen:
     mov dword ptr [out_buf + 40], 0
 
     mov eax, SYS_WRITE
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [out_buf]
     mov edx, 44
     syscall
@@ -695,7 +693,7 @@ flush_out_buf:
     sub rdx, rsi
     jle flush_ret
     mov eax, SYS_WRITE
-    mov edi, [sock_fd]
+    mov edi, r13d
     syscall
 flush_ret:
     ret
@@ -717,7 +715,7 @@ spawn_cmd:
     jnz child_exit
 
     mov eax, SYS_CLOSE
-    mov edi, [sock_fd]
+    mov edi, r13d
     syscall
 
     pop rsi
@@ -1117,14 +1115,14 @@ detect_monitors:
     mov [out_buf + 8], rax /* "XINERAMA" */
 
     mov eax, SYS_WRITE
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [out_buf]
     mov edx, 16
     syscall
 
     /* Read reply (32 bytes) */
     mov eax, SYS_READ
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [in_buf]
     mov edx, 32
     syscall
@@ -1143,14 +1141,14 @@ detect_monitors:
     mov [out_buf + 0], eax
 
     mov eax, SYS_WRITE
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [out_buf]
     mov edx, 4
     syscall
 
     /* Read reply header (32 bytes) */
     mov eax, SYS_READ
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [in_buf]
     mov edx, 32
     syscall
@@ -1164,7 +1162,7 @@ detect_monitors:
 
     /* 2 monitors detected! Read 2 x 8 bytes monitor structures */
     mov eax, SYS_READ
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [in_buf]
     mov edx, 16                         /* 2 screens * 8 bytes */
     syscall
@@ -1211,14 +1209,14 @@ mon_detect_done:
     mov [out_buf + 36], rax
 
     mov eax, SYS_WRITE
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [out_buf]
     mov edx, 44
     syscall
 
     /* Read both 32-byte replies (64 bytes total) */
     mov eax, SYS_READ
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [in_buf]
     mov edx, 64
     syscall
@@ -1777,18 +1775,18 @@ grab_batch_loop:
 
 grab_batch_send:
     /* Calculate total bytes: r12 - in_buf */
+    pop r13                     /* restore permanent socket fd in r13d! */
     lea rax, [in_buf]
     sub r12, rax                /* r12 = total byte count */
     jz grab_batch_done
 
     mov eax, SYS_WRITE
-    mov edi, [sock_fd]
+    mov edi, r13d
     lea rsi, [in_buf]
     mov edx, r12d
     syscall
 
 grab_batch_done:
-    pop r13
     pop r12
     pop rbx
     ret
@@ -2112,7 +2110,7 @@ shortcut_keys:
 
 .bss
 .align 8
-sock_fd:        .long 0
+/* sock_fd lives permanently in register r13d (Zero RAM!) */
 root_win:       .long 0
 screen_w:       .long 0
 screen_h:       .long 0
