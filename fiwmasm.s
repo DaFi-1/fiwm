@@ -1649,100 +1649,78 @@ arrange_ws_done:
 
 /*
  * bsp_arrange_node(rdi=node, esi=x, edx=y, r8=w, r9=h)
- * Writes ConfigureWindow packets to [r15] cursor.
+ * Writes 28-byte ConfigureWindow packets to [r15] cursor.
+ * Register-only recursion (only 40 bytes pushed on split nodes, 0 stack frame on leaf nodes!):
  */
 bsp_arrange_node:
-    push rbp
-    mov rbp, rsp
-    sub rsp, 48
-
-    mov [rbp - 8],  rdi
-    mov [rbp - 16], rsi
-    mov [rbp - 24], rdx
-    mov [rbp - 32], r8
-    mov [rbp - 40], r9
-
     cmp dword ptr [rdi + NODE_WIN], 0
     jz do_ws_split
 
-    /* Configure leaf window: append 28-byte packet to [r15] */
+    /* Leaf window: zero stack allocation! Pack 16 bytes into 2 qword writes + 12 bytes */
     mov dword ptr [r15 + 0], (7 << 16) | 12
     mov eax, [rdi + NODE_WIN]
     mov [r15 + 4], eax
     mov dword ptr [r15 + 8], 15
-    mov eax, [rbp - 16]
-    mov [r15 + 12], eax
-    mov eax, [rbp - 24]
-    mov [r15 + 16], eax
-    mov eax, [rbp - 32]
-    mov [r15 + 20], eax
-    mov eax, [rbp - 40]
-    mov [r15 + 24], eax
+    mov [r15 + 12], esi
+    mov [r15 + 16], edx
+    mov [r15 + 20], r8d
+    mov [r15 + 24], r9d
     add r15, 28
-    jmp arrange_ret
+    ret
 
 do_ws_split:
+    push rdi
+    push rsi
+    push rdx
+    push r8
+    push r9
+
     cmp byte ptr [rdi + NODE_SPLIT], 1
     je ws_split_horizontal
 
     /* Vertical Split */
-    mov r8, [rbp - 32]
-    shr r8, 1
-    sub r8, GAP_PX / 2          /* w1 */
-
-    mov rdi, [rbp - 8]
+    shr r8d, 1
+    sub r8d, GAP_PX / 2         /* w1 */
     mov rdi, [rdi + NODE_FIRST]
-    mov rsi, [rbp - 16]
-    mov rdx, [rbp - 24]
-    mov r9,  [rbp - 40]
     call bsp_arrange_node
 
-    mov rdi, [rbp - 8]
+    mov rdi, [rsp + 32]
     mov rdi, [rdi + NODE_SECOND]
-    mov rsi, [rbp - 16]
-    mov r8,  [rbp - 32]
-    shr r8, 1
-    sub r8, GAP_PX / 2
-    add rsi, r8
-    add rsi, GAP_PX             /* x2 = x + w1 + gap */
-    mov rdx, [rbp - 24]
-    mov r8,  [rbp - 32]
-    sub r8, rsi
-    add r8,  [rbp - 16]         /* w2 */
-    mov r9,  [rbp - 40]
+    mov esi, [rsp + 24]
+    mov eax, [rsp + 8]
+    shr eax, 1
+    add esi, eax
+    add esi, GAP_PX - (GAP_PX / 2)  /* x2 = x + w1 + gap */
+    mov edx, [rsp + 16]
+    mov r8d, [rsp + 8]
+    sub r8d, esi
+    add r8d, [rsp + 24]         /* w2 = w - (x2 - x) */
+    mov r9d, [rsp + 0]
     call bsp_arrange_node
-    jmp arrange_ret
+    add rsp, 40
+    ret
 
 ws_split_horizontal:
     /* Horizontal Split */
-    mov r9, [rbp - 40]
-    shr r9, 1
-    sub r9, GAP_PX / 2          /* h1 */
-
-    mov rdi, [rbp - 8]
+    shr r9d, 1
+    sub r9d, GAP_PX / 2         /* h1 */
     mov rdi, [rdi + NODE_FIRST]
-    mov rsi, [rbp - 16]
-    mov rdx, [rbp - 24]
-    mov r8,  [rbp - 32]
     call bsp_arrange_node
 
-    mov rdi, [rbp - 8]
+    mov rdi, [rsp + 32]
     mov rdi, [rdi + NODE_SECOND]
-    mov rsi, [rbp - 16]
-    mov rdx, [rbp - 24]
-    mov r9,  [rbp - 40]
-    shr r9, 1
-    sub r9, GAP_PX / 2
-    add rdx, r9
-    add rdx, GAP_PX             /* y2 = y + h1 + gap */
-    mov r8,  [rbp - 32]
-    mov r9,  [rbp - 40]
-    sub r9, rdx
-    add r9,  [rbp - 24]
+    mov esi, [rsp + 24]
+    mov edx, [rsp + 16]
+    mov eax, [rsp + 0]
+    shr eax, 1
+    add edx, eax
+    add edx, GAP_PX - (GAP_PX / 2)  /* y2 = y + h1 + gap */
+    mov r8d, [rsp + 8]
+    mov r9d, [rsp + 0]
+    sub r9d, edx
+    add r9d, [rsp + 16]         /* h2 = h - (y2 - y) */
     call bsp_arrange_node
-
-arrange_ret:
-    leave
+    add rsp, 40
     ret
 
 
