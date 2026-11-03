@@ -131,10 +131,13 @@ env_ok:
     xor r12d, r12d              /* r12d = connect attempts (0 = Xorg not spawned) */
 
 do_connect:
-    /* 1. sys_socket(AF_UNIX, SOCK_STREAM, 0) */
-    mov eax, SYS_SOCKET
-    mov edi, AF_UNIX
-    mov esi, SOCK_STREAM
+    /* 1. sys_socket(AF_UNIX, SOCK_STREAM, 0) - 8-bit imm8 loads! */
+    push SYS_SOCKET
+    pop rax
+    push AF_UNIX
+    pop rdi
+    push SOCK_STREAM
+    pop rsi
     xor edx, edx
     syscall
     test eax, eax
@@ -142,17 +145,17 @@ do_connect:
     mov r13d, eax               /* r13d = permanent zero-RAM socket fd! */
 
     /* 2. sys_connect(sock_fd, &sock_addr, sizeof(sock_addr)) */
-    mov eax, SYS_CONNECT
+    mov al, SYS_CONNECT         /* upper bits of eax are 0 after socket fd < 256! */
     mov edi, r13d
     lea rsi, [sock_addr]
-    mov edx, 110
+    mov dl, 110                 /* edx was 0 from xor edx, edx! */
     syscall
     test eax, eax
     jns connected_ok
 
-    /* Connect failed: close the socket */
-    mov eax, SYS_CLOSE
-    mov edi, r13d
+    /* Connect failed: close the socket (rdi already == r13d!) */
+    push SYS_CLOSE
+    pop rax
     syscall
 
     /* Autostart: only for display ":0" and only once */
@@ -172,26 +175,26 @@ retry_wait:
     cmp r12d, 151               /* up to 150 retries x 20ms = 3s */
     jg exit_fail
     inc r12d
-    mov eax, SYS_POLL           /* poll(NULL, 0, 20): sleep 20ms */
+    push SYS_POLL               /* poll(NULL, 0, 20): sleep 20ms */
+    pop rax
     xor edi, edi
     xor esi, esi
-    mov edx, 20
+    push 20
+    pop rdx
     syscall
     jmp do_connect
 
 connected_ok:
-    /* 3. Send X11 Setup Request (12 bytes) */
-    mov eax, SYS_WRITE
-    mov edi, r13d
+    /* 3. Send X11 Setup Request (12 bytes) - eax == 0 and rdi == r13d from connect! */
+    mov al, SYS_WRITE
     lea rsi, [x11_setup_req]
-    mov edx, 12
+    mov dl, 12                  /* edx was 110 (< 256), so upper 24 bits are 0! */
     syscall
 
-    /* 4. Read X11 Setup Reply Header (8 bytes) */
-    mov eax, SYS_READ
-    mov edi, r13d
+    /* 4. Read X11 Setup Reply Header (8 bytes) - rdi still == r13d! */
+    xor eax, eax                /* SYS_READ = 0 (2 bytes!) */
     lea rsi, [in_buf]
-    mov edx, 8
+    mov dl, 8                   /* edx was 12 (< 256)! */
     syscall
     cmp byte ptr [in_buf], 1
     jne exit_fail
@@ -200,8 +203,7 @@ connected_ok:
     shl ecx, 2                  /* ecx = remaining setup reply bytes to drain */
 
     /* Read first chunk into in_buf (up to 576 bytes - fits in 1 KB I/O overlay!) */
-    mov eax, SYS_READ
-    mov edi, r13d
+    xor eax, eax                /* SYS_READ = 0, rdi still == r13d! */
     lea rsi, [in_buf]
     mov edx, 576
     cmp edx, ecx
@@ -238,7 +240,7 @@ connected_ok:
     inc edx
     mov [bar_gc], edx
 
-    /* Drain all remaining setup reply bytes from socket */
+    /* Drain all remaining setup reply bytes from socket (rdi still == r13d!) */
 drain_setup_loop:
     test ecx, ecx
     jle setup_drained
@@ -246,8 +248,7 @@ drain_setup_loop:
     cmp edx, ecx
     cmovg edx, ecx
     push rcx
-    mov eax, SYS_READ
-    mov edi, r13d
+    xor eax, eax                /* SYS_READ = 0 */
     lea rsi, [in_buf]
     syscall
     pop rcx
@@ -275,7 +276,7 @@ event_loop:
     jl ev_pop_buffered
 
     /* Buffer is empty, read next chunk of events (up to 9 events = 288 bytes) */
-    mov eax, SYS_READ
+    xor eax, eax                /* SYS_READ = 0 (2 bytes!) */
     mov edi, r13d
     lea rsi, [event_queue]
     mov edx, 288
@@ -587,10 +588,12 @@ key_kill:
     mov dword ptr [out_buf + 44], (2 << 16) | 113
     mov [out_buf + 48], edx
 
-    mov eax, SYS_WRITE
+    push SYS_WRITE
+    pop rax
     mov edi, r13d
     lea rsi, [out_buf]
-    mov edx, 52
+    push 52
+    pop rdx
     syscall
     jmp event_loop
 
@@ -634,10 +637,12 @@ key_fullscreen:
     mov dword ptr [out_buf + 36], 64
     mov dword ptr [out_buf + 40], 0
 
-    mov eax, SYS_WRITE
+    push SYS_WRITE
+    pop rax
     mov edi, r13d
     lea rsi, [out_buf]
-    mov edx, 44
+    push 44
+    pop rdx
     syscall
     jmp event_loop
 
@@ -689,7 +694,8 @@ flush_out_buf:
     mov rdx, r15
     sub rdx, rsi
     jle flush_ret
-    mov eax, SYS_WRITE
+    push SYS_WRITE
+    pop rax
     mov edi, r13d
     syscall
 flush_ret:
@@ -701,38 +707,41 @@ flush_ret:
  */
 spawn_cmd:
     push rsi
-    mov eax, SYS_FORK
+    push SYS_FORK
+    pop rax
     syscall
     test eax, eax
     jnz parent_fork
 
-    mov eax, SYS_VFORK
+    mov al, SYS_VFORK           /* eax == 0 in child! */
     syscall
     test eax, eax
     jnz child_exit
 
-    mov eax, SYS_CLOSE
+    mov al, SYS_CLOSE           /* eax == 0 in grandchild! */
     mov edi, r13d
     syscall
 
     pop rsi
-    mov eax, SYS_EXECVE
+    mov al, SYS_EXECVE          /* eax == 0 after close! */
     lea rdi, [sh_bin]
     mov rdx, [saved_envp]
     syscall
 
 child_exit:
-    mov eax, SYS_EXIT
+    push SYS_EXIT
+    pop rax
     xor edi, edi
     syscall
 
 parent_fork:
     pop rsi
     mov edi, eax
-    mov eax, SYS_WAIT4
+    push SYS_WAIT4
+    pop rax
     xor esi, esi
     xor edx, edx
-    xor r10, r10
+    xor r10d, r10d
     syscall
     ret
 
@@ -1110,17 +1119,18 @@ detect_monitors:
     mov rax, 0x414d4152454e4958
     mov [out_buf + 8], rax /* "XINERAMA" */
 
-    mov eax, SYS_WRITE
+    push SYS_WRITE
+    pop rax
     mov edi, r13d
     lea rsi, [out_buf]
-    mov edx, 16
+    push 16
+    pop rdx
     syscall
 
-    /* Read reply (32 bytes) */
-    mov eax, SYS_READ
-    mov edi, r13d
+    /* Read reply (32 bytes) - rdi still == r13d, edx was 16 (< 256)! */
+    xor eax, eax                /* SYS_READ = 0 */
     lea rsi, [in_buf]
-    mov edx, 32
+    mov dl, 32
     syscall
 
     cmp byte ptr [in_buf], 1            /* Success? */
@@ -1136,17 +1146,16 @@ detect_monitors:
     or eax, r12d
     mov [out_buf + 0], eax
 
-    mov eax, SYS_WRITE
-    mov edi, r13d
+    push SYS_WRITE
+    pop rax
     lea rsi, [out_buf]
-    mov edx, 4
+    mov dl, 4                   /* rdi still == r13d, edx was 32 (< 256)! */
     syscall
 
-    /* Read reply header (32 bytes) */
-    mov eax, SYS_READ
-    mov edi, r13d
+    /* Read reply header (32 bytes) - rdi still == r13d, edx was 4 (< 256)! */
+    xor eax, eax                /* SYS_READ = 0 */
     lea rsi, [in_buf]
-    mov edx, 32
+    mov dl, 32
     syscall
 
     cmp byte ptr [in_buf], 1
@@ -1156,11 +1165,10 @@ detect_monitors:
     cmp ecx, 2
     jl mon_detect_done
 
-    /* 2 monitors detected! Read 2 x 8 bytes monitor structures */
-    mov eax, SYS_READ
-    mov edi, r13d
+    /* 2 monitors detected! Read 2 x 8 bytes monitor structures (rdi == r13d, edx was 32!) */
+    xor eax, eax                /* SYS_READ = 0 */
     lea rsi, [in_buf]
-    mov edx, 16                         /* 2 screens * 8 bytes */
+    mov dl, 16                  /* 2 screens * 8 bytes */
     syscall
 
     /* Monitor 0 */
@@ -1204,17 +1212,17 @@ mon_detect_done:
     mov rax, 0x574f444e49575f45                     /* "E_WINDOW" */
     mov [out_buf + 36], rax
 
-    mov eax, SYS_WRITE
-    mov edi, r13d
+    push SYS_WRITE
+    pop rax
     lea rsi, [out_buf]
-    mov edx, 44
+    push 44                     /* rdi still == r13d! */
+    pop rdx
     syscall
 
-    /* Read both 32-byte replies (64 bytes total) */
-    mov eax, SYS_READ
-    mov edi, r13d
+    /* Read both 32-byte replies (64 bytes total) - rdi == r13d, edx was 44 (< 256)! */
+    xor eax, eax                /* SYS_READ = 0 */
     lea rsi, [in_buf]
-    mov edx, 64
+    mov dl, 64
     syscall
 
     mov eax, [in_buf + 8]
@@ -1831,14 +1839,17 @@ nid_null:
 
 exit_clean:
     call kill_xorg
-    mov eax, SYS_EXIT
+    push SYS_EXIT
+    pop rax
     xor edi, edi
     syscall
 
 exit_fail:
     call kill_xorg
-    mov eax, SYS_EXIT
-    mov edi, 1
+    push SYS_EXIT
+    pop rax
+    push 1
+    pop rdi
     syscall
 
 /* kill_xorg: if we spawned Xorg, SIGTERM it and reap it */
@@ -1846,11 +1857,14 @@ kill_xorg:
     mov rdi, [xorg_pid]
     test rdi, rdi
     jle 1f
-    mov eax, 62                 /* SYS_KILL */
-    mov esi, 15                 /* SIGTERM */
+    push 62                     /* SYS_KILL */
+    pop rax
+    push 15                     /* SIGTERM */
+    pop rsi
     syscall
     mov rdi, [xorg_pid]
-    mov eax, SYS_WAIT4
+    push SYS_WAIT4
+    pop rax
     xor esi, esi
     xor edx, edx
     xor r10d, r10d
@@ -1865,10 +1879,12 @@ kill_xorg:
  * Returns child pid in rax (<= 0 on failure).
  */
 start_xorg:
-    mov eax, 89                 /* SYS_READLINK */
+    push 89                     /* SYS_READLINK */
+    pop rax
     lea rdi, [proc_fd0]
     lea rsi, [tty_buf]
-    mov edx, 31
+    push 31
+    pop rdx
     syscall
     cmp rax, 9                  /* need at least "/dev/ttyN" */
     jl 2f
@@ -1894,17 +1910,20 @@ start_xorg:
     mov [x_argv + 24], rax      /* ... -ac vtN -keeptty */
     lea rax, [x_keep_str]
     mov [x_argv + 32], rax
-2:  mov eax, SYS_FORK
+2:  push SYS_FORK
+    pop rax
     syscall
     test rax, rax
     jnz 5f
     lea rdi, [x_path]
     lea rsi, [x_argv]
     mov rdx, [saved_envp]
-    mov eax, SYS_EXECVE
+    mov al, SYS_EXECVE          /* rax == 0 in child! */
     syscall
-    mov eax, SYS_EXIT
-    mov edi, 1
+    push SYS_EXIT
+    pop rax
+    push 1
+    pop rdi
     syscall
 5:  ret
 
@@ -1949,7 +1968,8 @@ cmd_menu:
     .asciz "[ -x $HOME/dotfiles/scripts/nviciod.sh ] && $HOME/dotfiles/scripts/nviciod.sh || ([ -x $HOME/dotfile/dmenuscript ] && $HOME/dotfile/dmenuscript || st)"
 
 cmd_term:
-    .asciz "st || alacritty || kitty"
+    .asciz "st"
+    /* .asciz "st || alacritty || kitty" */
 
 cmd_autostart:
     .asciz "command -v setxkbmap >/dev/null 2>&1 && setxkbmap -option caps:escape; command -v xset >/dev/null 2>&1 && xset r rate 180 250"
