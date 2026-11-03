@@ -50,16 +50,22 @@
 /*
  * Compact Node Structure (32 bytes aligned - 50% smaller!):
  * offset 0:  dword client_win (if leaf) OR 0 (if internal split node) [4 bytes]
- * offset 4:  byte  split_type (0 = vertical, 1 = horizontal)          [1 byte]
- * offset 5:  byte  ws_idx (0..8)                                      [1 byte]
- * offset 6:  word  pad                                                [2 bytes]
+ * offset 4:  byte  packed_info: (ws_idx << 1) | split_type            [1 byte]
+ *                  - bit 0:    split_type (0 = vertical, 1 = horizontal)
+ *                  - bits 1-4: ws_idx (0..8)
+ * offset 5:  bytes pad                                                [3 bytes]
  * offset 8:  qword first_child (pointer)                              [8 bytes]
  * offset 16: qword second_child (pointer)                             [8 bytes]
  * offset 24: qword parent (pointer)                                   [8 bytes]
+ *
+ * Bit-Packed Hardware State Register ebp / bpl (8-bit Bitfield — Zero RAM!):
+ * - bit 0:    is_fullscreen  (0 = tiled, 1 = fullscreen)
+ * - bits 1-2: next_split_sel (0 = auto, 1 = Vertical, 2 = Horizontal)
+ * - bit 3:    is_dual_mon    (0 = 1 monitor, 1 = 2 monitors)
+ * - bit 4:    disp_found     (0 = no DISPLAY in env, 1 = found)
  */
 .equ NODE_WIN,     0
-.equ NODE_SPLIT,   4
-.equ NODE_WS,      5
+.equ NODE_INFO,    4
 .equ NODE_FIRST,   8
 .equ NODE_SECOND,  16
 .equ NODE_PARENT,  24
@@ -67,7 +73,8 @@
 
 .text
 _start:
-    xor r14d, r14d              /* r14 = permanent zero-RAM state register (cur_ws=0) */
+    xor r14d, r14d              /* r14 = permanent zero-RAM cur_ws (0..8) */
+    xor ebp, ebp                /* bpl = permanent 8-bit bitwise state register (Zero RAM!) */
     mov r8, [rsp]               /* argc */
     lea r9, [rsp + 8*r8 + 16]   /* r9 = envp */
     mov [saved_envp], r9
@@ -85,7 +92,7 @@ find_display:
     lea r10, [r10 + 8]
     cmp byte ptr [r10], ':'
     jne next_env
-    mov byte ptr [disp_found], 1
+    or bpl, 16                  /* set bit 4 (disp_found = 1) */
     inc r10
 
     lea rdi, [sock_path_num]
@@ -107,8 +114,8 @@ next_env:
 display_done:
     /* No DISPLAY in the environment (TTY login): give children DISPLAY=:0,
        otherwise st & co. cannot connect to the X server we talk to. */
-    cmp byte ptr [disp_found], 0
-    jne env_ok
+    test bpl, 16                /* check bit 4 (disp_found) */
+    jnz env_ok
     mov rsi, [saved_envp]
     lea rdi, [env_buf]
     mov ecx, 18
@@ -258,16 +265,17 @@ drain_setup_loop:
     jmp drain_setup_loop
 
 setup_drained:
+    /* 6. Autostart (i3 parity): keyboard layout + repeat rate.
+       Run BEFORE grabbing keys on root so setxkbmap's MappingNotify
+       does not ungrab or race with our key grabs! */
+    lea rsi, [sh_argv_autostart]
+    call spawn_cmd
+
     /* Detect Dual Monitor (Xinerama) */
     call detect_monitors
 
     /* Create and map top status bar + SelectInput on root + Grab all 72 keys in ONE batched syscall! */
     call init_bar
-
-    /* 7. Autostart (i3 parity): keyboard layout + repeat rate.
-       setxkbmap resets X auto-repeat, so xset must run after it. */
-    lea rsi, [sh_argv_autostart]
-    call spawn_cmd
 
 event_loop:
     /* Check if event_queue still has buffered events */
@@ -307,11 +315,9 @@ ev_pop_buffered:
     cmp al, 20                  /* MapRequest */
     je handle_map
 
-    cmp al, 18                  /* UnmapNotify */
-    je handle_unmap
-
-    cmp al, 17                  /* DestroyNotify */
-    je handle_unmap
+    sub al, 17                  /* 17 (DestroyNotify) -> 0, 18 (UnmapNotify) -> 1 */
+    cmp al, 1
+    jbe handle_unmap
 
     jmp event_loop
 
@@ -516,11 +522,13 @@ do_dir_move:
     jmp event_loop
 
 key_split_h:
-    mov byte ptr [next_split_sel], 2   /* 2 = horizontal */
+    and bpl, ~6
+    or bpl, 4                   /* bits 1..2 = 2 (horizontal) */
     jmp event_loop
 
 key_split_v:
-    mov byte ptr [next_split_sel], 1   /* 1 = vertical */
+    and bpl, ~6
+    or bpl, 2                   /* bits 1..2 = 1 (vertical) */
     jmp event_loop
 
 key_ws_prev:
@@ -606,9 +614,9 @@ key_fullscreen:
     test edx, edx
     jz event_loop
 
-    xor byte ptr [is_fullscreen], 1
-    cmp byte ptr [is_fullscreen], 1
-    jne fs_restore
+    xor bpl, 1                  /* Toggle bit 0 (is_fullscreen) */
+    test bpl, 1
+    jz fs_restore
 
     /* Set fullscreen on target monitor */
     mov edi, r14d
@@ -946,8 +954,11 @@ create_bar_loop:
     add r15, 52
 
     inc r12d
-    cmp r12d, [mon_count]
-    jl create_bar_loop
+    cmp r12d, 1
+    jne create_bar_done
+    test bpl, 8                                 /* bit 3 = is_dual_mon */
+    jnz create_bar_loop
+create_bar_done:
 
     /* 3. Pre-create 2 static GCs for X_ImageText8 (Eliminates PolyFillRectangle AND ChangeGC!):
        - bar_gc + 0: active workspace digit GC (fg = 0xc2c2b0, bg = 0x181818)
@@ -1055,7 +1066,7 @@ dab_ws_loop:
 /*
  * draw_single_ws_buf(edi = ws_idx 0..8, r15 = write cursor):
  * Surgical O(1) Branchless Single-Digit Bar Renderer via X_ImageText8 (Opcode 76, 20 bytes):
- * Looks up monitor and precomputed X coordinate directly in O(1) without any loop!
+ * Bit-slices both monitor (bit 0) and X offset (bits 1..7) from a single packed byte!
  */
 draw_single_ws_buf:
     push rbx
@@ -1065,11 +1076,13 @@ draw_single_ws_buf:
     imul esi, ebx, 24
     add esi, 10                                 /* default single-monitor X = 10 + ws_idx * 24 */
 
-    cmp dword ptr [mon_count], 2
-    jl dsw_emit
+    test bpl, 8                                 /* bit 3 = is_dual_mon */
+    jz dsw_emit
 
-    movzx ecx, byte ptr [ws_mon_table + rbx]    /* O(1) monitor lookup */
-    movzx esi, byte ptr [ws_x_table + rbx]      /* O(1) precomputed X coordinate lookup! */
+    movzx ecx, byte ptr [ws_mon_table + rbx]    /* 1-byte packed load: (X & ~1) | mon_idx */
+    mov esi, ecx
+    and ecx, 1                                  /* bit 0 = mon_idx (0 or 1) */
+    and esi, 0xFE                               /* bits 1..7 = precomputed even X coordinate! */
 
 dsw_emit:
     /* Select pre-created GC: bar_gc + 0 (active) or bar_gc + 1 (inactive) */
@@ -1104,8 +1117,7 @@ dsw_gc_ok:
 detect_monitors:
     push rbx
 
-    /* Default: 1 monitor = full screen */
-    mov dword ptr [mon_count], 1
+    /* Default: 1 monitor = full screen (wm_state bit 3 starts as 0) */
     mov eax, [screen_w]
     mov edx, [screen_h]
     mov dword ptr [mon_geom + 0],  0   /* x */
@@ -1165,10 +1177,11 @@ detect_monitors:
     cmp ecx, 2
     jl mon_detect_done
 
-    /* 2 monitors detected! Read 2 x 8 bytes monitor structures (rdi == r13d, edx was 32!) */
+    /* 2 monitors detected! Read 2 x 8 bytes monitor structures (rdi == r13d) */
     xor eax, eax                /* SYS_READ = 0 */
     lea rsi, [in_buf]
-    mov dl, 16                  /* 2 screens * 8 bytes */
+    push 16                     /* 2 screens * 8 bytes (push/pop clears upper bits of rdx!) */
+    pop rdx
     syscall
 
     /* Monitor 0 */
@@ -1191,7 +1204,7 @@ detect_monitors:
     mov [mon_geom + 24], ecx
     mov [mon_geom + 28], r8d
 
-    mov dword ptr [mon_count], 2
+    or bpl, 8                           /* Set bit 3 (is_dual_mon = 1) */
 
 mon_detect_done:
     /*
@@ -1237,11 +1250,12 @@ mon_detect_done:
  * get_mon_for_ws(edi = ws_idx 0..8) -> eax = monitor index (0 or 1)
  */
 get_mon_for_ws:
-    cmp dword ptr [mon_count], 2
-    jl single_mon
+    test bpl, 8                         /* bit 3 = is_dual_mon */
+    jz single_mon
     cmp edi, WORKSPACE_COUNT
     jge single_mon
     movzx eax, byte ptr [ws_mon_table + rdi]
+    and eax, 1                          /* Extract bit 0 (monitor 0 or 1) */
     ret
 single_mon:
     xor eax, eax
@@ -1342,10 +1356,8 @@ bsp_tree_insert_into_ws:
 
     call alloc_node
     mov [rax + NODE_WIN], edi
-    mov [rax + NODE_WS], r14b
-    mov qword ptr [rax + NODE_FIRST], 0
-    mov qword ptr [rax + NODE_SECOND], 0
-    mov qword ptr [rax + NODE_PARENT], 0
+    lea edx, [r14 + r14]        /* edx = ws_idx << 1 */
+    mov [rax + NODE_INFO], dl   /* packed NODE_INFO: (ws_idx << 1) | 0 */
     mov r12, rax                /* r12 = new leaf */
 
     lea rax, [bsp_roots]
@@ -1376,18 +1388,19 @@ ws_split_leaf:
 ws_has_focus:
     call alloc_node
     mov r13, rax                /* r13 = new split node */
-    mov [r13 + NODE_WS], r14b
 
-    /* Determine split direction: 1 = V, 2 = H, 0 = auto */
-    movzx ecx, byte ptr [next_split_sel]
-    test cl, cl
+    /* Determine split direction from bpl bits 1..2: 1 = V, 2 = H, 0 = auto */
+    mov ecx, ebp
+    shr cl, 1
+    and cl, 3
     jnz ws_use_chosen
 
-    /* Alternate split */
+    /* Alternate split: invert bit 0 of parent's NODE_INFO */
     mov rax, [rbx + NODE_PARENT]
     test rax, rax
     jz ws_def_v
-    movzx ecx, byte ptr [rax + NODE_SPLIT]
+    mov cl, [rax + NODE_INFO]
+    and cl, 1
     xor cl, 1
     jmp ws_apply_split
 ws_def_v:
@@ -1396,11 +1409,12 @@ ws_def_v:
 
 ws_use_chosen:
     dec cl                      /* 1 -> 0 (V), 2 -> 1 (H) */
-    mov byte ptr [next_split_sel], 0
+    and bpl, ~6                 /* clear next_split_sel bits 1..2 */
 
 ws_apply_split:
-    mov dword ptr [r13 + NODE_WIN], 0
-    mov [r13 + NODE_SPLIT], cl
+    lea edx, [r14 + r14]        /* ws_idx << 1 */
+    or cl, dl                   /* pack (ws_idx << 1) | split_type into 1 byte! */
+    mov [r13 + NODE_INFO], cl
     mov rax, [rbx + NODE_PARENT]
     mov [r13 + NODE_PARENT], rax
 
@@ -1444,7 +1458,8 @@ bsp_tree_detach:
     push r14
 
     mov rbx, rdi
-    movzx r14d, byte ptr [rbx + NODE_WS]    /* ws_idx */
+    movzx r14d, byte ptr [rbx + NODE_INFO]
+    shr r14d, 1                             /* Extract ws_idx = NODE_INFO >> 1 */
     mov r12, [rbx + NODE_PARENT]
     test r12, r12
     jnz td_has_parent
@@ -1685,8 +1700,8 @@ do_ws_split:
     push r8
     push r9
 
-    cmp byte ptr [rdi + NODE_SPLIT], 1
-    je ws_split_horizontal
+    test byte ptr [rdi + NODE_INFO], 1      /* Bit 0 = split_type (0=V, 1=H) */
+    jnz ws_split_horizontal
 
     /* Vertical Split */
     shr r8d, 1
@@ -1759,8 +1774,9 @@ nid_climb:
     test rbx, rbx
     jz nid_null                 /* Reached root without finding matching split */
 
-    /* Check parent split orientation */
-    movzx eax, byte ptr [rbx + NODE_SPLIT]
+    /* Check parent split orientation (bit 0 of NODE_INFO) */
+    movzx eax, byte ptr [rbx + NODE_INFO]
+    and eax, 1
     cmp eax, r13d
     jne nid_climb_next
 
@@ -1801,7 +1817,8 @@ dive_down:
     cmp dword ptr [r15 + NODE_WIN], 0
     jne nid_success             /* Found destination leaf! */
 
-    movzx eax, byte ptr [r15 + NODE_SPLIT]
+    movzx eax, byte ptr [r15 + NODE_INFO]
+    and eax, 1
     cmp eax, r13d
     je dive_same_orient
 
@@ -1994,26 +2011,21 @@ sh_argv_autostart:
     .quad 0
 
 /*
- * Workspace to Monitor Mapping Configuration Table:
- * Define which monitor (0 or 1) hosts each workspace (WS 1 to 9).
- * Index 0 = Workspace 1, Index 1 = Workspace 2, ..., Index 8 = Workspace 9.
- * (Change the bytes below to customize your dual-monitor setup!)
+ * Bit-Packed Workspace Bar & Monitor Table (1 byte per workspace = 9 bytes total!):
+ * - bit 0:    monitor index (0 = Monitor 0, 1 = Monitor 1) -> read with `and ecx, 1`
+ * - bits 1-7: precomputed even X pixel coordinate (10 + slot * 24) -> read with `and esi, 0xFE`
  */
 .align 8
 ws_mon_table:
-    .byte 1                     /* WS 1 -> Monitor 1 */
-    .byte 1                     /* WS 2 -> Monitor 1 */
-    .byte 1                     /* WS 3 -> Monitor 1 */
-    .byte 1                     /* WS 4 -> Monitor 1 */
-    .byte 1                     /* WS 5 -> Monitor 1 */
-    .byte 1                     /* WS 6 -> Monitor 1 */
-    .byte 1                     /* WS 7 -> Monitor 1 */
-    .byte 1                     /* WS 8 -> Monitor 1 */
-    .byte 0                     /* WS 9 -> Monitor 0 */
-
-/* Precomputed X pixel offset (10 + slot * 24) for each workspace in dual-monitor mode */
-ws_x_table:
-    .byte 10, 34, 58, 82, 106, 130, 154, 178, 10
+    .byte (10  | 1)             /* WS 1 -> Monitor 1, X = 10 */
+    .byte (34  | 1)             /* WS 2 -> Monitor 1, X = 34 */
+    .byte (58  | 1)             /* WS 3 -> Monitor 1, X = 58 */
+    .byte (82  | 1)             /* WS 4 -> Monitor 1, X = 82 */
+    .byte (106 | 1)             /* WS 5 -> Monitor 1, X = 106 */
+    .byte (130 | 1)             /* WS 6 -> Monitor 1, X = 130 */
+    .byte (154 | 1)             /* WS 7 -> Monitor 1, X = 154 */
+    .byte (178 | 1)             /* WS 8 -> Monitor 1, X = 178 */
+    .byte (10  | 0)             /* WS 9 -> Monitor 0, X = 10 */
 
 /*
  * Table of Grabbed Shortcuts:
@@ -2076,14 +2088,12 @@ atom_wm_proto:  .long 0         /* WM_PROTOCOLS atom */
 atom_wm_del:    .long 0         /* WM_DELETE_WINDOW atom */
 saved_envp:     .quad 0
 xorg_pid:       .quad 0
-disp_found:     .byte 0
-/* cur_ws lives permanently in register r14 (Zero RAM!) */
-next_split_sel: .byte 0         /* 0 = auto, 1 = V, 2 = H - 1 byte! */
-is_fullscreen:  .byte 0         /* 0 = normal, 1 = fullscreen - 1 byte! */
-                .align 4
+/*
+ * cur_ws lives permanently in register r14 (Zero RAM!).
+ * All 4 state flags live permanently in 8-bit register bpl (Zero RAM!).
+ */
 
 /* Monitor configuration: up to 2 monitors (16 bytes each: x, y, w, h) */
-mon_count:      .long 0
 mon_geom:       .space 32
 
 /* 9 Workspaces state */
@@ -2103,11 +2113,11 @@ ev_q_tail:      .long 0         /* Total bytes available in event_queue */
 env_buf:        .space 160      /* Up to 19 env vars + DISPLAY=:0 + NULL for TTY login */
 tty_buf:        .space 32
 
-.align 32
+.align 8
 out_buf:
 in_buf:         .space 768
 event_queue:    .space 288      /* Buffer for up to 9 X11 events (32 bytes each) */
 
 /* 16 nodes of 32 bytes = 512 bytes (allocated only when windows map after init_bar!) */
-.align 32
+.align 8
 node_pool:      .space 512
