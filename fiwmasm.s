@@ -65,6 +65,7 @@
  * - bits 1-2: next_split_sel (0 = auto, 1 = Vertical, 2 = Horizontal)
  * - bit 3:    is_dual_mon    (0 = 1 monitor, 1 = 2 monitors)
  * - bit 4:    disp_found     (0 = no DISPLAY in env, 1 = found)
+ * - bit 5:    is_floating    (0 = tiled, 1 = floating)
  */
 .equ NODE_WIN,     0
 .equ NODE_INFO,    4
@@ -311,6 +312,9 @@ ev_pop_buffered:
     cmp al, 2                   /* KeyPress */
     je handle_key
 
+    cmp al, 7                   /* EnterNotify */
+    je handle_enter
+
     cmp al, 12                  /* Expose */
     je handle_expose
 
@@ -321,6 +325,43 @@ ev_pop_buffered:
     cmp al, 1
     jbe handle_unmap
 
+    jmp event_loop
+
+handle_enter:
+    /*
+     * EnterNotify (Focus follows mouse):
+     * [rsi + 1]: detail (2 = NotifyInferior)
+     * [rsi + 12]: event window (uint32)
+     * [rsi + 30]: mode (0 = NotifyNormal, 1 = NotifyGrab, 2 = NotifyUngrab, 3 = NotifyWhileGrabbed)
+     */
+    cmp byte ptr [rsi + 30], 0  /* mode == NotifyNormal */
+    jne event_loop
+    cmp byte ptr [rsi + 1], 2   /* detail != NotifyInferior */
+    je event_loop
+
+    mov edx, [rsi + 12]         /* edx = event window */
+    test edx, edx
+    jz event_loop
+
+    /* Find leaf node with this window in active workspace */
+    lea rax, [bsp_roots]
+    mov rdi, [rax + 8*r14]
+    push rdx
+    mov esi, edx
+    call bsp_find_node_by_win
+    pop rdx
+    test rax, rax
+    jz event_loop               /* Window not in active workspace BSP tree */
+
+    /* Check if already focused */
+    lea rbx, [bsp_focuses]
+    cmp rax, [rbx + 8*r14]
+    je event_loop               /* Already focused */
+
+    /* Update focus */
+    mov [rbx + 8*r14], rax
+    mov edi, edx
+    call set_focus
     jmp event_loop
 
 handle_expose:
@@ -401,10 +442,18 @@ check_other_keys:
     jmp key_kill                /* Alt+q: Kill Active Window */
 
 check_nav_keys:
-    /* Alt+f (41): Toggle Fullscreen */
-    cmp ecx, 41
-    je key_fullscreen
+    /* Alt+Shift+f or Alt+Space (65): Toggle Floating */
+    cmp ecx, 65
+    je key_floating
 
+    /* Alt+f (41) */
+    cmp ecx, 41
+    jne check_hjkl
+    test edx, 1                 /* Shift pressed? */
+    jnz key_floating            /* Alt+Shift+f: Floating Toggle */
+    jmp key_fullscreen          /* Alt+f: Fullscreen Toggle */
+
+check_hjkl:
     /* Navigation with HJKL (keycodes 43, 44, 45, 46) */
     cmp ecx, 43
     jl check_split_keys
@@ -629,6 +678,81 @@ key_fullscreen:
     jmp event_loop
 
 fs_restore:
+    mov edi, r14d
+    call bsp_arrange_ws
+    jmp event_loop
+
+key_floating:
+    lea rbx, [bsp_focuses]
+    mov rax, [rbx + 8*r14]
+    test rax, rax
+    jz event_loop
+    mov edx, [rax + NODE_WIN]
+    test edx, edx
+    jz event_loop
+
+    xor bpl, 32                 /* Toggle bit 5 (is_floating) */
+    test bpl, 32
+    jz fl_restore
+
+    /* Set floating: 60% dimensions centered on target monitor */
+    mov edi, r14d
+    call get_mon_for_ws         /* eax = monitor index */
+    mov ecx, eax
+    shl ecx, 4                  /* 16 bytes per monitor */
+    lea rbx, [mon_geom]
+    add rbx, rcx
+
+    /* fw = (mon_w * 39322) >> 16 */
+    mov eax, [rbx + 8]          /* mon_w */
+    imul eax, 39322
+    shr eax, 16                 /* eax = fw */
+    mov r8d, eax                /* r8d = fw */
+
+    /* fh = (mon_h * 39322) >> 16 */
+    mov eax, [rbx + 12]         /* mon_h */
+    imul eax, 39322
+    shr eax, 16                 /* eax = fh */
+    mov r9d, eax                /* r9d = fh */
+
+    /* fx = mon_x + ((mon_w - fw) >> 1) */
+    mov esi, [rbx + 8]          /* mon_w */
+    sub esi, r8d
+    sar esi, 1
+    add esi, [rbx + 0]          /* esi = fx */
+
+    /* fy = mon_y + ((mon_h - fh) >> 1) */
+    mov edi, [rbx + 12]         /* mon_h */
+    sub edi, r9d
+    sar edi, 1
+    add edi, [rbx + 4]          /* edi = fy */
+
+    /* Packet 1: ConfigureWindow (x, y, w, h, border_width = 1) (32 bytes) */
+    mov dword ptr [out_buf + 0], (8 << 16) | 12
+    mov [out_buf + 4], edx
+    mov dword ptr [out_buf + 8], 31             /* x, y, w, h, border_width */
+    mov [out_buf + 12], esi                     /* x */
+    mov [out_buf + 16], edi                     /* y */
+    mov [out_buf + 20], r8d                     /* w */
+    mov [out_buf + 24], r9d                     /* h */
+    mov dword ptr [out_buf + 28], 1             /* border_width = 1 */
+
+    /* Packet 2: X_RaiseWindow (ConfigureWindow, stack mode = Above) (16 bytes) */
+    mov dword ptr [out_buf + 32], (4 << 16) | 12
+    mov [out_buf + 36], edx
+    mov dword ptr [out_buf + 40], 64            /* CWStackMode = 64 */
+    mov dword ptr [out_buf + 44], 0             /* Above = 0 */
+
+    push SYS_WRITE
+    pop rax
+    mov edi, r13d
+    lea rsi, [out_buf]
+    push 48
+    pop rdx
+    syscall
+    jmp event_loop
+
+fl_restore:
     mov edi, r14d
     call bsp_arrange_ws
     jmp event_loop
@@ -1319,11 +1443,19 @@ handle_map:
 
     /* Zero-Flicker Map Pipeline:
        1. ConfigureWindow (bsp_arrange_ws_buf) FIRST while new window is still unmapped!
-       2. MapWindow SECOND so window appears directly at its final tiled geometry!
-       3. SetInputFocus THIRD, all flushed in ONE atomic sys_write! */
+       2. ChangeWindowAttributes (Select EnterWindowMask = 0x10) so focus-follows-mouse works!
+       3. MapWindow SECOND so window appears directly at its final tiled geometry!
+       4. SetInputFocus THIRD, all flushed in ONE atomic sys_write! */
     lea r15, [out_buf]
     mov edi, r14d
     call bsp_arrange_ws_buf
+
+    /* ChangeWindowAttributes: CWEventMask (bit 11 = 0x800) = EnterWindowMask (bit 4 = 0x10) (16 bytes) */
+    mov dword ptr [r15 + 0], (4 << 16) | 2
+    mov [r15 + 4], r12d
+    mov dword ptr [r15 + 8], 0x800
+    mov dword ptr [r15 + 12], 0x10
+    add r15, 16
 
     mov dword ptr [r15 + 0], (2 << 16) | 8
     mov dword ptr [r15 + 4], r12d
@@ -2056,6 +2188,8 @@ shortcut_keys:
     .byte 24, 0x08              /* Alt + q */
     .byte 24, 0x09              /* Alt + Shift + q */
     .byte 41, 0x08              /* Alt + f */
+    .byte 41, 0x09              /* Alt + Shift + f (Floating Toggle) */
+    .byte 65, 0x08              /* Alt + Space (Floating Toggle) */
     .byte 43, 0x08              /* Alt + h (Focus Left) */
     .byte 44, 0x08              /* Alt + j (Focus Down) */
     .byte 45, 0x08              /* Alt + k (Focus Up) */
@@ -2133,7 +2267,7 @@ tty_buf:        .space 32
 
 .align 8
 out_buf:
-in_buf:         .space 768
+in_buf:         .space 2048
 event_queue:    .space 288      /* Buffer for up to 9 X11 events (32 bytes each) */
 
 /* 16 nodes of 32 bytes = 512 bytes (allocated only when windows map after init_bar!) */

@@ -63,7 +63,7 @@ done
 echo "[*] Starting fiwmasm on ${TEST_DISP}..."
 DISPLAY="$TEST_DISP" ./fiwmasm >"$TEST_LOG" 2>&1 &
 WM_PID=$!
-sleep 0.5
+sleep 0.8
 
 if ! kill -0 "$WM_PID" 2>/dev/null; then
     echo "[!] fiwmasm failed to start!"
@@ -247,7 +247,7 @@ fi
 echo ""
 echo "--- [9] Clean WM Exit (Alt+Shift+q) ---"
 DISPLAY="$TEST_DISP" xdotool key alt+shift+q
-sleep 0.5
+sleep 0.8
 if ! kill -0 "$WM_PID" 2>/dev/null; then
     report_pass "Alt+Shift+q cleanly terminated fiwmasm process"
 else
