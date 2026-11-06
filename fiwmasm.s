@@ -46,6 +46,8 @@
 .equ MAX_MONITORS,    2
 .equ GAP_PX,          4
 .equ BAR_HEIGHT,      18
+.equ BORDER_ACTIVE,   0xFFFFFF
+.equ BORDER_INACTIVE, 0x2D2D2D
 
 /*
  * Compact Node Structure (32 bytes aligned - 50% smaller!):
@@ -597,9 +599,9 @@ key_fullscreen:
     lea rbx, [mon_geom]
     add rbx, rcx
 
-    mov dword ptr [out_buf + 0], (7 << 16) | 12
+    mov dword ptr [out_buf + 0], (8 << 16) | 12
     mov [out_buf + 4], edx
-    mov dword ptr [out_buf + 8], 15
+    mov dword ptr [out_buf + 8], 31             /* x, y, w, h, border_width */
     mov eax, [rbx + 0]          /* x */
     mov [out_buf + 12], eax
     mov eax, [rbx + 4]          /* y */
@@ -608,19 +610,20 @@ key_fullscreen:
     mov [out_buf + 20], eax
     mov eax, [rbx + 12]         /* h */
     mov [out_buf + 24], eax
+    mov dword ptr [out_buf + 28], 0             /* border_width = 0 for fullscreen */
 
     /* X_RaiseWindow (ConfigureWindow, stack mode = Above) so the
        fullscreen window actually covers splits from other columns */
-    mov dword ptr [out_buf + 28], (4 << 16) | 12
-    mov [out_buf + 32], edx
-    mov dword ptr [out_buf + 36], 64
-    mov dword ptr [out_buf + 40], 0
+    mov dword ptr [out_buf + 32], (4 << 16) | 12
+    mov [out_buf + 36], edx
+    mov dword ptr [out_buf + 40], 64
+    mov dword ptr [out_buf + 44], 0
 
     push SYS_WRITE
     pop rax
     mov edi, r13d
     lea rsi, [out_buf]
-    push 44
+    push 48
     pop rdx
     syscall
     jmp event_loop
@@ -637,11 +640,38 @@ set_focus:
 
 /*
  * set_focus_buf(edi = win_id, r15 = write cursor)
- * Appends 12-byte X_SetInputFocus request to [r15]
+ * 1. Restores border_inactive (0x2D2D2D) on last_focused_win if different.
+ * 2. Sets border_active (0xFFFFFF) on new win_id.
+ * 3. Appends 12-byte X_SetInputFocus request to [r15].
  */
 set_focus_buf:
     test edi, edi
     jz focus_ret
+
+    mov eax, [last_focused_win]
+    cmp eax, edi
+    je sfb_do_input_focus       /* Already has active border */
+
+    /* If old window exists, paint border_inactive (0x2D2D2D) */
+    test eax, eax
+    jz sfb_paint_active
+    mov dword ptr [r15 + 0], (4 << 16) | 2   /* Opcode 2: ChangeWindowAttributes */
+    mov [r15 + 4], eax
+    mov dword ptr [r15 + 8], 8               /* CWBorderPixel */
+    mov dword ptr [r15 + 12], BORDER_INACTIVE
+    add r15, 16
+
+sfb_paint_active:
+    /* Paint new window border_active (0xFFFFFF) */
+    mov dword ptr [r15 + 0], (4 << 16) | 2   /* Opcode 2: ChangeWindowAttributes */
+    mov [r15 + 4], edi
+    mov dword ptr [r15 + 8], 8               /* CWBorderPixel */
+    mov dword ptr [r15 + 12], BORDER_ACTIVE
+    add r15, 16
+
+    mov [last_focused_win], edi
+
+sfb_do_input_focus:
     mov dword ptr [r15 + 0], (3 << 16) | (1 << 8) | 42
     mov [r15 + 4], edi
     mov dword ptr [r15 + 8], 0
@@ -1293,7 +1323,10 @@ found_unmap_node:
     jz no_focus_left
     mov edi, [rax + NODE_WIN]
     call set_focus_buf
+    jmp unmap_arrange_and_flush
 no_focus_left:
+    mov dword ptr [last_focused_win], 0
+unmap_arrange_and_flush:
     mov edi, r14d
     call bsp_arrange_ws_buf
     call flush_out_buf
@@ -1609,16 +1642,17 @@ bsp_arrange_node:
     cmp dword ptr [rdi + NODE_WIN], 0
     jz do_ws_split
 
-    /* Leaf window: zero stack allocation! Pack 16 bytes into 2 qword writes + 12 bytes */
-    mov dword ptr [r15 + 0], (7 << 16) | 12
+    /* Leaf window: zero stack allocation! Configure geometry + border_width=1 (32 bytes) */
+    mov dword ptr [r15 + 0], (8 << 16) | 12  /* Opcode 12: ConfigureWindow (8 dwords = 32 bytes) */
     mov eax, [rdi + NODE_WIN]
     mov [r15 + 4], eax
-    mov dword ptr [r15 + 8], 15
-    mov [r15 + 12], esi
-    mov [r15 + 16], edx
-    mov [r15 + 20], r8d
-    mov [r15 + 24], r9d
-    add r15, 28
+    mov dword ptr [r15 + 8], 31              /* CWX | CWY | CWWidth | CWHeight | CWBorderWidth */
+    mov [r15 + 12], esi                      /* x */
+    mov [r15 + 16], edx                      /* y */
+    mov [r15 + 20], r8d                      /* w */
+    mov [r15 + 24], r9d                      /* h */
+    mov dword ptr [r15 + 28], 1              /* border_width = 1 */
+    add r15, 32
     ret
 
 do_ws_split:
@@ -2027,6 +2061,7 @@ mon_geom:       .space 32
 /* 9 Workspaces state */
 bsp_roots:      .space 72       /* 9 x 8 bytes pointers */
 bsp_focuses:    .space 72       /* 9 x 8 bytes pointers */
+last_focused_win: .long 0       /* Last window with active border (for de-focus) */
 free_node_head: .quad 0         /* O(1) recycled BSP node free-list head */
 
 node_idx:       .long 0
