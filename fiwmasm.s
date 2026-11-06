@@ -431,30 +431,8 @@ key_focus_hjkl:
     test rdi, rdi
     jz event_loop
 
-    /* Determine orient and dir */
-    cmp ecx, 43                 /* h = Left */
-    jne not_focus_h
-    xor esi, esi                /* orient = 0 (Vertical) */
-    xor edx, edx                /* dir = 0 (Left) */
-    jmp do_dir_focus
-not_focus_h:
-    cmp ecx, 46                 /* l = Right */
-    jne not_focus_l
-    xor esi, esi                /* orient = 0 (Vertical) */
-    mov edx, 1                  /* dir = 1 (Right) */
-    jmp do_dir_focus
-not_focus_l:
-    cmp ecx, 45                 /* k = Up */
-    jne not_focus_k
-    mov esi, 1                  /* orient = 1 (Horizontal) */
-    xor edx, edx                /* dir = 0 (Up) */
-    jmp do_dir_focus
-not_focus_k:
-    /* j = Down */
-    mov esi, 1                  /* orient = 1 (Horizontal) */
-    mov edx, 1                  /* dir = 1 (Down) */
-
-do_dir_focus:
+    /* Determine orient (esi) and dir (edx) from keycode in ecx */
+    call hjkl_decode_dir
     call bsp_node_in_direction
     test rax, rax
     jz event_loop               /* No window in that direction */
@@ -474,29 +452,7 @@ key_move_hjkl:
     jz event_loop
 
     mov rdi, r12
-    cmp ecx, 43                 /* h = Left */
-    jne not_move_h
-    xor esi, esi                /* Vertical */
-    xor edx, edx                /* Left */
-    jmp do_dir_move
-not_move_h:
-    cmp ecx, 46                 /* l = Right */
-    jne not_move_l
-    xor esi, esi                /* Vertical */
-    mov edx, 1                  /* Right */
-    jmp do_dir_move
-not_move_l:
-    cmp ecx, 45                 /* k = Up */
-    jne not_move_k
-    mov esi, 1                  /* Horizontal */
-    xor edx, edx                /* Up */
-    jmp do_dir_move
-not_move_k:
-    /* j = Down */
-    mov esi, 1                  /* Horizontal */
-    mov edx, 1                  /* Down */
-
-do_dir_move:
+    call hjkl_decode_dir
     call bsp_node_in_direction
     test rax, rax
     jz event_loop               /* No neighbor in that direction to swap */
@@ -520,6 +476,21 @@ do_dir_move:
     call set_focus_buf
     call flush_out_buf
     jmp event_loop
+
+/*
+ * hjkl_decode_dir(ecx = keycode 43..46)
+ * Outputs:
+ *   esi = orient (0 = Vertical, 1 = Horizontal)
+ *   edx = dir (0 = Left/Up, 1 = Right/Down)
+ */
+hjkl_decode_dir:
+    sub ecx, 43
+    mov edx, ecx
+    and edx, 1                  /* dir: 43(h)->0, 44(j)->1, 45(k)->0, 46(l)->1 */
+    shr ecx, 1
+    xor ecx, edx                /* orient: h->0, j->1, k->1, l->0 */
+    mov esi, ecx
+    ret
 
 key_split_h:
     and bpl, ~6
@@ -658,21 +629,6 @@ fs_restore:
     mov edi, r14d
     call bsp_arrange_ws
     jmp event_loop
-
-key_focus_next:
-    lea rbx, [bsp_roots]
-    mov rdi, [rbx + 8*r14]
-    call bsp_find_other_leaf
-    test rax, rax
-    jz event_loop
-    lea rbx, [bsp_focuses]
-    mov [rbx + 8*r14], rax
-    mov edi, [rax + NODE_WIN]
-    call set_focus
-    jmp event_loop
-
-key_focus_prev:
-    jmp key_focus_next
 
 set_focus:
     lea r15, [out_buf]
@@ -1561,34 +1517,6 @@ bfl_null:
     ret
 bfl_found:
     mov rax, rdi
-    ret
-
-bsp_find_other_leaf:
-    test rdi, rdi
-    jz bfol_null
-bfol_loop:
-    cmp dword ptr [rdi + NODE_WIN], 0
-    je bfol_down
-    lea rbx, [bsp_focuses]
-    cmp rdi, [rbx + 8*r14]
-    jne bfol_found
-    xor eax, eax
-    ret
-bfol_down:
-    push rdi
-    mov rdi, [rdi + NODE_FIRST]
-    call bsp_find_other_leaf
-    pop rdi
-    test rax, rax
-    jnz bfol_ret
-    mov rdi, [rdi + NODE_SECOND]
-    jmp bsp_find_other_leaf
-bfol_found:
-    mov rax, rdi
-    ret
-bfol_null:
-    xor eax, eax
-bfol_ret:
     ret
 
 bsp_find_node_by_win:
