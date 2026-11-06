@@ -747,9 +747,12 @@ parent_fork:
 
 /*
  * focus_workspace(edi = target_ws 0..8)
- * Super-Pipeline Batching: Combines hide_tree_collect + draw_all_bars_buf +
- * bsp_arrange_ws_buf + set_focus_buf into ONE SINGLE atomic sys_write syscall!
- * (Reduces workspace switching from 5 syscalls down to 1 syscall!)
+ * Dual-monitor aware:
+ * - Identifies target monitor (m) for target_ws.
+ * - Retrieves old_ws visible on that monitor (mon_cur_ws[m]).
+ * - If old_ws != target_ws, hides old_ws UNLESS displayed on the other monitor.
+ * - Updates mon_cur_ws[m] = target_ws, r14d = target_ws.
+ * - Batches hide + status bar update + arrangement + focus in ONE atomic sys_write!
  */
 focus_workspace:
     push rbx
@@ -757,33 +760,63 @@ focus_workspace:
     push r15
 
     mov r12d, edi               /* r12d = new_ws */
-    mov ebx, r14d               /* ebx = old_ws */
-    cmp r12d, ebx
+    cmp r12d, r14d
     je fw_done
 
     lea r15, [out_buf]          /* r15 = unified batch write cursor */
 
-    /* 1. Hide windows of old workspace (move off-screen x=-9999, y=-9999) */
+    /* Determine target monitor m (0 or 1) */
+    mov edi, r12d
+    call get_mon_for_ws         /* eax = m */
+    mov edx, eax                /* edx = target monitor m */
+
+    /* Get old workspace currently shown on target monitor m */
+    movzx ebx, byte ptr [mon_cur_ws + rdx]  /* ebx = old_ws on monitor m */
+    cmp ebx, r12d
+    je fw_update_active         /* Same workspace already active on this monitor */
+
+    /* Check if old_ws is displayed on the other monitor (in dual monitor mode) */
+    test bpl, 8                 /* bit 3 = is_dual_mon */
+    jz fw_do_hide               /* Single monitor: always hide old_ws */
+
+    mov eax, edx
+    xor eax, 1                  /* other monitor = m ^ 1 */
+    movzx eax, byte ptr [mon_cur_ws + rax]
+    cmp eax, ebx
+    je fw_update_active         /* Other monitor is viewing old_ws: do NOT hide! */
+
+fw_do_hide:
+    /* Hide windows of old workspace on this monitor (move off-screen x=-9999, y=-9999) */
+    push rdx
     lea rax, [bsp_roots]
     mov rdi, [rax + 8*rbx]
     call hide_tree_collect
+    pop rdx
 
-    /* 2. Switch to new workspace directly in permanent register r14! (Zero RAM) */
-    mov r14d, r12d
+fw_update_active:
+    /* Update visible workspace on target monitor */
+    mov [mon_cur_ws + rdx], r12b
 
-    /* 3. Surgical 2-Digit Delta Update on Status Bar into [r15] (40 bytes instead of 180!):
-       - Redraw ONLY old_ws (ebx) as inactive and new_ws (r12d) as active! */
-    mov edi, ebx
+    /* Update status bar: redraw old_ws (ebx) as inactive and new_ws (r12d) as active */
+    mov r8d, r14d               /* r8d = previous globally active workspace */
+    mov r14d, r12d              /* r14d = newly active workspace */
+    mov edi, r8d
     call draw_single_ws_buf
     mov edi, r12d
     call draw_single_ws_buf
+    cmp ebx, r8d
+    je fw_arrange
+    cmp ebx, r12d
+    je fw_arrange
+    mov edi, ebx
+    call draw_single_ws_buf
 
-    /* 4. Arrange new workspace windows on-screen into [r15]
-       (No redundant MapWindow needed: windows stay mapped while off-screen!) */
+fw_arrange:
+    /* Arrange new workspace windows on-screen into [r15] */
     mov edi, r12d
     call bsp_arrange_ws_buf
 
-    /* 5. Focus active window on new workspace into [r15] */
+    /* Focus active window on new workspace into [r15] */
     lea rax, [bsp_focuses]
     mov rdi, [rax + 8*r12]
     test rdi, rdi
@@ -1161,14 +1194,32 @@ detect_monitors:
 
     mov ecx, [in_buf + 8]               /* number of screens */
     cmp ecx, 2
-    jl mon_detect_done
+    jge mon_read_screens
 
-    /* 2 monitors detected! Read 2 x 8 bytes monitor structures (rdi == r13d) */
+    /* If num_screens == 1, drain its 8-byte structure so atom replies aren't corrupted */
+    test ecx, ecx
+    jz mon_detect_done
     xor eax, eax                /* SYS_READ = 0 */
     lea rsi, [in_buf]
-    push 16                     /* 2 screens * 8 bytes (push/pop clears upper bits of rdx!) */
+    push 8
     pop rdx
     syscall
+    jmp mon_detect_done
+
+mon_read_screens:
+    /* 2 monitors detected! Read 2 x 8 bytes monitor structures (rdi == r13d) with full drain */
+    xor ebx, ebx                /* total bytes read */
+mon_read_loop:
+    xor eax, eax                /* SYS_READ = 0 */
+    lea rsi, [in_buf + rbx]
+    mov edx, 16
+    sub edx, ebx
+    syscall
+    test eax, eax
+    jle mon_detect_done
+    add ebx, eax
+    cmp ebx, 16
+    jl mon_read_loop
 
     /* Monitor 0 */
     movsx eax, word ptr [in_buf + 0]    /* x_org */
@@ -1191,6 +1242,8 @@ detect_monitors:
     mov [mon_geom + 28], r8d
 
     or bpl, 8                           /* Set bit 3 (is_dual_mon = 1) */
+    mov byte ptr [mon_cur_ws + 0], 8    /* Monitor 0 starts displaying Workspace 9 (idx 8) */
+    mov byte ptr [mon_cur_ws + 1], 0    /* Monitor 1 starts displaying Workspace 1 (idx 0) */
 
 mon_detect_done:
     /*
@@ -2057,6 +2110,8 @@ xorg_pid:       .quad 0
 
 /* Monitor configuration: up to 2 monitors (16 bytes each: x, y, w, h) */
 mon_geom:       .space 32
+mon_cur_ws:     .byte 0, 0      /* Currently visible workspace index per monitor */
+
 
 /* 9 Workspaces state */
 bsp_roots:      .space 72       /* 9 x 8 bytes pointers */
