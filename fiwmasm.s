@@ -360,6 +360,10 @@ handle_enter:
 
     /* Update focus */
     mov [rbx + 8*r14], rax
+    mov rdi, rax
+    push rdx
+    call bsp_update_history
+    pop rdx
     mov edi, edx
     call set_focus
     jmp event_loop
@@ -491,6 +495,10 @@ key_focus_hjkl:
     /* Set new focus */
     lea rbx, [bsp_focuses]
     mov [rbx + 8*r14], rax
+    mov rdi, rax
+    call bsp_update_history
+    lea rbx, [bsp_focuses]
+    mov rax, [rbx + 8*r14]
     mov edi, [rax + NODE_WIN]
     call set_focus
     jmp event_loop
@@ -517,6 +525,10 @@ key_move_hjkl:
     /* Update focus to follow the moved window */
     lea rbx, [bsp_focuses]
     mov [rbx + 8*r14], rax
+    mov rdi, rax
+    call bsp_update_history
+    lea rbx, [bsp_focuses]
+    mov rax, [rbx + 8*r14]
 
     /* Re-arrange grid and set focus in ONE atomic syscall */
     push r8
@@ -945,6 +957,9 @@ fw_arrange:
     mov rdi, [rax + 8*r12]
     test rdi, rdi
     jz fw_flush
+    push rdi
+    call bsp_update_history
+    pop rdi
     mov edi, [rdi + NODE_WIN]
     call set_focus_buf
 
@@ -1506,6 +1521,10 @@ found_unmap_node:
     mov [rbx + 8*rcx], rax
     test rax, rax
     jz no_focus_left
+    push rax
+    mov rdi, rax
+    call bsp_update_history
+    pop rax
     mov edi, [rax + NODE_WIN]
     call set_focus_buf
     jmp unmap_arrange_and_flush
@@ -1616,6 +1635,8 @@ ws_new_root:
 ws_insert_done:
     lea rax, [bsp_focuses]
     mov [rax + 8*r14], r12
+    mov rdi, r12
+    call bsp_update_history
     pop r14
     pop r13
     pop r12
@@ -1761,6 +1782,30 @@ bfn_found:
 bfn_null:
     xor eax, eax
 bfn_ret:
+    ret
+
+/*
+ * bsp_update_history(rdi = focused_leaf_node)
+ * Ascends from leaf to root, recording which child branch was active in bit 7 of parent's NODE_INFO:
+ * bit 7 = 0 if FIRST child was active, bit 7 = 1 (0x80) if SECOND child was active.
+ */
+bsp_update_history:
+    test rdi, rdi
+    jz buh_ret
+buh_loop:
+    mov rax, [rdi + NODE_PARENT]
+    test rax, rax
+    jz buh_ret
+    cmp [rax + NODE_FIRST], rdi
+    jne buh_second
+    and byte ptr [rax + NODE_INFO], ~0x80   /* Clear bit 7: FIRST was focused */
+    mov rdi, rax
+    jmp buh_loop
+buh_second:
+    or byte ptr [rax + NODE_INFO], 0x80    /* Set bit 7: SECOND was focused */
+    mov rdi, rax
+    jmp buh_loop
+buh_ret:
     ret
 
 /*
@@ -1969,8 +2014,13 @@ dive_down:
     cmp eax, r13d
     je dive_same_orient
 
-    /* Perpendicular split: take first child */
+    /* Perpendicular split: follow last-focused history bit (bit 7 of NODE_INFO) */
+    test byte ptr [r15 + NODE_INFO], 0x80
+    jnz dive_perp_second
     mov r15, [r15 + NODE_FIRST]
+    jmp dive_down
+dive_perp_second:
+    mov r15, [r15 + NODE_SECOND]
     jmp dive_down
 
 dive_same_orient:
