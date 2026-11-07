@@ -969,14 +969,39 @@ set_focus:
 
 /*
  * set_focus_buf(edi = win_id, r15 = write cursor)
- * 1. Restores border_inactive (0x2D2D2D) on last_focused_win if different.
- * 2. Sets border_active (0xFFFFFF) on new win_id.
- * 3. Appends 12-byte X_SetInputFocus request to [r15].
+ * 1. If edi == 0 (no window focused / empty workspace):
+ *    - Restores border_inactive on last_focused_win if one was focused.
+ *    - Resets last_focused_win = 0.
+ *    - Sets input focus to root_win (PointerRoot = 1).
+ * 2. If edi != 0:
+ *    - Restores border_inactive (0x2D2D2D) on last_focused_win if different.
+ *    - Sets border_active (0xFFFFFF) on new win_id.
+ *    - Appends 12-byte X_SetInputFocus request to [r15].
  */
 set_focus_buf:
     test edi, edi
-    jz focus_ret
+    jnz sfb_has_win
 
+    /* Clear focus: de-focus old window and give focus to root */
+    mov eax, [last_focused_win]
+    test eax, eax
+    jz sfb_root_focus
+    mov dword ptr [r15 + 0], (4 << 16) | 2   /* Opcode 2: ChangeWindowAttributes */
+    mov [r15 + 4], eax
+    mov dword ptr [r15 + 8], 8               /* CWBorderPixel */
+    mov dword ptr [r15 + 12], BORDER_INACTIVE
+    add r15, 16
+    mov dword ptr [last_focused_win], 0
+
+sfb_root_focus:
+    mov dword ptr [r15 + 0], (3 << 16) | (1 << 8) | 42  /* Opcode 42: SetInputFocus, revert_to = 1 (PointerRoot) */
+    mov eax, [root_win]
+    mov [r15 + 4], eax
+    mov dword ptr [r15 + 8], 0
+    add r15, 12
+    ret
+
+sfb_has_win:
     mov eax, [last_focused_win]
     cmp eax, edi
     je sfb_do_input_focus       /* Already has active border */
@@ -1154,16 +1179,27 @@ fw_bar_and_focus:
     call draw_single_ws_buf
 
 fw_focus:
-    /* Focus active window on new workspace into [r15] */
+    /* Focus active window on new workspace (or clear focus to root if empty) */
     lea rax, [bsp_focuses]
     mov rdi, [rax + 8*r12]
     test rdi, rdi
-    jz fw_flush
+    jz fw_focus_empty
     push rdi
     call bsp_update_history
     pop rdi
     mov edi, [rdi + NODE_WIN]
     call set_focus_buf
+    jmp fw_flush
+
+fw_focus_empty:
+    xor edi, edi
+    call set_focus_buf
+    /* X_ClearArea on root window (Opcode 61, exposures=1, w=0, h=0 clears whole root) (16 bytes) */
+    mov dword ptr [r15 + 0], (4 << 16) | (1 << 8) | 61
+    mov eax, [root_win]
+    mov [r15 + 4], eax
+    mov qword ptr [r15 + 8], 0
+    add r15, 16
 
 fw_flush:
     call flush_out_buf
@@ -1769,7 +1805,14 @@ found_unmap_node:
     call set_focus_buf
     jmp unmap_arrange_and_flush
 no_focus_left:
-    mov dword ptr [last_focused_win], 0
+    xor edi, edi
+    call set_focus_buf
+    /* X_ClearArea on root window (Opcode 61, exposures=1, w=0, h=0 clears whole root) (16 bytes) */
+    mov dword ptr [r15 + 0], (4 << 16) | (1 << 8) | 61
+    mov eax, [root_win]
+    mov [r15 + 4], eax
+    mov qword ptr [r15 + 8], 0
+    add r15, 16
 unmap_arrange_and_flush:
     mov edi, r14d
     call bsp_arrange_ws_buf
