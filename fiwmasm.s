@@ -909,7 +909,19 @@ focus_workspace:
     /* Get old workspace currently shown on target monitor m */
     movzx ebx, byte ptr [mon_cur_ws + rdx]  /* ebx = old_ws on monitor m */
     cmp ebx, r12d
-    je fw_update_active         /* Same workspace already active on this monitor */
+    je fw_same_ws
+
+    /* Update visible workspace on target monitor */
+    mov [mon_cur_ws + rdx], r12b
+
+    /*
+     * Zero-Flicker Workspace Transition:
+     * 1. Arrange new workspace windows FIRST on-screen (covering previous windows).
+     * 2. Move old workspace windows off-screen (-9999, -9999) SECOND (eliminating screen blanking!).
+     * 3. Update status bar and focus THIRD, all committed in ONE atomic sys_write!
+     */
+    mov edi, r12d
+    call bsp_arrange_ws_buf
 
     /* Check if old_ws is displayed on the other monitor (in dual monitor mode) */
     test bpl, 8                 /* bit 3 = is_dual_mon */
@@ -919,20 +931,21 @@ focus_workspace:
     xor eax, 1                  /* other monitor = m ^ 1 */
     movzx eax, byte ptr [mon_cur_ws + rax]
     cmp eax, ebx
-    je fw_update_active         /* Other monitor is viewing old_ws: do NOT hide! */
+    je fw_bar_and_focus         /* Other monitor is viewing old_ws: do NOT hide! */
 
 fw_do_hide:
-    /* Hide windows of old workspace on this monitor (move off-screen x=-9999, y=-9999) */
     push rdx
     lea rax, [bsp_roots]
     mov rdi, [rax + 8*rbx]
     call hide_tree_collect
     pop rdx
+    jmp fw_bar_and_focus
 
-fw_update_active:
-    /* Update visible workspace on target monitor */
-    mov [mon_cur_ws + rdx], r12b
+fw_same_ws:
+    mov edi, r12d
+    call bsp_arrange_ws_buf
 
+fw_bar_and_focus:
     /* Update status bar: redraw old_ws (ebx) as inactive and new_ws (r12d) as active */
     mov r8d, r14d               /* r8d = previous globally active workspace */
     mov r14d, r12d              /* r14d = newly active workspace */
@@ -941,17 +954,13 @@ fw_update_active:
     mov edi, r12d
     call draw_single_ws_buf
     cmp ebx, r8d
-    je fw_arrange
+    je fw_focus
     cmp ebx, r12d
-    je fw_arrange
+    je fw_focus
     mov edi, ebx
     call draw_single_ws_buf
 
-fw_arrange:
-    /* Arrange new workspace windows on-screen into [r15] */
-    mov edi, r12d
-    call bsp_arrange_ws_buf
-
+fw_focus:
     /* Focus active window on new workspace into [r15] */
     lea rax, [bsp_focuses]
     mov rdi, [rax + 8*r12]
