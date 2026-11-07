@@ -312,6 +312,15 @@ ev_pop_buffered:
     cmp al, 2                   /* KeyPress */
     je handle_key
 
+    cmp al, 4                   /* ButtonPress */
+    je handle_btn_press
+
+    cmp al, 5                   /* ButtonRelease */
+    je handle_btn_release
+
+    cmp al, 6                   /* MotionNotify */
+    je handle_motion
+
     cmp al, 7                   /* EnterNotify */
     je handle_enter
 
@@ -325,6 +334,190 @@ ev_pop_buffered:
     cmp al, 1
     jbe handle_unmap
 
+    jmp event_loop
+
+handle_btn_press:
+    /*
+     * ButtonPress Event:
+     * [rsi + 1]: detail (button: 1 = Left, 3 = Right)
+     * [rsi + 12]: event window
+     * [rsi + 16]: child window (if clicked on subwindow/decoration)
+     * [rsi + 20]: rootX (INT16)
+     * [rsi + 22]: rootY (INT16)
+     * [rsi + 24]: eventX (INT16)
+     * [rsi + 26]: eventY (INT16)
+     */
+    mov edx, [rsi + 12]                 /* window */
+    test edx, edx
+    jz event_loop
+
+    /* Read click position and calculate window geometry before ANY function call! */
+    movsx ecx, word ptr [rsi + 20]      /* rootX */
+    movsx r8d, word ptr [rsi + 22]      /* rootY */
+    movsx r9d, word ptr [rsi + 24]      /* eventX */
+    movsx r10d, word ptr [rsi + 26]     /* eventY */
+    movzx eax, byte ptr [rsi + 1]       /* button */
+
+    /* win_x = rootX - eventX, win_y = rootY - eventY */
+    mov edi, ecx
+    sub edi, r9d                        /* win_x */
+    mov esi, r8d
+    sub esi, r10d                       /* win_y */
+
+    /* Save drag state */
+    mov [drag_win], edx
+    mov [drag_btn], eax
+    mov [drag_start_x], ecx
+    mov [drag_start_y], r8d
+    mov [drag_orig_x], edi
+    mov [drag_orig_y], esi
+
+    /* Find window in active workspace BSP tree */
+    lea rcx, [bsp_roots]
+    mov rdi, [rcx + 8*r14]
+    push rdx
+    mov esi, edx
+    call bsp_find_node_by_win
+    pop rdx
+    test rax, rax
+    jz event_loop                       /* Not a managed window */
+
+    /* Update focus to clicked window */
+    mov rbx, rax
+    lea rax, [bsp_focuses]
+    mov [rax + 8*r14], rbx
+    mov rdi, rbx
+    call bsp_update_history
+    mov edi, [drag_win]
+    call set_focus
+
+    /* Query current window width and height via X_GetGeometry (Opcode 14, 8 bytes) */
+    mov edx, [drag_win]
+    mov dword ptr [out_buf + 0], (2 << 16) | 14
+    mov [out_buf + 4], edx
+
+    push SYS_WRITE
+    pop rax
+    mov edi, r13d
+    lea rsi, [out_buf]
+    push 8
+    pop rdx
+    syscall
+
+    /* Read 32-byte X_GetGeometry reply directly into in_buf */
+    xor eax, eax                        /* SYS_READ */
+    mov edi, r13d
+    lea rsi, [in_buf]
+    push 32
+    pop rdx
+    syscall
+
+    cmp byte ptr [in_buf], 1            /* Success reply? */
+    jne event_loop
+
+    movzx eax, word ptr [in_buf + 16]   /* width */
+    movzx edx, word ptr [in_buf + 18]   /* height */
+    mov [drag_orig_w], eax
+    mov [drag_orig_h], edx
+
+    /* Raise window (stack mode = Above) */
+    mov edx, [drag_win]
+    mov dword ptr [out_buf + 0], (4 << 16) | 12
+    mov [out_buf + 4], edx
+    mov dword ptr [out_buf + 8], 64     /* CWStackMode = Above */
+    mov dword ptr [out_buf + 12], 0
+    push SYS_WRITE
+    pop rax
+    mov edi, r13d
+    lea rsi, [out_buf]
+    push 16
+    pop rdx
+    syscall
+
+    /* Mark as floating (bit 5 in bpl) */
+    or bpl, 32
+    jmp event_loop
+
+handle_motion:
+    /*
+     * MotionNotify during drag:
+     * [rsi + 20]: rootX (INT16)
+     * [rsi + 22]: rootY (INT16)
+     */
+    mov edx, [drag_win]
+    test edx, edx
+    jz event_loop
+
+    movsx ecx, word ptr [rsi + 20]      /* current rootX */
+    movsx r8d, word ptr [rsi + 22]      /* current rootY */
+
+    cmp dword ptr [drag_btn], 3         /* Button 3 = Resize */
+    je motion_resize
+
+    /* Button 1 = Move */
+    /* new_x = orig_x + (cur_x - start_x) */
+    mov eax, ecx
+    sub eax, [drag_start_x]
+    add eax, [drag_orig_x]              /* new_x */
+
+    /* new_y = orig_y + (cur_y - start_y) */
+    mov esi, r8d
+    sub esi, [drag_start_y]
+    add esi, [drag_orig_y]              /* new_y */
+
+    /* ConfigureWindow (x, y) */
+    mov dword ptr [out_buf + 0], (5 << 16) | 12
+    mov [out_buf + 4], edx
+    mov dword ptr [out_buf + 8], 3      /* CWX | CWY = 3 */
+    mov [out_buf + 12], eax
+    mov [out_buf + 16], esi
+
+    push SYS_WRITE
+    pop rax
+    mov edi, r13d
+    lea rsi, [out_buf]
+    push 20
+    pop rdx
+    syscall
+    jmp event_loop
+
+motion_resize:
+    /* new_w = MAX(50, orig_w + (cur_x - start_x)) */
+    mov eax, ecx
+    sub eax, [drag_start_x]
+    add eax, [drag_orig_w]
+    cmp eax, 50
+    jge resize_w_ok
+    mov eax, 50
+resize_w_ok:
+
+    /* new_h = MAX(50, orig_h + (cur_y - start_y)) */
+    mov esi, r8d
+    sub esi, [drag_start_y]
+    add esi, [drag_orig_h]
+    cmp esi, 50
+    jge resize_h_ok
+    mov esi, 50
+resize_h_ok:
+
+    /* ConfigureWindow (w, h) */
+    mov dword ptr [out_buf + 0], (5 << 16) | 12
+    mov [out_buf + 4], edx
+    mov dword ptr [out_buf + 8], 12     /* CWWidth | CWHeight = 12 */
+    mov [out_buf + 12], eax
+    mov [out_buf + 16], esi
+
+    push SYS_WRITE
+    pop rax
+    mov edi, r13d
+    lea rsi, [out_buf]
+    push 20
+    pop rdx
+    syscall
+    jmp event_loop
+
+handle_btn_release:
+    mov dword ptr [drag_win], 0
     jmp event_loop
 
 handle_enter:
@@ -1481,6 +1674,44 @@ handle_map:
     mov dword ptr [r15 + 12], 0x10
     add r15, 16
 
+    /*
+     * X_GrabButton on client window (Opcode 28, length 6 words = 24 bytes):
+     * Grab Button 1 (Left Click, Move) and Button 3 (Right Click, Resize) with Mod1 (0x08).
+     * Also grabs combo with NumLock (0x18) so mouse shortcuts always trigger!
+     */
+    /* Button 1 + Mod1 (0x08) */
+    mov dword ptr [r15 + 0], (6 << 16) | 28
+    mov [r15 + 4], r12d
+    mov dword ptr [r15 + 8], (1 << 24) | (1 << 16) | 0x4C
+    mov dword ptr [r15 + 12], 0
+    mov dword ptr [r15 + 16], 0
+    mov dword ptr [r15 + 20], (0x08 << 16) | 1
+
+    /* Button 1 + Mod1 | NumLock (0x18) */
+    mov dword ptr [r15 + 24], (6 << 16) | 28
+    mov [r15 + 28], r12d
+    mov dword ptr [r15 + 32], (1 << 24) | (1 << 16) | 0x4C
+    mov dword ptr [r15 + 36], 0
+    mov dword ptr [r15 + 40], 0
+    mov dword ptr [r15 + 44], (0x18 << 16) | 1
+
+    /* Button 3 + Mod1 (0x08) */
+    mov dword ptr [r15 + 48], (6 << 16) | 28
+    mov [r15 + 52], r12d
+    mov dword ptr [r15 + 56], (1 << 24) | (1 << 16) | 0x4C
+    mov dword ptr [r15 + 60], 0
+    mov dword ptr [r15 + 64], 0
+    mov dword ptr [r15 + 68], (0x08 << 16) | 3
+
+    /* Button 3 + Mod1 | NumLock (0x18) */
+    mov dword ptr [r15 + 72], (6 << 16) | 28
+    mov [r15 + 76], r12d
+    mov dword ptr [r15 + 80], (1 << 24) | (1 << 16) | 0x4C
+    mov dword ptr [r15 + 84], 0
+    mov dword ptr [r15 + 88], 0
+    mov dword ptr [r15 + 92], (0x18 << 16) | 3
+    add r15, 96
+
     mov dword ptr [r15 + 0], (2 << 16) | 8
     mov dword ptr [r15 + 4], r12d
     add r15, 8
@@ -1735,7 +1966,7 @@ alloc_node:
 
 alloc_from_pool:
     mov eax, [node_idx]
-    cmp eax, 15
+    cmp eax, 127                /* Support up to 128 nodes (~64 simultaneous windows) */
     jge alloc_fail
     inc dword ptr [node_idx]
     shl rax, 5                  /* rax * 32 bytes */
@@ -2316,6 +2547,16 @@ node_idx:       .long 0
 ev_q_head:      .long 0         /* Current read offset in event_queue */
 ev_q_tail:      .long 0         /* Total bytes available in event_queue */
 
+/* Drag State for Mod + Mouse Move/Resize */
+drag_win:       .long 0         /* Target window being moved or resized */
+drag_btn:       .long 0         /* 1 = Move (Button 1), 3 = Resize (Button 3) */
+drag_orig_x:    .long 0         /* Window X at drag start */
+drag_orig_y:    .long 0         /* Window Y at drag start */
+drag_orig_w:    .long 0         /* Window W at drag start */
+drag_orig_h:    .long 0         /* Window H at drag start */
+drag_start_x:   .long 0         /* Mouse Root X at drag start */
+drag_start_y:   .long 0         /* Mouse Root Y at drag start */
+
 /*
  * Shared I/O Buffer (1056 bytes total) + node_pool (512 bytes) = 1568 bytes contiguous!
  * Entire ELF binary (.text + .data + ALL .bss) fits inside 2 physical 4 KB pages [0x400000..0x401fff]!
@@ -2329,6 +2570,6 @@ out_buf:
 in_buf:         .space 2048
 event_queue:    .space 288      /* Buffer for up to 9 X11 events (32 bytes each) */
 
-/* 16 nodes of 32 bytes = 512 bytes (allocated only when windows map after init_bar!) */
+/* 128 nodes of 32 bytes = 4096 bytes (allocated on demand, Zero disk ELF space!) */
 .align 8
-node_pool:      .space 512
+node_pool:      .space 4096
