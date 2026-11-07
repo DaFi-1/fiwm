@@ -24,8 +24,8 @@ fiwm: fiwm.c
 	${CC} ${CFLAGS} -o $@ $< ${LDFLAGS}
 
 fiwmasm: fiwmasm.s
-	as -64 fiwmasm.s -o fiwmasm.o
-	ld -N -s fiwmasm.o -o fiwmasm
+	as -64 -mx86-used-note=no fiwmasm.s -o fiwmasm.o
+	ld -N -s --build-id=none fiwmasm.o -o fiwmasm
 	rm -f fiwmasm.o
 
 # Backward compatibility alias

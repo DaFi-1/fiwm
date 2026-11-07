@@ -1273,11 +1273,14 @@ hide_tree_collect:
     je htc_recurse
 
     /* Leaf window found: append 20-byte ConfigureWindow packet to [r15] */
-    mov dword ptr [r15 + 0], (5 << 16) | 12  /* Opcode 12: ConfigureWindow */
     mov eax, [rdi + NODE_WIN]
-    mov [r15 + 4], eax                       /* window ID */
-    mov dword ptr [r15 + 8], 3               /* CWX | CWY = 3 */
-    mov dword ptr [r15 + 12], -9999          /* x = -9999 (off-screen) */
+    shl rax, 32
+    or rax, (5 << 16) | 12                   /* Opcode 12: ConfigureWindow (len=5) */
+    mov [r15 + 0], rax                       /* [0..3]=header, [4..7]=win_id */
+    mov rax, -9999
+    shl rax, 32
+    or rax, 3                                /* [8..11]=value_mask (3), [12..15]=x (-9999) */
+    mov [r15 + 8], rax
     mov dword ptr [r15 + 16], -9999          /* y = -9999 (off-screen) */
     add r15, 20
     ret
@@ -1401,23 +1404,30 @@ grab_batch_loop:
     jz grab_batch_send
     movzx esi, byte ptr [rbx + 1]               /* modifiers */
 
-    /* Emit standard combo (16 bytes) */
-    mov dword ptr [r15 + 0], (4 << 16) | (1 << 8) | 33
-    mov [r15 + 4], r12d
-    mov eax, edi
-    shl eax, 16
-    and esi, 0xFFFF
-    or eax, esi
-    or eax, (1 << 24)
-    mov [r15 + 8], eax
-    mov dword ptr [r15 + 12], 1
+    /* Precalculate 64-bit header + win_id */
+    mov rax, r12
+    shl rax, 32
+    or rax, (4 << 16) | (1 << 8) | 33           /* Opcode 33: X_GrabKey (len=4, owner_events=1) */
+    mov [r15 + 0], rax
+    mov [r15 + 16], rax
 
-    /* Emit NumLock/CapsLock combo (modifiers | 0x10) (16 bytes) */
-    mov dword ptr [r15 + 16], (4 << 16) | (1 << 8) | 33
-    mov [r15 + 20], r12d
-    or eax, 0x10
-    mov [r15 + 24], eax
-    mov dword ptr [r15 + 28], 1
+    /* Pack (modifiers | (keycode << 16) | (pointer_mode << 24)) */
+    mov edx, edi
+    shl edx, 16
+    and esi, 0xFFFF
+    or edx, esi
+    or edx, (1 << 24)                           /* pointer_mode = 1 (Async) */
+
+    /* Pack edx + keyboard_mode (1) into 64-bit */
+    mov rax, 1                                  /* keyboard_mode = 1 (Async) */
+    shl rax, 32
+    mov edx, edx
+    or rax, rdx
+    mov [r15 + 8], rax                          /* standard combo */
+
+    /* NumLock/CapsLock combo: modifiers | 0x10 */
+    or rax, 0x10
+    mov [r15 + 24], rax                         /* NumLock combo */
 
     add r15, 32
     add rbx, 2
@@ -2156,15 +2166,24 @@ bsp_arrange_node:
     jz do_ws_split
 
     /* Leaf window: zero stack allocation! Configure geometry + border_width=1 (32 bytes) */
-    mov dword ptr [r15 + 0], (8 << 16) | 12  /* Opcode 12: ConfigureWindow (8 dwords = 32 bytes) */
     mov eax, [rdi + NODE_WIN]
-    mov [r15 + 4], eax
-    mov dword ptr [r15 + 8], 31              /* CWX | CWY | CWWidth | CWHeight | CWBorderWidth */
-    mov [r15 + 12], esi                      /* x */
-    mov [r15 + 16], edx                      /* y */
-    mov [r15 + 20], r8d                      /* w */
-    mov [r15 + 24], r9d                      /* h */
-    mov dword ptr [r15 + 28], 1              /* border_width = 1 */
+    shl rax, 32
+    or rax, (8 << 16) | 12                   /* Opcode 12: ConfigureWindow (8 dwords = 32 bytes) */
+    mov [r15 + 0], rax                       /* header + win_id in 1 store! */
+    mov eax, esi                             /* x */
+    shl rax, 32
+    or rax, 31                               /* CWX | CWY | CWWidth | CWHeight | CWBorderWidth */
+    mov [r15 + 8], rax                       /* value_mask + x in 1 store! */
+    mov eax, r8d                             /* w */
+    shl rax, 32
+    mov edx, edx
+    or rax, rdx                              /* y | (w << 32) */
+    mov [r15 + 16], rax                      /* y + w in 1 store! */
+    mov rax, 1                               /* border_width = 1 */
+    shl rax, 32
+    mov r9d, r9d
+    or rax, r9                               /* h | (1 << 32) */
+    mov [r15 + 24], rax                      /* h + border_width in 1 store! */
     add r15, 32
     ret
 
