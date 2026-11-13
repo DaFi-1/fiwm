@@ -1758,6 +1758,20 @@ single_mon:
     xor eax, eax
     ret
 
+.align 16
+simd_map_attr_pkt:
+    .long (4 << 16) | 2         /* Opcode 2: ChangeWindowAttributes (len=4) */
+    .long 0                     /* Placeholder for win_id */
+    .long 0x00000800            /* CWEventMask */
+    .long 0x00000010            /* EnterWindowMask */
+
+.align 16
+simd_grab_hdr_pkt:
+    .long (6 << 16) | 28        /* Opcode 28: X_GrabButton (len=6) */
+    .long 0                     /* Placeholder for win_id */
+    .long (1 << 24) | (1 << 16) | 0x4C  /* owner_events=1, pointer_mode=1, event_mask=0x4C */
+    .long 0                     /* confine_to=None, cursor=None */
+
 /*
  * =========================================================================
  * TRUE HIERARCHICAL BSP TREE ENGINE
@@ -1786,56 +1800,47 @@ handle_map:
        2. ChangeWindowAttributes (Select EnterWindowMask = 0x10) so focus-follows-mouse works!
        3. MapWindow SECOND so window appears directly at its final tiled geometry!
        4. SetInputFocus THIRD, all flushed in ONE atomic sys_write! */
-    lea r15, [out_buf]
     mov edi, r14d
     call bsp_arrange_ws_buf
 
     /*
-     * 64-bit Coalesced Window Mapping Pipeline (120 bytes in 15 quadword stores):
-     * 1. ChangeWindowAttributes (16 bytes, 2 stores)
-     * 2. 4x X_GrabButton (96 bytes, 12 stores)
-     * 3. X_MapWindow (8 bytes, 1 store)
+     * SIMD 128-bit Vectorized Window Mapping Pipeline (120 bytes):
+     * 1. ChangeWindowAttributes (16 bytes, 1 SIMD store)
+     * 2. 4x X_GrabButton (96 bytes, 4 SIMD stores + 4 quadword stores)
+     * 3. X_MapWindow (8 bytes, 1 quadword store)
      */
-    mov rax, r12
-    shl rax, 32
-    mov r8, rax                         /* r8 = r12d << 32 */
-    or rax, (4 << 16) | 2               /* ChangeWindowAttributes header + win */
-    mov [r15 + 0], rax
-    mov rcx, 0x0000001000000800         /* CWEventMask | (EnterWindowMask << 32) */
-    mov [r15 + 8], rcx
+    movdqa xmm0, [simd_map_attr_pkt]
+    pinsrd xmm0, r12d, 1
+    movdqu [r15 + 0], xmm0
 
-    /* Precalculate X_GrabButton common header and event_mask quadwords */
-    mov rax, r8
-    or rax, (6 << 16) | 28              /* X_GrabButton header + win */
-    mov r9, (1 << 24) | (1 << 16) | 0x4C
+    movdqa xmm1, [simd_grab_hdr_pkt]
+    pinsrd xmm1, r12d, 1
 
     /* Button 1 + Mod1 (0x08) */
-    mov [r15 + 16], rax
-    mov [r15 + 24], r9
+    movdqu [r15 + 16], xmm1
     mov rcx, 0x0008000100000000
     mov [r15 + 32], rcx
 
     /* Button 1 + Mod1 | NumLock (0x18) */
-    mov [r15 + 40], rax
-    mov [r15 + 48], r9
+    movdqu [r15 + 40], xmm1
     mov rdx, 0x0018000100000000
     mov [r15 + 56], rdx
 
     /* Button 3 + Mod1 (0x08) */
-    mov [r15 + 64], rax
-    mov [r15 + 72], r9
+    movdqu [r15 + 64], xmm1
     mov rcx, 0x0008000300000000
     mov [r15 + 80], rcx
 
     /* Button 3 + Mod1 | NumLock (0x18) */
-    mov [r15 + 88], rax
-    mov [r15 + 96], r9
+    movdqu [r15 + 88], xmm1
     mov rdx, 0x0018000300000000
     mov [r15 + 104], rdx
 
     /* X_MapWindow (8 bytes) */
-    or r8, (2 << 16) | 8
-    mov [r15 + 112], r8
+    mov rax, r12
+    shl rax, 32
+    or rax, (2 << 16) | 8
+    mov [r15 + 112], rax
 
     add r15, 120
 
