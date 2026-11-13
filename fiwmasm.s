@@ -686,7 +686,14 @@ key_jump_table:
 key_ws_dispatch:
     test edx, 1                 /* ShiftMask = 1 ? */
     jnz key_move_to_ws
-    jmp key_focus_ws
+    mov edi, ecx
+    call focus_workspace
+    jmp event_loop
+
+key_move_to_ws:
+    mov edi, ecx
+    call move_window_to_workspace
+    jmp event_loop
 
 key_q:
     test edx, 1                 /* ShiftMask = 1 */
@@ -698,67 +705,41 @@ key_f:
     jnz key_floating            /* Alt+Shift+f: Floating Toggle */
     jmp key_fullscreen          /* Alt+f: Fullscreen Toggle */
 
+/*
+ * key_hjkl_disp:
+ * Unified 2D Spatial Engine (Frameless, Zero Stack):
+ * Fuses directional focus (Alt+HJKL) and directional window swap (Alt+Shift+HJKL).
+ */
 key_hjkl_disp:
     add ecx, 10                 /* restore keycode 43..46 */
-    test edx, 1                 /* Shift pressed? */
-    jnz key_move_hjkl           /* Alt + Shift + HJKL: Swap/Move window between splits */
-    jmp key_focus_hjkl          /* Alt + HJKL: Change focus between splits */
+    mov r10d, edx               /* r10d = state/modifiers */
+    and r10d, 1                 /* bit 0 = ShiftMask */
 
-key_focus_ws:
-    mov edi, ecx
-    call focus_workspace
-    jmp event_loop
-
-key_move_to_ws:
-    mov edi, ecx
-    call move_window_to_workspace
-    jmp event_loop
-
-key_focus_hjkl:
-    /* ecx has keycode: 43=h (left), 44=j (down), 45=k (up), 46=l (right) */
     lea rbx, [bsp_focuses]
-    mov rdi, [rbx + 8*r14]      /* start leaf */
+    mov rdi, [rbx + 8*r14]      /* rdi = current focused leaf */
     test rdi, rdi
     jz event_loop
+    mov rbx, rdi                /* rbx = current focused leaf (callee-saved) */
 
-    /* Determine orient (esi) and dir (edx) from keycode in ecx */
-    call hjkl_decode_dir
-    call bsp_node_in_direction
+    call hjkl_decode_dir        /* esi = orient, edx = dir */
+    call bsp_node_in_direction  /* rax = neighbor leaf node */
     test rax, rax
-    jz event_loop               /* No window in that direction */
+    jz event_loop               /* No neighbor in that direction */
+    mov r12, rax                /* r12 = target neighbor leaf node (callee-saved) */
 
-    /* Set new focus (register-direct, zero memory reload) */
-    lea rbx, [bsp_focuses]
-    mov [rbx + 8*r14], rax
-    mov r8d, [rax + NODE_WIN]   /* Keep win_id in r8d */
-    mov rdi, rax
-    call bsp_update_history
-    mov edi, r8d
-    call set_focus
-    jmp event_loop
+    test r10d, r10d             /* Shift pressed? */
+    jz hjkl_apply_focus         /* Alt+HJKL: navigate focus only */
 
-key_move_hjkl:
-    /* Swap focused window with neighbor in the specified 2D direction */
-    lea rbx, [bsp_focuses]
-    mov r12, [rbx + 8*r14]      /* r12 = current focused leaf */
-    test r12, r12
-    jz event_loop
+    /* Alt+Shift+HJKL: Swap window IDs between rbx and r12 */
+    mov r8d, [rbx + NODE_WIN]   /* r8d = current active window */
+    mov r9d, [r12 + NODE_WIN]   /* r9d = neighbor window */
+    mov [rbx + NODE_WIN], r9d
+    mov [r12 + NODE_WIN], r8d   /* r12 now holds the active window */
 
-    mov rdi, r12
-    call hjkl_decode_dir
-    call bsp_node_in_direction
-    test rax, rax
-    jz event_loop               /* No neighbor in that direction to swap */
-
-    /* Swap window IDs between r12 and rax */
-    mov r8d, [r12 + NODE_WIN]
-    mov r9d, [rax + NODE_WIN]
-    mov [r12 + NODE_WIN], r9d
-    mov [rax + NODE_WIN], r8d
     mov dword ptr [win_mru_id], 0
     mov qword ptr [win_mru_node], 0
 
-    /* Update hash table for r8d (now at rax) */
+    /* Update hash table for r8d (now at r12) */
     mov edx, r8d
     shr edx, 4
     xor edx, r8d
@@ -766,9 +747,9 @@ key_move_hjkl:
     shl edx, 4
     lea rcx, [win_hash_tab + rdx]
     mov [rcx + 0], r8d
-    mov [rcx + 8], rax
+    mov [rcx + 8], r12
 
-    /* Update hash table for r9d (now at r12) */
+    /* Update hash table for r9d (now at rbx) */
     mov edx, r9d
     shr edx, 4
     xor edx, r9d
@@ -776,19 +757,19 @@ key_move_hjkl:
     shl edx, 4
     lea rcx, [win_hash_tab + rdx]
     mov [rcx + 0], r9d
-    mov [rcx + 8], r12
+    mov [rcx + 8], rbx
 
-    /* Update focus to follow the moved window */
-    lea rbx, [bsp_focuses]
-    mov [rbx + 8*r14], rax
-    mov rdi, rax
-    call bsp_update_history
-
-    /* Re-arrange grid and set focus */
-    mov r12d, r8d
+    /* Re-arrange grid to reflect new spatial layout */
     mov edi, r14d
     call bsp_arrange_ws_buf
-    mov edi, r12d
+
+hjkl_apply_focus:
+    /* Update focus and tree history to target node (r12) */
+    lea rbx, [bsp_focuses]
+    mov [rbx + 8*r14], r12
+    mov rdi, r12
+    call bsp_update_history
+    mov edi, [r12 + NODE_WIN]
     call set_focus_buf
     jmp event_loop
 
