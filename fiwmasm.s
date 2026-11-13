@@ -1456,89 +1456,35 @@ grab_batch_send:
 
 /*
  * draw_mon_bar(edi = target_mon 0 or 1):
- * Surgical Per-Monitor Bar Redraw for Expose events (Frameless, Zero Stack):
- * In dual-monitor setups, redraws ONLY the workspaces on the damaged monitor!
+ * Unified Per-Monitor Bar Redraw Engine (Frameless, Zero Stack):
+ * Draws workspaces filtered by monitor (or all if target_mon == -1 / single monitor).
  */
+draw_all_bars:
+draw_all_bars_buf:
+    mov r8d, -1                 /* -1 = draw all workspaces */
+    jmp dmb_entry
+
 draw_mon_bar:
     mov r8d, edi                /* target_mon (0 or 1) */
-
     test bpl, 8                 /* is_dual_mon */
-    jz dmb_single_mon
+    jnz dmb_entry
+    mov r8d, -1                 /* single monitor: draw all */
 
-    /* Dual-mon: iterate 0..8 and only draw workspaces belonging to target_mon */
+dmb_entry:
     xor edi, edi
-dmb_dual_loop:
+dmb_loop:
+    cmp r8d, -1
+    je dmb_draw
     movzx eax, byte ptr [ws_mon_table + rdi]
     and eax, 1
     cmp eax, r8d
-    jne dmb_dual_next
+    jne dmb_next
+dmb_draw:
     call draw_single_ws_buf
-dmb_dual_next:
+dmb_next:
     inc edi
     cmp edi, WORKSPACE_COUNT
-    jl dmb_dual_loop
-    ret
-
-dmb_single_mon:
-    jmp draw_all_bars_buf
-
-/*
- * draw_all_bars():
- * Standalone entry point: renders bars into out_buf (Frameless).
- */
-draw_all_bars:
-    jmp draw_all_bars_buf
-
-/*
- * draw_all_bars_buf(r15 = write cursor):
- * Full 9-digit bar redraw: inlined continuous loop, zero stack operations!
- */
-draw_all_bars_buf:
-    xor edi, edi
-dab_loop:
-    xor ecx, ecx                                /* default single-monitor: mon_idx = 0 */
-    lea esi, [rdi + rdi*2]
-    shl esi, 3
-    add esi, 10                                 /* default single-monitor X = 10 + ws_idx * 24 */
-
-    test bpl, 8                                 /* bit 3 = is_dual_mon */
-    jz dab_emit
-
-    movzx ecx, byte ptr [ws_mon_table + rdi]    /* 1-byte packed load: (X & ~1) | mon_idx */
-    mov esi, ecx
-    and ecx, 1                                  /* bit 0 = mon_idx (0 or 1) */
-    and esi, 0xFE                               /* bits 1..7 = precomputed even X coordinate! */
-
-dab_emit:
-    /* Branchless GC selection: bar_gc + (edi != cur_ws) */
-    mov edx, [bar_gc]
-    cmp edi, r14d
-    setne al
-    movzx eax, al
-    add edx, eax
-
-    /* 64-bit Store 1: Header (0x0005014c) + bar_win[rcx] */
-    mov eax, [bar_win + 4*rcx]
-    shl rax, 32
-    or rax, (5 << 16) | (1 << 8) | 76
-    mov [r15 + 0], rax
-
-    /* 64-bit Store 2: GC ID + (Y=13 | X) */
-    or esi, (13 << 16)
-    mov rax, rsi
-    shl rax, 32
-    mov edx, edx
-    or rax, rdx
-    mov [r15 + 8], rax
-
-    /* 32-bit Store 3: Character byte '1' + edi */
-    lea eax, [rdi + '1']
-    mov [r15 + 16], eax
-
-    add r15, 20
-    inc edi
-    cmp edi, WORKSPACE_COUNT
-    jl dab_loop
+    jl dmb_loop
     ret
 
 /*
