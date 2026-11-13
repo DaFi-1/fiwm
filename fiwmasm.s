@@ -673,9 +673,11 @@ key_q:
     jmp key_kill                /* Alt+q: Kill Active Window */
 
 key_f:
+    mov r10d, 1                 /* 1 = is_fullscreen */
+    mov eax, 32                 /* 32 = is_floating */
     test edx, 1                 /* Shift pressed? */
-    jnz key_floating            /* Alt+Shift+f: Floating Toggle */
-    jmp key_fullscreen          /* Alt+f: Fullscreen Toggle */
+    cmovnz r10d, eax
+    jmp toggle_win_presentation
 
 /*
  * key_hjkl_disp:
@@ -823,10 +825,6 @@ key_kill:
  * Window Presentation Engine:
  * Unified Fullscreen & Floating Mode Pipeline (Zero Stack, 128-bit SIMD Serializer)
  */
-key_fullscreen:
-    mov r10d, 1                 /* bit 0: is_fullscreen */
-    jmp toggle_win_presentation
-
 key_floating:
     mov r10d, 32                /* bit 5: is_floating */
 
@@ -1039,7 +1037,7 @@ flush_out_buf:
     mov edi, r13d
     syscall
 flush_reset:
-    lea r15, [out_buf]
+    mov r15, rsi
     ret
 
 /*
