@@ -656,15 +656,12 @@ key_jump_table:
 key_disp_base:
 
 key_ws_dispatch:
-    test edx, 1                 /* ShiftMask = 1 ? */
-    jnz key_move_to_ws
     mov edi, ecx
-    call focus_workspace
-    jmp event_loop
-
-key_move_to_ws:
-    mov edi, ecx
-    call move_window_to_workspace
+    lea rax, [focus_workspace]
+    lea r10, [move_window_to_workspace]
+    test edx, 1
+    cmovnz rax, r10
+    call rax
     jmp event_loop
 
 key_q:
