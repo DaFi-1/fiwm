@@ -4,3 +4,6 @@ fiwmasm
 *.o
 tools/perf_stat
 fiwm_poc
+scratch/
+__pycache__/
+*.pyc
