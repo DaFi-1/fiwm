@@ -995,16 +995,23 @@ set_focus:
     call set_focus_buf
     jmp flush_out_buf
 
+.align 16
+simd_border_inact_pkt:
+    .long (4 << 16) | 2         /* Opcode 2: ChangeWindowAttributes (len=4) */
+    .long 0                     /* Placeholder for win_id */
+    .long 8                     /* CWBorderPixel */
+    .long BORDER_INACTIVE       /* 0x2D2D2D */
+
+.align 16
+simd_border_act_pkt:
+    .long (4 << 16) | 2         /* Opcode 2: ChangeWindowAttributes (len=4) */
+    .long 0                     /* Placeholder for win_id */
+    .long 8                     /* CWBorderPixel */
+    .long BORDER_ACTIVE         /* 0x005577 */
+
 /*
  * set_focus_buf(edi = win_id, r15 = write cursor)
- * 1. If edi == 0 (no window focused / empty workspace):
- *    - Restores border_inactive on last_focused_win if one was focused.
- *    - Resets last_focused_win = 0.
- *    - Sets input focus to root_win (PointerRoot = 1).
- * 2. If edi != 0:
- *    - Restores border_inactive (0x2D2D2D) on last_focused_win if different.
- *    - Sets border_active (0xFFFFFF) on new win_id.
- *    - Appends 12-byte X_SetInputFocus request to [r15].
+ * Vectorized SIMD serialization: paints active/inactive borders and sets input focus.
  */
 set_focus_buf:
     test edi, edi
@@ -1014,17 +1021,17 @@ set_focus_buf:
     mov eax, [last_focused_win]
     test eax, eax
     jz sfb_root_focus
-    mov dword ptr [r15 + 0], (4 << 16) | 2   /* Opcode 2: ChangeWindowAttributes */
-    mov [r15 + 4], eax
-    mov dword ptr [r15 + 8], 8               /* CWBorderPixel */
-    mov dword ptr [r15 + 12], BORDER_INACTIVE
+    movdqa xmm0, [simd_border_inact_pkt]
+    pinsrd xmm0, eax, 1
+    movdqu [r15], xmm0
     add r15, 16
     mov dword ptr [last_focused_win], 0
 
 sfb_root_focus:
-    mov dword ptr [r15 + 0], (3 << 16) | (1 << 8) | 42  /* Opcode 42: SetInputFocus, revert_to = 1 (PointerRoot) */
     mov eax, [root_win]
-    mov [r15 + 4], eax
+    shl rax, 32
+    or rax, (3 << 16) | (1 << 8) | 42  /* Opcode 42: SetInputFocus (revert_to=1) */
+    mov [r15 + 0], rax
     mov dword ptr [r15 + 8], 0
     add r15, 12
     ret
@@ -1034,28 +1041,28 @@ sfb_has_win:
     cmp eax, edi
     je sfb_do_input_focus       /* Already has active border */
 
-    /* If old window exists, paint border_inactive (0x2D2D2D) */
+    /* If old window exists, paint border_inactive (0x2D2D2D) via 128-bit vector burst */
     test eax, eax
     jz sfb_paint_active
-    mov dword ptr [r15 + 0], (4 << 16) | 2   /* Opcode 2: ChangeWindowAttributes */
-    mov [r15 + 4], eax
-    mov dword ptr [r15 + 8], 8               /* CWBorderPixel */
-    mov dword ptr [r15 + 12], BORDER_INACTIVE
+    movdqa xmm0, [simd_border_inact_pkt]
+    pinsrd xmm0, eax, 1
+    movdqu [r15], xmm0
     add r15, 16
 
 sfb_paint_active:
-    /* Paint new window border_active (0xFFFFFF) */
-    mov dword ptr [r15 + 0], (4 << 16) | 2   /* Opcode 2: ChangeWindowAttributes */
-    mov [r15 + 4], edi
-    mov dword ptr [r15 + 8], 8               /* CWBorderPixel */
-    mov dword ptr [r15 + 12], BORDER_ACTIVE
+    /* Paint new window border_active (0x005577) via 128-bit vector burst */
+    movdqa xmm0, [simd_border_act_pkt]
+    pinsrd xmm0, edi, 1
+    movdqu [r15], xmm0
     add r15, 16
 
     mov [last_focused_win], edi
 
 sfb_do_input_focus:
-    mov dword ptr [r15 + 0], (3 << 16) | (1 << 8) | 42
-    mov [r15 + 4], edi
+    mov eax, edi
+    shl rax, 32
+    or rax, (3 << 16) | (1 << 8) | 42
+    mov [r15 + 0], rax
     mov dword ptr [r15 + 8], 0
     add r15, 12
 focus_ret:
