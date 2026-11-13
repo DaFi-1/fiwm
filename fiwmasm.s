@@ -924,25 +924,24 @@ key_fullscreen:
     lea rbx, [mon_geom]
     add rbx, rcx
 
-    mov dword ptr [out_buf + 0], (8 << 16) | 12
-    mov [out_buf + 4], edx
+    /* Vectorized SIMD Fullscreen Packet Serialization (48 bytes) */
+    movdqu xmm0, [rbx]          /* Load all 4 monitor dimensions [x, y, w, h] in 1 SIMD load */
+
+    /* Packet 1: ConfigureWindow (32 bytes) */
+    mov rax, rdx
+    shl rax, 32
+    or rax, (8 << 16) | 12      /* Opcode 12, len = 8 words */
+    mov [out_buf + 0], rax
     mov dword ptr [out_buf + 8], 31             /* x, y, w, h, border_width */
-    mov eax, [rbx + 0]          /* x */
-    mov [out_buf + 12], eax
-    mov eax, [rbx + 4]          /* y */
-    mov [out_buf + 16], eax
-    mov eax, [rbx + 8]          /* w */
-    mov [out_buf + 20], eax
-    mov eax, [rbx + 12]         /* h */
-    mov [out_buf + 24], eax
+    movdqu [out_buf + 12], xmm0                 /* SIMD 128-bit store: [x, y, w, h] in 1 instruction! */
     mov dword ptr [out_buf + 28], 0             /* border_width = 0 for fullscreen */
 
-    /* X_RaiseWindow (ConfigureWindow, stack mode = Above) so the
-       fullscreen window actually covers splits from other columns */
-    mov dword ptr [out_buf + 32], (4 << 16) | 12
-    mov [out_buf + 36], edx
-    mov dword ptr [out_buf + 40], 64
-    mov dword ptr [out_buf + 44], 0
+    /* Packet 2: X_RaiseWindow (ConfigureWindow, stack mode = Above) (16 bytes) */
+    mov rax, rdx
+    shl rax, 32
+    or rax, (4 << 16) | 12      /* Opcode 12, len = 4 words */
+    mov [out_buf + 32], rax
+    mov qword ptr [out_buf + 40], 64            /* CWStackMode = 64, Above = 0 in 1 quadword */
 
     push SYS_WRITE
     pop rax
