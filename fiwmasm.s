@@ -402,7 +402,6 @@ handle_btn_press:
      * 3. X_RaiseWindow (16 bytes)
      * All combined and flushed in ONE single sys_write!
      */
-    lea r15, [out_buf]
     mov edi, [drag_win]
     call set_focus_buf
 
@@ -583,7 +582,7 @@ handle_enter:
     mov rdi, rax
     call bsp_update_history
     mov edi, edx
-    call set_focus
+    call set_focus_buf
     jmp event_loop
 
 handle_expose:
@@ -999,12 +998,18 @@ set_focus_buf:
     mov dword ptr [last_focused_win], 0
 
 sfb_root_focus:
-    mov eax, [root_win]
+    mov edx, [root_win]
+    mov rax, rdx
     shl rax, 32
-    or rax, (3 << 16) | (1 << 8) | 42  /* Opcode 42: SetInputFocus (revert_to=1) */
+    or rax, (3 << 16) | (1 << 8) | 42  /* Opcode 42: SetInputFocus (revert_to=1) (12 bytes) */
     mov [r15 + 0], rax
     mov dword ptr [r15 + 8], 0
-    add r15, 12
+
+    /* Packet 2: X_ClearArea on root window (Opcode 61, exposures=1, w=0, h=0) (16 bytes) */
+    mov dword ptr [r15 + 12], (4 << 16) | (1 << 8) | 61
+    mov [r15 + 16], edx
+    mov qword ptr [r15 + 20], 0
+    add r15, 28
     ret
 
 sfb_has_win:
@@ -1183,23 +1188,13 @@ fw_focus:
     /* Focus active window on new workspace (or clear focus to root if empty) */
     lea rax, [bsp_focuses]
     mov rdi, [rax + 8*r12]
-    test rdi, rdi
-    jz fw_focus_empty
-    mov r8d, [rdi + NODE_WIN]   /* Keep win_id in r8d */
-    call bsp_update_history
-    mov edi, r8d
-    call set_focus_buf
-    ret
-
-fw_focus_empty:
     xor edi, edi
-    call set_focus_buf
-    /* X_ClearArea on root window (Opcode 61, exposures=1, w=0, h=0 clears whole root) (16 bytes) */
-    mov dword ptr [r15 + 0], (4 << 16) | (1 << 8) | 61
-    mov eax, [root_win]
-    mov [r15 + 4], eax
-    mov qword ptr [r15 + 8], 0
-    add r15, 16
+    test rdi, rdi
+    jz 1f
+    mov edi, [rdi + NODE_WIN]
+    call bsp_update_history
+1:
+    jmp set_focus_buf           /* Pure Tail Call (clears root surface if edi==0) */
 
 fw_done:
     ret
@@ -1776,34 +1771,23 @@ found_unmap_node:
     mov rdi, rax
     call bsp_tree_detach
 
-    /* If it was in active workspace, re-arrange and focus in ONE syscall */
+    /* If it was in active workspace, re-arrange and focus in ONE atomic batch */
     cmp r12d, r14d
     jne event_loop
 
-    lea r15, [out_buf]
     lea rax, [bsp_roots]
     mov rdi, [rax + 8*r14]
     call bsp_first_leaf
     lea rbx, [bsp_focuses]
     mov [rbx + 8*r14], rax
+    xor edi, edi
     test rax, rax
-    jz no_focus_left
-    mov r8d, [rax + NODE_WIN]   /* Keep win_id in r8d */
+    jz 1f
+    mov edi, [rax + NODE_WIN]
     mov rdi, rax
     call bsp_update_history
-    mov edi, r8d
+1:
     call set_focus_buf
-    jmp unmap_arrange_and_flush
-no_focus_left:
-    xor edi, edi
-    call set_focus_buf
-    /* X_ClearArea on root window (Opcode 61, exposures=1, w=0, h=0 clears whole root) (16 bytes) */
-    mov dword ptr [r15 + 0], (4 << 16) | (1 << 8) | 61
-    mov eax, [root_win]
-    mov [r15 + 4], eax
-    mov qword ptr [r15 + 8], 0
-    add r15, 16
-unmap_arrange_and_flush:
     mov edi, r14d
     call bsp_arrange_ws_buf
     jmp event_loop
