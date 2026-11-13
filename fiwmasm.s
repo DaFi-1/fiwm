@@ -1628,20 +1628,6 @@ single_mon:
     xor eax, eax
     ret
 
-.align 16
-simd_map_attr_pkt:
-    .long (4 << 16) | 2         /* Opcode 2: ChangeWindowAttributes (len=4) */
-    .long 0                     /* Placeholder for win_id */
-    .long 0x00000800            /* CWEventMask */
-    .long 0x00000010            /* EnterWindowMask */
-
-.align 16
-simd_grab_hdr_pkt:
-    .long (6 << 16) | 28        /* Opcode 28: X_GrabButton (len=6) */
-    .long 0                     /* Placeholder for win_id */
-    .long (1 << 24) | (1 << 16) | 0x4C  /* owner_events=1, pointer_mode=1, event_mask=0x4C */
-    .long 0                     /* confine_to=None, cursor=None */
-
 /*
  * =========================================================================
  * TRUE HIERARCHICAL BSP TREE ENGINE
@@ -1674,17 +1660,22 @@ handle_map:
     call bsp_arrange_ws_buf
 
     /*
-     * SIMD 128-bit Vectorized Window Mapping Pipeline (120 bytes):
-     * 1. ChangeWindowAttributes (16 bytes, 1 SIMD store)
-     * 2. 4x X_GrabButton (96 bytes, 4 SIMD stores + 4 quadword stores)
-     * 3. X_MapWindow (8 bytes, 1 quadword store)
+     * Direct Register-Constructed Window Mapping Pipeline (120 bytes):
+     * 1. ChangeWindowAttributes (16 bytes, 2 stores)
+     * 2. 4x X_GrabButton (96 bytes, register-synthesized SSE vector + quadword stores)
+     * 3. X_MapWindow (8 bytes, 2 stores)
      */
-    movdqa xmm0, [simd_map_attr_pkt]
-    pinsrd xmm0, r12d, 1
-    movdqu [r15 + 0], xmm0
+    mov dword ptr [r15 + 0], (4 << 16) | 2
+    mov [r15 + 4], r12d
+    mov dword ptr [r15 + 8], 0x00000800
+    mov dword ptr [r15 + 12], 0x00000010
 
-    movdqa xmm1, [simd_grab_hdr_pkt]
-    pinsrd xmm1, r12d, 1
+    mov rax, r12
+    shl rax, 32
+    or rax, (6 << 16) | 28
+    movq xmm1, rax
+    mov eax, (1 << 24) | (1 << 16) | 0x4C
+    pinsrd xmm1, eax, 2
 
     /* Button 1 + Mod1 (0x08) */
     movdqu [r15 + 16], xmm1
@@ -1707,10 +1698,8 @@ handle_map:
     mov [r15 + 104], rdx
 
     /* X_MapWindow (8 bytes) */
-    mov rax, r12
-    shl rax, 32
-    or rax, (2 << 16) | 8
-    mov [r15 + 112], rax
+    mov dword ptr [r15 + 112], (2 << 16) | 8
+    mov [r15 + 116], r12d
 
     add r15, 120
 
