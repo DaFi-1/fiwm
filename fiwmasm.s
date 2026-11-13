@@ -578,11 +578,9 @@ handle_enter:
     je event_loop               /* Already focused */
 
     /* Update focus */
-    mov [rbx + 8*r14], rax
     mov rdi, rax
-    call bsp_update_history
-    mov edi, edx
-    call set_focus_buf
+    mov esi, r14d
+    call activate_node_focus
     jmp event_loop
 
 handle_expose:
@@ -749,12 +747,9 @@ key_hjkl_disp:
 
 hjkl_apply_focus:
     /* Update focus and tree history to target node (r12) */
-    lea rbx, [bsp_focuses]
-    mov [rbx + 8*r14], r12
     mov rdi, r12
-    call bsp_update_history
-    mov edi, [r12 + NODE_WIN]
-    call set_focus_buf
+    mov esi, r14d
+    call activate_node_focus
     jmp event_loop
 
 /*
@@ -946,6 +941,26 @@ win_restore_layout:
     mov edi, r14d
     call bsp_arrange_ws
     jmp event_loop
+
+/*
+ * activate_node_focus(rdi = leaf_node_ptr, esi = ws_idx)
+ * Unified Window & Focus Activation Engine:
+ * 1. Synchronizes bsp_focuses[ws_idx] = leaf_node_ptr
+ * 2. If node != NULL: records branch history and sets active focus to node->win
+ * 3. If node == NULL: clears surface and resets focus to root
+ */
+activate_node_focus:
+    lea rax, [bsp_focuses]
+    mov [rax + 8*rsi], rdi
+    test rdi, rdi
+    jz anf_root
+    mov edx, [rdi + NODE_WIN]
+    call bsp_update_history
+    mov edi, edx
+    jmp set_focus_buf
+anf_root:
+    xor edi, edi
+    jmp set_focus_buf
 
 set_focus:
     jmp set_focus_buf
@@ -1171,13 +1186,8 @@ fw_focus:
     /* Focus active window on new workspace (or clear focus to root if empty) */
     lea rax, [bsp_focuses]
     mov rdi, [rax + 8*r12]
-    xor edi, edi
-    test rdi, rdi
-    jz 1f
-    mov edi, [rdi + NODE_WIN]
-    call bsp_update_history
-1:
-    jmp set_focus_buf           /* Pure Tail Call (clears root surface if edi==0) */
+    mov esi, r12d
+    jmp activate_node_focus
 
 fw_done:
     ret
@@ -1769,16 +1779,9 @@ found_unmap_node:
     lea rax, [bsp_roots]
     mov rdi, [rax + 8*r14]
     call bsp_first_leaf
-    lea rbx, [bsp_focuses]
-    mov [rbx + 8*r14], rax
-    xor edi, edi
-    test rax, rax
-    jz 1f
-    mov edi, [rax + NODE_WIN]
     mov rdi, rax
-    call bsp_update_history
-1:
-    call set_focus_buf
+    mov esi, r14d
+    call activate_node_focus
     mov edi, r14d
     call bsp_arrange_ws_buf
     jmp event_loop
