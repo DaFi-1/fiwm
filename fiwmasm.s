@@ -1526,66 +1526,53 @@ pipe_replies_loop:
     mov dl, 4                   /* rdi still == r13d, edx was 96 (< 256)! */
     syscall
 
-    /* Read reply header (32 bytes) - rdi still == r13d, edx was 4 (< 256)! */
-    xor eax, eax                /* SYS_READ = 0 */
-    lea rsi, [in_buf]
-    mov dl, 32
-    syscall
-
-    cmp byte ptr [in_buf], 1
-    jne mon_detect_done
-
-    mov ecx, [in_buf + 8]               /* number of screens */
-    cmp ecx, 2
-    jge mon_read_screens
-
-    /* If num_screens == 1, drain its 8-byte structure */
-    test ecx, ecx
-    jz mon_detect_done
-    xor eax, eax                /* SYS_READ = 0 */
-    lea rsi, [in_buf]
-    push 8
-    pop rdx
-    syscall
-    jmp mon_detect_done
-
-mon_read_screens:
-    /* 2 monitors detected! Read 2 x 8 bytes monitor structures (rdi == r13d) with full drain */
-    xor ebx, ebx                /* total bytes read */
-mon_read_loop:
+    /* Read reply header + screens (up to 48 bytes) in ONE atomic syscall! */
+    xor ebx, ebx
+qscreens_read_loop:
     xor eax, eax                /* SYS_READ = 0 */
     lea rsi, [in_buf + rbx]
-    mov edx, 16
+    mov edx, 48
     sub edx, ebx
     syscall
     test eax, eax
     jle mon_detect_done
     add ebx, eax
-    cmp ebx, 16
-    jl mon_read_loop
+    cmp ebx, 32
+    jl qscreens_read_loop
 
-    /* Monitor 0 */
-    movsx eax, word ptr [in_buf + 0]    /* x_org */
-    movsx edx, word ptr [in_buf + 2]    /* y_org */
+    cmp byte ptr [in_buf], 1            /* Success reply? */
+    jne mon_detect_done
+
+    mov ecx, [in_buf + 8]               /* number of screens */
+    cmp ecx, 2
+    jl mon_detect_done                  /* 0 or 1 screen: default mon_geom already set */
+
+    /* If num_screens >= 2, ensure we have all 48 bytes (32 header + 16 screens) */
+    cmp ebx, 48
+    jl qscreens_read_loop
+
+    /* Monitor 0 (at in_buf + 32) */
+    movsx eax, word ptr [in_buf + 32]   /* x_org */
+    movsx edx, word ptr [in_buf + 34]   /* y_org */
     shl rdx, 32
     or rax, rdx
     mov [mon_geom + 0], rax             /* writes x and y in 1 64-bit store */
 
-    movzx eax, word ptr [in_buf + 4]    /* width */
-    movzx edx, word ptr [in_buf + 6]    /* height */
+    movzx eax, word ptr [in_buf + 36]   /* width */
+    movzx edx, word ptr [in_buf + 38]   /* height */
     shl rdx, 32
     or rax, rdx
     mov [mon_geom + 8], rax             /* writes w and h in 1 64-bit store */
 
-    /* Monitor 1 */
-    movsx eax, word ptr [in_buf + 8]    /* x_org */
-    movsx edx, word ptr [in_buf + 10]   /* y_org */
+    /* Monitor 1 (at in_buf + 40) */
+    movsx eax, word ptr [in_buf + 40]   /* x_org */
+    movsx edx, word ptr [in_buf + 42]   /* y_org */
     shl rdx, 32
     or rax, rdx
     mov [mon_geom + 16], rax            /* writes x and y in 1 64-bit store */
 
-    movzx eax, word ptr [in_buf + 12]   /* width */
-    movzx edx, word ptr [in_buf + 14]   /* height */
+    movzx eax, word ptr [in_buf + 44]   /* width */
+    movzx edx, word ptr [in_buf + 46]   /* height */
     shl rdx, 32
     or rax, rdx
     mov [mon_geom + 24], rax            /* writes w and h in 1 64-bit store */
