@@ -1476,12 +1476,11 @@ dsw_emit:
  */
 detect_monitors:
     /* Default: 1 monitor = full screen (wm_state bit 3 starts as 0) */
+    mov qword ptr [mon_geom + 0], 0     /* x = 0, y = 0 */
     mov eax, [screen_w]
     mov edx, [screen_h]
-    mov dword ptr [mon_geom + 0],  0   /* x */
-    mov dword ptr [mon_geom + 4],  0   /* y */
-    mov [mon_geom + 8],  eax           /* w */
-    mov [mon_geom + 12], edx           /* h */
+    mov [mon_geom + 8], eax             /* w */
+    mov [mon_geom + 12], edx            /* h */
 
     /* QueryExtension "XINERAMA" (Opcode 98, len 4 words) */
     mov dword ptr [out_buf + 0], (4 << 16) | 98
@@ -1563,26 +1562,31 @@ mon_read_loop:
     /* Monitor 0 */
     movsx eax, word ptr [in_buf + 0]    /* x_org */
     movsx edx, word ptr [in_buf + 2]    /* y_org */
-    movzx ecx, word ptr [in_buf + 4]    /* width */
-    movzx r8d, word ptr [in_buf + 6]    /* height */
-    mov [mon_geom + 0],  eax
-    mov [mon_geom + 4],  edx
-    mov [mon_geom + 8],  ecx
-    mov [mon_geom + 12], r8d
+    shl rdx, 32
+    or rax, rdx
+    mov [mon_geom + 0], rax             /* writes x and y in 1 64-bit store */
+
+    movzx eax, word ptr [in_buf + 4]    /* width */
+    movzx edx, word ptr [in_buf + 6]    /* height */
+    shl rdx, 32
+    or rax, rdx
+    mov [mon_geom + 8], rax             /* writes w and h in 1 64-bit store */
 
     /* Monitor 1 */
     movsx eax, word ptr [in_buf + 8]    /* x_org */
     movsx edx, word ptr [in_buf + 10]   /* y_org */
-    movzx ecx, word ptr [in_buf + 12]   /* width */
-    movzx r8d, word ptr [in_buf + 14]   /* height */
-    mov [mon_geom + 16], eax
-    mov [mon_geom + 20], edx
-    mov [mon_geom + 24], ecx
-    mov [mon_geom + 28], r8d
+    shl rdx, 32
+    or rax, rdx
+    mov [mon_geom + 16], rax            /* writes x and y in 1 64-bit store */
+
+    movzx eax, word ptr [in_buf + 12]   /* width */
+    movzx edx, word ptr [in_buf + 14]   /* height */
+    shl rdx, 32
+    or rax, rdx
+    mov [mon_geom + 24], rax            /* writes w and h in 1 64-bit store */
 
     or bpl, 8                           /* Set bit 3 (is_dual_mon = 1) */
-    mov byte ptr [mon_cur_ws + 0], 8    /* Monitor 0 starts displaying Workspace 9 (idx 8) */
-    mov byte ptr [mon_cur_ws + 1], 0    /* Monitor 1 starts displaying Workspace 1 (idx 0) */
+    mov word ptr [mon_cur_ws], 8        /* Mon 0 = WS 9 (8), Mon 1 = WS 1 (0) */
 
 mon_detect_done:
     /*
