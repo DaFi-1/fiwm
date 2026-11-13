@@ -1847,54 +1847,54 @@ handle_map:
     mov edi, r14d
     call bsp_arrange_ws_buf
 
-    /* ChangeWindowAttributes: CWEventMask (bit 11 = 0x800) = EnterWindowMask (bit 4 = 0x10) (16 bytes) */
-    mov dword ptr [r15 + 0], (4 << 16) | 2
-    mov [r15 + 4], r12d
-    mov dword ptr [r15 + 8], 0x800
-    mov dword ptr [r15 + 12], 0x10
-    add r15, 16
-
     /*
-     * X_GrabButton on client window (Opcode 28, length 6 words = 24 bytes):
-     * Grab Button 1 (Left Click, Move) and Button 3 (Right Click, Resize) with Mod1 (0x08).
-     * Also grabs combo with NumLock (0x18) so mouse shortcuts always trigger!
+     * 64-bit Coalesced Window Mapping Pipeline (120 bytes in 15 quadword stores):
+     * 1. ChangeWindowAttributes (16 bytes, 2 stores)
+     * 2. 4x X_GrabButton (96 bytes, 12 stores)
+     * 3. X_MapWindow (8 bytes, 1 store)
      */
+    mov rax, r12
+    shl rax, 32
+    mov r8, rax                         /* r8 = r12d << 32 */
+    or rax, (4 << 16) | 2               /* ChangeWindowAttributes header + win */
+    mov [r15 + 0], rax
+    mov rcx, 0x0000001000000800         /* CWEventMask | (EnterWindowMask << 32) */
+    mov [r15 + 8], rcx
+
+    /* Precalculate X_GrabButton common header and event_mask quadwords */
+    mov rax, r8
+    or rax, (6 << 16) | 28              /* X_GrabButton header + win */
+    mov r9, (1 << 24) | (1 << 16) | 0x4C
+
     /* Button 1 + Mod1 (0x08) */
-    mov dword ptr [r15 + 0], (6 << 16) | 28
-    mov [r15 + 4], r12d
-    mov dword ptr [r15 + 8], (1 << 24) | (1 << 16) | 0x4C
-    mov dword ptr [r15 + 12], 0
-    mov dword ptr [r15 + 16], 0
-    mov dword ptr [r15 + 20], (0x08 << 16) | 1
+    mov [r15 + 16], rax
+    mov [r15 + 24], r9
+    mov rcx, 0x0008000100000000
+    mov [r15 + 32], rcx
 
     /* Button 1 + Mod1 | NumLock (0x18) */
-    mov dword ptr [r15 + 24], (6 << 16) | 28
-    mov [r15 + 28], r12d
-    mov dword ptr [r15 + 32], (1 << 24) | (1 << 16) | 0x4C
-    mov dword ptr [r15 + 36], 0
-    mov dword ptr [r15 + 40], 0
-    mov dword ptr [r15 + 44], (0x18 << 16) | 1
+    mov [r15 + 40], rax
+    mov [r15 + 48], r9
+    mov rdx, 0x0018000100000000
+    mov [r15 + 56], rdx
 
     /* Button 3 + Mod1 (0x08) */
-    mov dword ptr [r15 + 48], (6 << 16) | 28
-    mov [r15 + 52], r12d
-    mov dword ptr [r15 + 56], (1 << 24) | (1 << 16) | 0x4C
-    mov dword ptr [r15 + 60], 0
-    mov dword ptr [r15 + 64], 0
-    mov dword ptr [r15 + 68], (0x08 << 16) | 3
+    mov [r15 + 64], rax
+    mov [r15 + 72], r9
+    mov rcx, 0x0008000300000000
+    mov [r15 + 80], rcx
 
     /* Button 3 + Mod1 | NumLock (0x18) */
-    mov dword ptr [r15 + 72], (6 << 16) | 28
-    mov [r15 + 76], r12d
-    mov dword ptr [r15 + 80], (1 << 24) | (1 << 16) | 0x4C
-    mov dword ptr [r15 + 84], 0
-    mov dword ptr [r15 + 88], 0
-    mov dword ptr [r15 + 92], (0x18 << 16) | 3
-    add r15, 96
+    mov [r15 + 88], rax
+    mov [r15 + 96], r9
+    mov rdx, 0x0018000300000000
+    mov [r15 + 104], rdx
 
-    mov dword ptr [r15 + 0], (2 << 16) | 8
-    mov dword ptr [r15 + 4], r12d
-    add r15, 8
+    /* X_MapWindow (8 bytes) */
+    or r8, (2 << 16) | 8
+    mov [r15 + 112], r8
+
+    add r15, 120
 
     mov edi, r12d
     call set_focus_buf
