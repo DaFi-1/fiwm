@@ -2508,10 +2508,11 @@ bsp_arrange_node:
     cmp dword ptr [rdi + NODE_WIN], 0
     jz do_ws_split
 
-    /* Leaf window: direct write-combining store burst (32 bytes ConfigureWindow) */
-    mov dword ptr [r15 + 0], (8 << 16) | 12  /* Opcode 12, len = 8 words */
+    /* Leaf window: direct write-combining 64-bit store burst (32 bytes ConfigureWindow) */
     mov eax, [rdi + NODE_WIN]
-    mov [r15 + 4], eax                       /* win_id */
+    shl rax, 32
+    or rax, (8 << 16) | 12                   /* Opcode 12, len = 8 words */
+    mov [r15 + 0], rax                       /* 64-bit store: header + win_id */
     mov dword ptr [r15 + 8], 31              /* value_mask: CWX|CWY|CWWidth|CWHeight|CWBorderWidth */
     movups [r15 + 12], xmm0                  /* SIMD 128-bit store: [x, y, w, h] written all at once! */
     mov dword ptr [r15 + 28], 1              /* border_width = 1 */
@@ -2521,7 +2522,8 @@ bsp_arrange_node:
 do_ws_split:
     push rdi                                 /* Save parent node (8 bytes) */
     sub rsp, 32                              /* Allocate 32 bytes for child rects */
-    movups [rsp], xmm0                       /* [rsp] = parent [x, y, w, h] */
+    movups [rsp], xmm0                       /* [rsp] = Child 1 [x, y, w, h] (initialized from parent) */
+    movups [rsp + 16], xmm0                  /* [rsp + 16] = Child 2 [x, y, w, h] (SIMD cloned!) */
 
     test byte ptr [rdi + NODE_INFO], 1       /* Bit 0 = split_type (0=V, 1=H) */
     jnz ws_split_horizontal
@@ -2538,13 +2540,9 @@ do_ws_split:
     /* Child 1: update w -> w1 */
     mov [rsp + 8], eax
 
-    /* Child 2: [x2, y, w2, h] */
+    /* Child 2: update x -> x2, w -> w2 (y and h are already cloned in SIMD!) */
     mov [rsp + 16], ecx                      /* x2 */
-    mov eax, [rsp + 4]
-    mov [rsp + 20], eax                      /* y */
     mov [rsp + 24], edx                      /* w2 */
-    mov eax, [rsp + 12]
-    mov [rsp + 28], eax                      /* h */
     jmp ws_split_dispatch
 
 ws_split_horizontal:
@@ -2560,12 +2558,8 @@ ws_split_horizontal:
     /* Child 1: update h -> h1 */
     mov [rsp + 12], eax
 
-    /* Child 2: [x, y2, w, h2] */
-    mov eax, [rsp + 0]
-    mov [rsp + 16], eax                      /* x */
+    /* Child 2: update y -> y2, h -> h2 (x and w are already cloned in SIMD!) */
     mov [rsp + 20], ecx                      /* y2 */
-    mov eax, [rsp + 8]
-    mov [rsp + 24], eax                      /* w */
     mov [rsp + 28], edx                      /* h2 */
 
 ws_split_dispatch:
