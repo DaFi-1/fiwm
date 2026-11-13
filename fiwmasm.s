@@ -2037,20 +2037,22 @@ td_has_parent:
     mov rax, [r12 + NODE_PARENT]
     mov [r13 + NODE_PARENT], rax
 
+    /* Branchless grandparent / root slot selection */
+    lea rcx, [bsp_roots]
+    lea rcx, [rcx + 8*r14]      /* Default target: &bsp_roots[ws_idx] */
+
     test rax, rax
-    jz td_sib_root
+    jz td_store_sib             /* If no grandparent, update bsp_roots directly */
 
-    cmp [rax + NODE_FIRST], r12
-    jne td_link_gp_sec
-    mov [rax + NODE_FIRST], r13
-    jmp td_done
-td_link_gp_sec:
-    mov [rax + NODE_SECOND], r13
-    jmp td_done
+    /* Grandparent exists: select first or second child slot branchlessly via cmovne */
+    lea rdx, [rax + NODE_FIRST]
+    lea rcx, [rax + NODE_SECOND]
+    cmp [rdx], r12
+    cmovne rdx, rcx
+    mov rcx, rdx
 
-td_sib_root:
-    lea rax, [bsp_roots]
-    mov [rax + 8*r14], r13
+td_store_sib:
+    mov [rcx], r13              /* Relink promoted sibling */
 
 td_done:
     /* Push both detached leaf (rbx) and split parent (r12) onto O(1) free-list! */
