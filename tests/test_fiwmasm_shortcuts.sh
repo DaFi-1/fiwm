@@ -244,8 +244,32 @@ else
     report_fail "Alt+q" "Expected 0 windows on WS 5, found $ONSCREEN_WS5_AFTER_KILL"
 fi
 
+if command -v zathura >/dev/null 2>&1; then
+    echo ""
+    echo "--- [9] Duplicate MapRequest (Zathura) Fullscreen Test ---"
+    DISPLAY="$TEST_DISP" xdotool key alt+6
+    sleep 0.2
+    DISPLAY="$TEST_DISP" zathura "/home/a/Downloads/Competente-o-Suficiente-ebook.pdf" >/dev/null 2>&1 &
+    ZAT_TEST_PID=$!
+    W_VAL=""
+    for i in $(seq 1 25); do
+        W_VAL=$(DISPLAY="$TEST_DISP" xwininfo -root -tree 2>/dev/null | grep -E "Competente|zathura" | grep -v '\-9999' | grep -o '[0-9]\+x[0-9]\+' | cut -d'x' -f1 | sort -n | tail -n 1 || true)
+        if [ -n "$W_VAL" ] && [ "$W_VAL" -ge 780 ]; then
+            break
+        fi
+        sleep 0.1
+    done
+    if [ -n "$W_VAL" ] && [ "$W_VAL" -ge 780 ]; then
+        report_pass "Zathura opens full-screen (width $W_VAL >= 780, not halved)"
+    else
+        report_fail "Zathura window sizing" "Expected full width >= 780, got ${W_VAL:-none}"
+    fi
+    kill "$ZAT_TEST_PID" 2>/dev/null || true
+    sleep 0.3
+fi
+
 echo ""
-echo "--- [9] Clean WM Exit (Alt+Shift+q) ---"
+echo "--- [10] Clean WM Exit (Alt+Shift+q) ---"
 DISPLAY="$TEST_DISP" xdotool key alt+shift+q
 sleep 0.8
 if ! kill -0 "$WM_PID" 2>/dev/null; then

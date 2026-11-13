@@ -585,6 +585,7 @@ static inline void change_window_attributes_1d(Display *d, Window w, unsigned in
 }
 #define XSelectInput(d, w, mask) change_window_attributes_1d((d), (w), 0x800, (unsigned int)(mask))
 #define XSetWindowBorder(d, w, pixel) change_window_attributes_1d((d), (w), 8, (unsigned int)(pixel))
+#define XSetWindowBackground(d, w, pixel) change_window_attributes_1d((d), (w), 2, (unsigned int)(pixel))
 
 static inline void client_set_attributes(Display *d, Window w, unsigned long bg, unsigned long border) {
     unsigned int *p = (unsigned int *)_xwire_reserve(d->fd, 24);
@@ -951,7 +952,7 @@ static void setlayoutcmd(const Arg *);
 static const char *termcmd[]     = { "st", NULL };
 static const char *menucmd[]     = {"/bin/sh", "-c", "[ -x $HOME/dotfiles/scripts/nviciod.sh ] && $HOME/dotfiles/scripts/nviciod.sh || ([ -x $HOME/dotfile/dmenuscript ] && $HOME/dotfile/dmenuscript || ([ -x $HOME/.config/i3/nviciod.sh ] && $HOME/.config/i3/nviciod.sh))", NULL};
 /* static const float default_ratio = 0.5f; */
-#define border_active   0xFFFFFFUL
+#define border_active   0x005577UL
 #define border_inactive 0x2d2d2dUL
 #define bar_bg          0x000000UL
 #define bar_fg          0xc2c2b0UL
@@ -1914,6 +1915,8 @@ void maprequest(XEvent *e)
         return;
     if (wa.override_redirect)
         return;
+    if (find_client(e->xmaprequest.window))
+        return;
 
     manage(e->xmaprequest.window, &wa);
 }
@@ -2192,6 +2195,7 @@ void setup(void)
     XSelectInput(dpy, root, SubstructureRedirectMask | SubstructureNotifyMask |
                             EnterWindowMask | ButtonPressMask |
                             StructureNotifyMask | PropertyChangeMask);
+    XSetWindowBackground(dpy, root, 0x000000UL);
 
     /* Run autostart (xrandr, etc.) before probing screen geometries */
     Arg a = { .v = autostart_cmd };

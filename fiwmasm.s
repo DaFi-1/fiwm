@@ -46,8 +46,9 @@
 .equ MAX_MONITORS,    2
 .equ GAP_PX,          4
 .equ BAR_HEIGHT,      18
-.equ BORDER_ACTIVE,   0xFFFFFF
+.equ BORDER_ACTIVE,   0x005577
 .equ BORDER_INACTIVE, 0x2D2D2D
+.equ BG_COLOR,        0x000000
 
 /*
  * Compact Node Structure (32 bytes aligned - 50% smaller!):
@@ -307,34 +308,36 @@ ev_pop_buffered:
     add dword ptr [ev_q_head], 32
 
     movzx eax, byte ptr [rsi]
-    and al, 0x7F
+    and eax, 0x7F
 
-    cmp al, 2                   /* KeyPress */
-    je handle_key
+    /* Direct O(1) Computed Jump Table Dispatch (eliminates 8-branch cascade) */
+    cmp eax, 20
+    ja event_loop
+    jmp [event_jump_table + rax*8]
 
-    cmp al, 4                   /* ButtonPress */
-    je handle_btn_press
-
-    cmp al, 5                   /* ButtonRelease */
-    je handle_btn_release
-
-    cmp al, 6                   /* MotionNotify */
-    je handle_motion
-
-    cmp al, 7                   /* EnterNotify */
-    je handle_enter
-
-    cmp al, 12                  /* Expose */
-    je handle_expose
-
-    cmp al, 20                  /* MapRequest */
-    je handle_map
-
-    sub al, 17                  /* 17 (DestroyNotify) -> 0, 18 (UnmapNotify) -> 1 */
-    cmp al, 1
-    jbe handle_unmap
-
-    jmp event_loop
+.align 8
+event_jump_table:
+    .quad event_loop        /* 0: Error */
+    .quad event_loop        /* 1: Reply */
+    .quad handle_key        /* 2: KeyPress */
+    .quad event_loop        /* 3: KeyRelease */
+    .quad handle_btn_press  /* 4: ButtonPress */
+    .quad handle_btn_release /* 5: ButtonRelease */
+    .quad handle_motion     /* 6: MotionNotify */
+    .quad handle_enter      /* 7: EnterNotify */
+    .quad event_loop        /* 8: LeaveNotify */
+    .quad event_loop        /* 9: FocusIn */
+    .quad event_loop        /* 10: FocusOut */
+    .quad event_loop        /* 11: KeymapNotify */
+    .quad handle_expose     /* 12: Expose */
+    .quad event_loop        /* 13: GraphicsExpose */
+    .quad event_loop        /* 14: NoExpose */
+    .quad event_loop        /* 15: VisibilityNotify */
+    .quad event_loop        /* 16: CreateNotify */
+    .quad handle_unmap      /* 17: DestroyNotify */
+    .quad handle_unmap      /* 18: UnmapNotify */
+    .quad event_loop        /* 19: MapNotify */
+    .quad handle_map        /* 20: MapRequest */
 
 handle_btn_press:
     /*
@@ -448,6 +451,20 @@ handle_motion:
     test edx, edx
     jz event_loop
 
+    /* Event Coalescing: compress consecutive MotionNotify events */
+motion_coalesce_loop:
+    mov eax, [ev_q_head]
+    cmp eax, [ev_q_tail]
+    jge motion_process
+    movzx r11d, byte ptr [event_queue + rax]
+    and r11b, 0x7F
+    cmp r11b, 6
+    jne motion_process
+    lea rsi, [event_queue + rax]
+    add dword ptr [ev_q_head], 32
+    jmp motion_coalesce_loop
+
+motion_process:
     movsx ecx, word ptr [rsi + 20]      /* current rootX */
     movsx r8d, word ptr [rsi + 22]      /* current rootY */
 
@@ -482,23 +499,19 @@ handle_motion:
     jmp event_loop
 
 motion_resize:
-    /* new_w = MAX(50, orig_w + (cur_x - start_x)) */
+    /* Branchless Clamping: MAX(50, orig + delta) via cmovl */
+    mov r10d, 50
     mov eax, ecx
     sub eax, [drag_start_x]
     add eax, [drag_orig_w]
     cmp eax, 50
-    jge resize_w_ok
-    mov eax, 50
-resize_w_ok:
+    cmovl eax, r10d
 
-    /* new_h = MAX(50, orig_h + (cur_y - start_y)) */
     mov esi, r8d
     sub esi, [drag_start_y]
     add esi, [drag_orig_h]
     cmp esi, 50
-    jge resize_h_ok
-    mov esi, 50
-resize_h_ok:
+    cmovl esi, r10d
 
     /* ConfigureWindow (w, h) */
     mov dword ptr [out_buf + 0], (5 << 16) | 12
@@ -759,23 +772,22 @@ key_split_v:
     jmp event_loop
 
 key_ws_prev:
+    /* Branchless Modulo Wrap Prev: if (cur_ws - 1 < 0) cur_ws = 8 */
     mov eax, r14d
     dec eax
-    test eax, eax
-    jns ws_prev_ok
-    mov eax, WORKSPACE_COUNT - 1   /* Volta para o 8 (workspace 9) */
-ws_prev_ok:
+    mov edx, WORKSPACE_COUNT - 1
+    cmovs eax, edx
     mov edi, eax
     call focus_workspace
     jmp event_loop
 
 key_ws_next:
+    /* Branchless Modulo Wrap Next: if (cur_ws + 1 >= 9) cur_ws = 0 */
     mov eax, r14d
     inc eax
+    xor edx, edx
     cmp eax, WORKSPACE_COUNT
-    jl ws_next_ok
-    xor eax, eax                   /* Volta para o 0 (workspace 1) */
-ws_next_ok:
+    cmovge eax, edx
     mov edi, eax
     call focus_workspace
     jmp event_loop
@@ -1138,8 +1150,10 @@ focus_workspace:
      * 2. Move old workspace windows off-screen (-9999, -9999) SECOND (eliminating screen blanking!).
      * 3. Update status bar and focus THIRD, all committed in ONE atomic sys_write!
      */
+    push rdx
     mov edi, r12d
     call bsp_arrange_ws_buf
+    pop rdx
 
     /* Check if old_ws is displayed on the other monitor (in dual monitor mode) */
     test bpl, 8                 /* bit 3 = is_dual_mon */
@@ -1152,11 +1166,9 @@ focus_workspace:
     je fw_bar_and_focus         /* Other monitor is viewing old_ws: do NOT hide! */
 
 fw_do_hide:
-    push rdx
     lea rax, [bsp_roots]
     mov rdi, [rax + 8*rbx]
     call hide_tree_collect
-    pop rdx
     jmp fw_bar_and_focus
 
 fw_same_ws:
@@ -1342,7 +1354,7 @@ create_bar_loop:
     mov dword ptr [r15 + 20], (1 << 16) | 0     /* border_width = 0, class = InputOutput (1) */
     mov dword ptr [r15 + 24], 0                 /* visual = CopyFromParent (0) */
     mov dword ptr [r15 + 28], 0x00000a02        /* CWBackPixel | CWOverrideRedirect | CWEventMask */
-    mov dword ptr [r15 + 32], 0x181818          /* background pixel */
+    mov dword ptr [r15 + 32], BG_COLOR          /* background pixel (#000000) */
     mov dword ptr [r15 + 36], 1                 /* override_redirect = True */
     mov dword ptr [r15 + 40], 0x00008000        /* ExposureMask */
 
@@ -1360,8 +1372,8 @@ create_bar_loop:
 create_bar_done:
 
     /* 3. Pre-create 2 static GCs for X_ImageText8 (Eliminates PolyFillRectangle AND ChangeGC!):
-       - bar_gc + 0: active workspace digit GC (fg = 0xc2c2b0, bg = 0x181818)
-       - bar_gc + 1: inactive workspace digit GC (fg = 0x685742, bg = 0x181818)
+       - bar_gc + 0: active workspace digit GC (fg = 0xc2c2b0, bg = #000000)
+       - bar_gc + 1: inactive workspace digit GC (fg = 0x685742, bg = #000000)
      */
     mov ecx, [bar_gc]
     mov edx, [bar_win + 0]
@@ -1372,7 +1384,7 @@ create_bar_done:
     mov [r15 + 8], edx
     mov dword ptr [r15 + 12], 12                /* GCForeground (4) | GCBackground (8) */
     mov dword ptr [r15 + 16], 0xc2c2b0          /* fg = active cream/gold */
-    mov dword ptr [r15 + 20], 0x181818          /* bg = bar dark background */
+    mov dword ptr [r15 + 20], BG_COLOR          /* bg = bar pure black background (#000000) */
 
     /* GC 1: Inactive text + background cell (24 bytes) */
     inc ecx
@@ -1381,15 +1393,16 @@ create_bar_done:
     mov [r15 + 32], edx
     mov dword ptr [r15 + 36], 12
     mov dword ptr [r15 + 40], 0x685742          /* fg = inactive brown/gray */
-    mov dword ptr [r15 + 44], 0x181818          /* bg = bar dark background */
+    mov dword ptr [r15 + 44], BG_COLOR          /* bg = bar pure black background (#000000) */
 
-    /* 4. SelectInput on root window (16 bytes) */
-    mov dword ptr [r15 + 48], (4 << 16) | 2
+    /* 4. SelectInput and set background color on root window (20 bytes) */
+    mov dword ptr [r15 + 48], (5 << 16) | 2     /* Opcode 2: ChangeWindowAttributes (len=5) */
     mov eax, [root_win]
     mov [r15 + 52], eax
-    mov dword ptr [r15 + 56], 0x00000800        /* CWEventMask bit 11 */
-    mov dword ptr [r15 + 60], 0x00180001        /* SubstructureRedirect | SubstructureNotify | KeyPress */
-    add r15, 64
+    mov dword ptr [r15 + 56], 0x00000802        /* CWBackPixel (0x2) | CWEventMask (0x800) */
+    mov dword ptr [r15 + 60], BG_COLOR          /* CWBackPixel value: root desktop background (#000000) */
+    mov dword ptr [r15 + 64], 0x00180001        /* SubstructureRedirect | SubstructureNotify | KeyPress */
+    add r15, 68
 
     /* 5. Append initial bar render into [r15] */
     call draw_all_bars_buf
@@ -1455,19 +1468,27 @@ draw_all_bars:
 
 /*
  * draw_all_bars_buf(r15 = write cursor):
- * Full 9-digit bar redraw (used on initial boot and Expose events).
+ * Full 9-digit bar redraw (unrolled for maximum instruction-level parallelism, zero loop overhead!).
  */
 draw_all_bars_buf:
-    push rbx
-    xor ebx, ebx                                /* ebx = ws_idx (0..8) */
-dab_ws_loop:
-    mov edi, ebx
+    mov edi, 0
     call draw_single_ws_buf
-    inc ebx
-    cmp ebx, WORKSPACE_COUNT
-    jl dab_ws_loop
-    pop rbx
-    ret
+    mov edi, 1
+    call draw_single_ws_buf
+    mov edi, 2
+    call draw_single_ws_buf
+    mov edi, 3
+    call draw_single_ws_buf
+    mov edi, 4
+    call draw_single_ws_buf
+    mov edi, 5
+    call draw_single_ws_buf
+    mov edi, 6
+    call draw_single_ws_buf
+    mov edi, 7
+    call draw_single_ws_buf
+    mov edi, 8
+    jmp draw_single_ws_buf      /* Tail call for final slot */
 
 /*
  * draw_single_ws_buf(edi = ws_idx 0..8, r15 = write cursor):
@@ -1491,12 +1512,13 @@ draw_single_ws_buf:
     and esi, 0xFE                               /* bits 1..7 = precomputed even X coordinate! */
 
 dsw_emit:
-    /* Select pre-created GC: bar_gc + 0 (active) or bar_gc + 1 (inactive) */
+    /* Branchless GC selection: bar_gc + (ebx != cur_ws) */
     mov edx, [bar_gc]
     cmp ebx, r14d
-    je dsw_gc_ok
-    inc edx                                     /* inactive: bar_gc + 1 */
-dsw_gc_ok:
+    setne al
+    movzx eax, al
+    add edx, eax
+
     /* X_ImageText8 (Opcode 76, n=1 char, length=5 words = 20 bytes) */
     mov dword ptr [r15 + 0], (5 << 16) | (1 << 8) | 76
     mov eax, [bar_win + 4*rcx]
@@ -1699,6 +1721,24 @@ handle_map:
     jz event_loop
     mov r12d, edx
 
+    /* Check if window is already managed in any workspace */
+    xor ecx, ecx
+find_ws_map:
+    lea rax, [bsp_roots]
+    mov rdi, [rax + 8*rcx]
+    test rdi, rdi
+    jz fwm_next                 /* Bitwise null skip: skip empty workspaces instantly */
+    push rcx
+    mov esi, r12d
+    call bsp_find_node_by_win
+    pop rcx
+    test rax, rax
+    jnz event_loop              /* Already managed: ignore duplicate MapRequest! */
+fwm_next:
+    inc ecx
+    cmp ecx, WORKSPACE_COUNT
+    jl find_ws_map
+
     /* Insert into active workspace BSP tree */
     mov edi, r12d
     mov esi, r14d
@@ -1777,6 +1817,8 @@ handle_unmap:
 find_ws_unmap:
     lea rax, [bsp_roots]
     mov rdi, [rax + 8*rcx]
+    test rdi, rdi
+    jz fwu_next                 /* Bitwise null skip: skip empty workspaces instantly */
     push rcx
     push rdx
     mov esi, edx
@@ -1785,6 +1827,7 @@ find_ws_unmap:
     pop rcx
     test rax, rax
     jnz found_unmap_node
+fwu_next:
     inc ecx
     cmp ecx, WORKSPACE_COUNT
     jl find_ws_unmap
@@ -1968,11 +2011,11 @@ bsp_tree_detach:
     ret
 
 td_has_parent:
+    /* Branchless sibling selection: if (first == rbx) sibling = second */
     mov r13, [r12 + NODE_FIRST]
+    mov rax, [r12 + NODE_SECOND]
     cmp r13, rbx
-    jne td_sib_first
-    mov r13, [r12 + NODE_SECOND]
-td_sib_first:
+    cmove r13, rax
 
     mov rax, [r12 + NODE_PARENT]
     mov [r13 + NODE_PARENT], rax
@@ -2015,6 +2058,7 @@ alloc_node:
     jz alloc_from_pool
     mov rdx, [rax + NODE_FIRST]
     mov [free_node_head], rdx
+    prefetcht0 [rdx]            /* L1 Cache Prefetch: warm up next free node */
     jmp alloc_zero_node
 
 alloc_from_pool:
@@ -2026,10 +2070,10 @@ alloc_from_pool:
     lea rdx, [node_pool]
     add rax, rdx
 alloc_zero_node:
-    mov qword ptr [rax + 0],  0  /* Clears NODE_WIN, NODE_SPLIT, NODE_WS, pad */
-    mov qword ptr [rax + 8],  0  /* Clears NODE_FIRST */
-    mov qword ptr [rax + 16], 0  /* Clears NODE_SECOND */
-    mov qword ptr [rax + 24], 0  /* Clears NODE_PARENT */
+    /* SIMD 128-bit Vectorized Node Zeroing (clears full 32 bytes in 2 stores) */
+    pxor xmm0, xmm0
+    movdqa [rax + 0], xmm0      /* Clears NODE_WIN, NODE_INFO, pad, NODE_FIRST (16 bytes) */
+    movdqa [rax + 16], xmm0     /* Clears NODE_SECOND, NODE_PARENT (16 bytes) */
     ret
 alloc_fail:
     lea rax, [node_pool]
@@ -2089,13 +2133,12 @@ buh_loop:
     mov rax, [rdi + NODE_PARENT]
     test rax, rax
     jz buh_ret
+    /* Branchless bit-setting: bit 7 = (child != FIRST) << 7 */
     cmp [rax + NODE_FIRST], rdi
-    jne buh_second
-    and byte ptr [rax + NODE_INFO], ~0x80   /* Clear bit 7: FIRST was focused */
-    mov rdi, rax
-    jmp buh_loop
-buh_second:
-    or byte ptr [rax + NODE_INFO], 0x80    /* Set bit 7: SECOND was focused */
+    setne cl
+    shl cl, 7
+    and byte ptr [rax + NODE_INFO], 0x7F    /* Clear bit 7 */
+    or byte ptr [rax + NODE_INFO], cl       /* Set bit 7 branchlessly */
     mov rdi, rax
     jmp buh_loop
 buh_ret:
@@ -2113,9 +2156,16 @@ bsp_arrange_ws:
     pop r15
     ret
 
+.align 16
+geom_init_offsets:
+    .long GAP_PX
+    .long GAP_PX + BAR_HEIGHT + GAP_PX
+    .long -(GAP_PX * 2)
+    .long -(BAR_HEIGHT + GAP_PX * 3)
+
 /*
  * bsp_arrange_ws_buf(edi = ws_idx, r15 = write cursor)
- * Appends ConfigureWindow (28 bytes) packets for all windows in ws_idx to [r15].
+ * Appends ConfigureWindow (32 bytes) packets for all windows in ws_idx to [r15].
  */
 bsp_arrange_ws_buf:
     push rbx
@@ -2137,16 +2187,11 @@ bsp_arrange_ws_buf:
     lea rbx, [mon_geom]
     add rbx, rax
 
-    mov rdi, r13                /* rdi = root node */
-    mov esi, [rbx + 0]
-    add esi, GAP_PX             /* x */
-    mov edx, [rbx + 4]
-    add edx, GAP_PX + BAR_HEIGHT + GAP_PX  /* y (leave room for top bar!) */
-    mov r8d, [rbx + 8]
-    sub r8d, GAP_PX * 2         /* w */
-    mov r9d, [rbx + 12]
-    sub r9d, BAR_HEIGHT + GAP_PX * 3       /* h (leave room for top bar!) */
+    /* Vectorized root rect setup: loads [x, y, w, h] and applies gaps in 1 SIMD op */
+    movdqu xmm0, [rbx]
+    paddd xmm0, [geom_init_offsets]
 
+    mov rdi, r13                /* rdi = root node */
     call bsp_arrange_node
 
 arrange_ws_done:
@@ -2157,88 +2202,87 @@ arrange_ws_done:
     ret
 
 /*
- * bsp_arrange_node(rdi=node, esi=x, edx=y, r8=w, r9=h)
- * Writes 28-byte ConfigureWindow packets to [r15] cursor.
- * Register-only recursion (only 40 bytes pushed on split nodes, 0 stack frame on leaf nodes!):
+ * bsp_arrange_node(rdi = node, xmm0 = [x, y, w, h])
+ * Writes 32-byte ConfigureWindow packets to [r15] cursor.
+ * Vectorized layout engine: all 4 spatial dimensions [x, y, w, h] packed in 128-bit XMM.
  */
 bsp_arrange_node:
     cmp dword ptr [rdi + NODE_WIN], 0
     jz do_ws_split
 
-    /* Leaf window: zero stack allocation! Configure geometry + border_width=1 (32 bytes) */
+    /* Leaf window: direct write-combining store burst (32 bytes ConfigureWindow) */
+    mov dword ptr [r15 + 0], (8 << 16) | 12  /* Opcode 12, len = 8 words */
     mov eax, [rdi + NODE_WIN]
-    shl rax, 32
-    or rax, (8 << 16) | 12                   /* Opcode 12: ConfigureWindow (8 dwords = 32 bytes) */
-    mov [r15 + 0], rax                       /* header + win_id in 1 store! */
-    mov eax, esi                             /* x */
-    shl rax, 32
-    or rax, 31                               /* CWX | CWY | CWWidth | CWHeight | CWBorderWidth */
-    mov [r15 + 8], rax                       /* value_mask + x in 1 store! */
-    mov eax, r8d                             /* w */
-    shl rax, 32
-    mov edx, edx
-    or rax, rdx                              /* y | (w << 32) */
-    mov [r15 + 16], rax                      /* y + w in 1 store! */
-    mov rax, 1                               /* border_width = 1 */
-    shl rax, 32
-    mov r9d, r9d
-    or rax, r9                               /* h | (1 << 32) */
-    mov [r15 + 24], rax                      /* h + border_width in 1 store! */
+    mov [r15 + 4], eax                       /* win_id */
+    mov dword ptr [r15 + 8], 31              /* value_mask: CWX|CWY|CWWidth|CWHeight|CWBorderWidth */
+    movups [r15 + 12], xmm0                  /* SIMD 128-bit store: [x, y, w, h] written all at once! */
+    mov dword ptr [r15 + 28], 1              /* border_width = 1 */
     add r15, 32
     ret
 
 do_ws_split:
-    push rdi
-    push rsi
-    push rdx
-    push r8
-    push r9
+    push rdi                                 /* Save parent node (8 bytes) */
+    sub rsp, 32                              /* Allocate 32 bytes for child rects */
+    movups [rsp], xmm0                       /* [rsp] = parent [x, y, w, h] */
 
-    test byte ptr [rdi + NODE_INFO], 1      /* Bit 0 = split_type (0=V, 1=H) */
+    test byte ptr [rdi + NODE_INFO], 1       /* Bit 0 = split_type (0=V, 1=H) */
     jnz ws_split_horizontal
 
-    /* Vertical Split */
-    shr r8d, 1
-    sub r8d, GAP_PX / 2         /* w1 */
-    mov rdi, [rdi + NODE_FIRST]
-    call bsp_arrange_node
+    /* Vertical Split (X axis) */
+    mov eax, [rsp + 8]                       /* w */
+    shr eax, 1                               /* w / 2 */
+    lea ecx, [rax + 2]                       /* delta = (w / 2) + 2 */
+    sub eax, 2                               /* w1 = (w / 2) - 2 */
+    mov edx, [rsp + 8]
+    sub edx, ecx                             /* w2 = w - delta */
+    add ecx, [rsp + 0]                       /* x2 = x + delta */
 
-    mov rdi, [rsp + 32]
-    mov rdi, [rdi + NODE_SECOND]
-    mov esi, [rsp + 24]
-    mov eax, [rsp + 8]
-    shr eax, 1
-    add esi, eax
-    add esi, GAP_PX - (GAP_PX / 2)  /* x2 = x + w1 + gap */
-    mov edx, [rsp + 16]
-    mov r8d, [rsp + 8]
-    sub r8d, esi
-    add r8d, [rsp + 24]         /* w2 = w - (x2 - x) */
-    mov r9d, [rsp + 0]
-    add rsp, 40
-    jmp bsp_arrange_node
+    /* Child 1: update w -> w1 */
+    mov [rsp + 8], eax
+
+    /* Child 2: [x2, y, w2, h] */
+    mov [rsp + 16], ecx                      /* x2 */
+    mov eax, [rsp + 4]
+    mov [rsp + 20], eax                      /* y */
+    mov [rsp + 24], edx                      /* w2 */
+    mov eax, [rsp + 12]
+    mov [rsp + 28], eax                      /* h */
+    jmp ws_split_dispatch
 
 ws_split_horizontal:
-    /* Horizontal Split */
-    shr r9d, 1
-    sub r9d, GAP_PX / 2         /* h1 */
+    /* Horizontal Split (Y axis) */
+    mov eax, [rsp + 12]                      /* h */
+    shr eax, 1                               /* h / 2 */
+    lea ecx, [rax + 2]                       /* delta = (h / 2) + 2 */
+    sub eax, 2                               /* h1 = (h / 2) - 2 */
+    mov edx, [rsp + 12]
+    sub edx, ecx                             /* h2 = h - delta */
+    add ecx, [rsp + 4]                       /* y2 = y + delta */
+
+    /* Child 1: update h -> h1 */
+    mov [rsp + 12], eax
+
+    /* Child 2: [x, y2, w, h2] */
+    mov eax, [rsp + 0]
+    mov [rsp + 16], eax                      /* x */
+    mov [rsp + 20], ecx                      /* y2 */
+    mov eax, [rsp + 8]
+    mov [rsp + 24], eax                      /* w */
+    mov [rsp + 28], edx                      /* h2 */
+
+ws_split_dispatch:
+    /* Dispatch Child 1 */
+    mov rdi, [rsp + 32]                      /* Parent node */
     mov rdi, [rdi + NODE_FIRST]
+    movups xmm0, [rsp]                       /* Child 1 rect in 1 SIMD load */
     call bsp_arrange_node
 
-    mov rdi, [rsp + 32]
+    /* Dispatch Child 2 (Precalculated! 0 recomputation!) */
+    mov rdi, [rsp + 32]                      /* Parent node */
     mov rdi, [rdi + NODE_SECOND]
-    mov esi, [rsp + 24]
-    mov edx, [rsp + 16]
-    mov eax, [rsp + 0]
-    shr eax, 1
-    add edx, eax
-    add edx, GAP_PX - (GAP_PX / 2)  /* y2 = y + h1 + gap */
-    mov r8d, [rsp + 8]
-    mov r9d, [rsp + 0]
-    sub r9d, edx
-    add r9d, [rsp + 16]         /* h2 = h - (y2 - y) */
-    add rsp, 40
-    jmp bsp_arrange_node
+    movups xmm0, [rsp + 16]                  /* Child 2 rect in 1 SIMD load */
+    add rsp, 40                              /* Pop frame + parent (32 + 8) */
+    jmp bsp_arrange_node                     /* Pure Tail Call! */
 
 
 /*
@@ -2274,22 +2318,12 @@ nid_climb:
     cmp eax, r13d
     jne nid_climb_next
 
-    /* Check if current child is first or second */
-    mov eax, 1                  /* on_first = 1 */
+    /* Branchless check: on_first = (first == r12), want_first = (dir == 0) */
     cmp [rbx + NODE_FIRST], r12
-    je on_first_done
-    xor eax, eax                /* on_first = 0 */
-on_first_done:
-
-    /* want_first = (dir == 0) */
-    mov edx, 1
+    sete al
     test r14d, r14d
-    jz want_first_done
-    xor edx, edx
-want_first_done:
-
-    /* if (on_first != want_first) we can cross this split boundary */
-    cmp eax, edx
+    setz dl
+    cmp al, dl
     jne nid_found_branch
 
 nid_climb_next:
@@ -2297,13 +2331,11 @@ nid_climb_next:
     jmp nid_climb
 
 nid_found_branch:
-    /* c = want_first ? parent->first : parent->second */
-    test edx, edx
-    jnz take_first_child
+    /* Branchless child selection: want_first ? parent->first : parent->second */
     mov r15, [rbx + NODE_SECOND]
-    jmp dive_down
-take_first_child:
-    mov r15, [rbx + NODE_FIRST]
+    mov rax, [rbx + NODE_FIRST]
+    test dl, dl
+    cmovnz r15, rax
 
 dive_down:
     test r15, r15
@@ -2316,23 +2348,19 @@ dive_down:
     cmp eax, r13d
     je dive_same_orient
 
-    /* Perpendicular split: follow last-focused history bit (bit 7 of NODE_INFO) */
+    /* Perpendicular split: follow last-focused history bit (bit 7 of NODE_INFO) branchlessly */
     test byte ptr [r15 + NODE_INFO], 0x80
-    jnz dive_perp_second
+    mov rax, [r15 + NODE_SECOND]
     mov r15, [r15 + NODE_FIRST]
-    jmp dive_down
-dive_perp_second:
-    mov r15, [r15 + NODE_SECOND]
+    cmovnz r15, rax
     jmp dive_down
 
 dive_same_orient:
-    /* Same orientation: take opposite side of dir to land on closest neighbor */
-    test r14d, r14d
-    jz dive_take_second
-    mov r15, [r15 + NODE_FIRST]
-    jmp dive_down
-dive_take_second:
+    /* Same orientation: take opposite side of dir to land on closest neighbor branchlessly */
+    mov rax, [r15 + NODE_FIRST]
     mov r15, [r15 + NODE_SECOND]
+    test r14d, r14d
+    cmovnz r15, rax
     jmp dive_down
 
 nid_success:
@@ -2484,11 +2512,11 @@ cmd_menu:
     .asciz "[ -x $HOME/dotfiles/scripts/nviciod.sh ] && $HOME/dotfiles/scripts/nviciod.sh || ([ -x $HOME/dotfile/dmenuscript ] && $HOME/dotfile/dmenuscript || st)"
 
 cmd_term:
-    .asciz "st"
+    .asciz "[ \"$DISPLAY\" != \":0\" ] && st || (ftasm 2>/dev/null || st)"
     /* .asciz "st || alacritty || kitty" */
 
 cmd_autostart:
-    .asciz "command -v setxkbmap >/dev/null 2>&1 && setxkbmap -option caps:escape; command -v xset >/dev/null 2>&1 && xset r rate 180 250"
+    .asciz "command -v setxkbmap >/dev/null 2>&1 && setxkbmap -option caps:escape; command -v xset >/dev/null 2>&1 && xset r rate 180 250; command -v xset >/dev/null 2>&1 && xset +fp /home/a/.fonts && xset fp rehash"
 
 .align 8
 sh_argv_menu:
@@ -2595,12 +2623,15 @@ xorg_pid:       .quad 0
  */
 
 /* Monitor configuration: up to 2 monitors (16 bytes each: x, y, w, h) */
+.align 16
 mon_geom:       .space 32
 mon_cur_ws:     .byte 0, 0      /* Currently visible workspace index per monitor */
+                .space 6        /* Pad to 40 bytes */
 
-
-/* 9 Workspaces state */
+.align 64
+/* 9 Workspaces state (Cache-line aligned) */
 bsp_roots:      .space 72       /* 9 x 8 bytes pointers */
+.align 64
 bsp_focuses:    .space 72       /* 9 x 8 bytes pointers */
 last_focused_win: .long 0       /* Last window with active border (for de-focus) */
 free_node_head: .quad 0         /* O(1) recycled BSP node free-list head */
@@ -2623,15 +2654,15 @@ drag_start_y:   .long 0         /* Mouse Root Y at drag start */
  * Shared I/O Buffer (1056 bytes total) + node_pool (512 bytes) = 1568 bytes contiguous!
  * Entire ELF binary (.text + .data + ALL .bss) fits inside 2 physical 4 KB pages [0x400000..0x401fff]!
  */
-.align 8
+.align 64
 env_buf:        .space 160      /* Up to 19 env vars + DISPLAY=:0 + NULL for TTY login */
 tty_buf:        .space 32
 
-.align 8
+.align 64
 out_buf:
 in_buf:         .space 2048
 event_queue:    .space 288      /* Buffer for up to 9 X11 events (32 bytes each) */
 
-/* 128 nodes of 32 bytes = 4096 bytes (allocated on demand, Zero disk ELF space!) */
-.align 8
+/* 128 nodes of 32 bytes = 4096 bytes (64-byte aligned, pairs fit in exact L1 cache lines!) */
+.align 64
 node_pool:      .space 4096

@@ -111,7 +111,31 @@ else
     report_fail "Cross-monitor transfer" "Expected 2 windows on Workspace 1 (Monitor 1), found $COUNT_WS1"
 fi
 
-# 7. Clean exit
+# 7. Workspace Isolation (No ghosting across workspaces on dual-monitor)
+# Switch to Workspace 2 (Monitor 1) - WS 1 windows must be hidden offscreen (-9999)
+DISPLAY="$TEST_DISP" xdotool key alt+2
+sleep 0.4
+COUNT_WS2_EMPTY=$(DISPLAY="$TEST_DISP" xwininfo -root -tree 2>/dev/null | grep -E 'st|ftasm' | grep -v -- '-9999' | wc -l || true)
+if [ "$COUNT_WS2_EMPTY" -eq 0 ]; then
+    report_pass "Workspace isolation: WS 1 windows cleanly moved off-screen when switching to WS 2"
+else
+    report_fail "Workspace isolation" "WS 1 windows still visible on WS 2 ($COUNT_WS2_EMPTY onscreen)"
+fi
+
+# Open terminal on WS 2
+DISPLAY="$TEST_DISP" xdotool key alt+Return
+sleep 0.5
+# Switch to WS 3 (Monitor 1) - Both WS 1 and WS 2 windows must be hidden
+DISPLAY="$TEST_DISP" xdotool key alt+3
+sleep 0.4
+COUNT_WS3_EMPTY=$(DISPLAY="$TEST_DISP" xwininfo -root -tree 2>/dev/null | grep -E 'st|ftasm' | grep -v -- '-9999' | wc -l || true)
+if [ "$COUNT_WS3_EMPTY" -eq 0 ]; then
+    report_pass "Workspace isolation: Empty WS 3 has no ghost/preview of WS 1 or WS 2"
+else
+    report_fail "Workspace isolation" "Ghost windows visible on WS 3 ($COUNT_WS3_EMPTY onscreen)"
+fi
+
+# 8. Clean exit
 DISPLAY="$TEST_DISP" xdotool key alt+shift+q
 sleep 0.5
 if ! kill -0 "$WM_PID" 2>/dev/null; then
