@@ -390,21 +390,35 @@ handle_btn_press:
     mov [rax + 8*r14], rbx
     mov rdi, rbx
     call bsp_update_history
+
+    /*
+     * Unified Atomic Batch:
+     * 1. set_focus_buf (paints borders + SetInputFocus)
+     * 2. X_GetGeometry (8 bytes)
+     * 3. X_RaiseWindow (16 bytes)
+     * All combined and flushed in ONE single sys_write!
+     */
+    lea r15, [out_buf]
     mov edi, [drag_win]
-    call set_focus
+    call set_focus_buf
 
-    /* Query current window width and height via X_GetGeometry (Opcode 14, 8 bytes) */
     mov edx, [drag_win]
-    mov dword ptr [out_buf + 0], (2 << 16) | 14
-    mov [out_buf + 4], edx
+    mov rax, rdx
+    shl rax, 32
 
-    push SYS_WRITE
-    pop rax
-    mov edi, r13d
-    lea rsi, [out_buf]
-    push 8
-    pop rdx
-    syscall
+    /* Packet 1: X_GetGeometry (8 bytes) */
+    mov r8, rax
+    or r8, (2 << 16) | 14               /* Opcode 14, len = 2 words */
+    mov [r15 + 0], r8
+
+    /* Packet 2: X_RaiseWindow (ConfigureWindow, stack mode = Above) (16 bytes) */
+    or rax, (4 << 16) | 12              /* Opcode 12, len = 4 words */
+    mov [r15 + 8], rax
+    mov qword ptr [r15 + 16], 64        /* CWStackMode = Above */
+    add r15, 24
+
+    /* Flush focus + geometry query + raise in ONE syscall! */
+    call flush_out_buf
 
     /* Read 32-byte X_GetGeometry reply directly into in_buf */
     xor eax, eax                        /* SYS_READ */
@@ -421,20 +435,6 @@ handle_btn_press:
     movzx edx, word ptr [in_buf + 18]   /* height */
     mov [drag_orig_w], eax
     mov [drag_orig_h], edx
-
-    /* Raise window (stack mode = Above) */
-    mov edx, [drag_win]
-    mov dword ptr [out_buf + 0], (4 << 16) | 12
-    mov [out_buf + 4], edx
-    mov dword ptr [out_buf + 8], 64     /* CWStackMode = Above */
-    mov dword ptr [out_buf + 12], 0
-    push SYS_WRITE
-    pop rax
-    mov edi, r13d
-    lea rsi, [out_buf]
-    push 16
-    pop rdx
-    syscall
 
     /* Mark as floating (bit 5 in bpl) */
     or bpl, 32
