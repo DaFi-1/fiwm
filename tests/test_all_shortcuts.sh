@@ -19,8 +19,8 @@ cleanup() {
     pkill -f "st.*$TEST_DISP" 2>/dev/null || true
     rm -f "/tmp/.X11-unix/X${TEST_DISP#:}"
     rm -f /tmp/fiwm_dmenu_ran
-    rm -f /home/a/dotfile/dmenuscript 2>/dev/null || true
-    rmdir /home/a/dotfile 2>/dev/null || true
+    rm -f "$HOME/dotfile/dmenuscript" 2>/dev/null || true
+    rmdir "$HOME/dotfile" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
@@ -66,12 +66,12 @@ echo "[*] Compiling fiwm..."
 make fiwm >/dev/null
 
 # 2. Setup mock dmenuscript for Alt+d testing
-mkdir -p /home/a/dotfile
-cat << 'EOF' > /home/a/dotfile/dmenuscript
+mkdir -p "$HOME/dotfile"
+cat << 'EOF' > "$HOME/dotfile/dmenuscript"
 #!/bin/sh
 touch /tmp/fiwm_dmenu_ran
 EOF
-chmod +x /home/a/dotfile/dmenuscript
+chmod +x "$HOME/dotfile/dmenuscript"
 rm -f /tmp/fiwm_dmenu_ran
 
 # 3. Start Xephyr on isolated display

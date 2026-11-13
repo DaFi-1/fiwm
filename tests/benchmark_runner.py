@@ -33,7 +33,8 @@ def run_benchmark_for_binary(name, bin_path):
     time.sleep(0.2)
     
     # 1. Start headless parent
-    p_parent = subprocess.Popen(["python3", "/home/a/fiwm/tests/headless_parent.py", "800", "600"],
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    p_parent = subprocess.Popen(["python3", os.path.join(script_dir, "headless_parent.py"), "800", "600"],
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     time.sleep(0.2)
     line = p_parent.stdout.readline().decode().strip()
