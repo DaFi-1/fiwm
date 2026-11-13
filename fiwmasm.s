@@ -587,9 +587,7 @@ handle_enter:
     /* Update focus */
     mov [rbx + 8*r14], rax
     mov rdi, rax
-    push rdx
     call bsp_update_history
-    pop rdx
     mov edi, edx
     call set_focus
     jmp event_loop
@@ -735,14 +733,13 @@ key_focus_hjkl:
     test rax, rax
     jz event_loop               /* No window in that direction */
 
-    /* Set new focus */
+    /* Set new focus (register-direct, zero memory reload) */
     lea rbx, [bsp_focuses]
     mov [rbx + 8*r14], rax
+    mov r8d, [rax + NODE_WIN]   /* Keep win_id in r8d */
     mov rdi, rax
     call bsp_update_history
-    lea rbx, [bsp_focuses]
-    mov rax, [rbx + 8*r14]
-    mov edi, [rax + NODE_WIN]
+    mov edi, r8d
     call set_focus
     jmp event_loop
 
@@ -792,8 +789,6 @@ key_move_hjkl:
     mov [rbx + 8*r14], rax
     mov rdi, rax
     call bsp_update_history
-    lea rbx, [bsp_focuses]
-    mov rax, [rbx + 8*r14]
 
     /* Re-arrange grid and set focus in ONE atomic syscall */
     push r8
@@ -1261,10 +1256,9 @@ fw_focus:
     mov rdi, [rax + 8*r12]
     test rdi, rdi
     jz fw_focus_empty
-    push rdi
+    mov r8d, [rdi + NODE_WIN]   /* Keep win_id in r8d */
     call bsp_update_history
-    pop rdi
-    mov edi, [rdi + NODE_WIN]
+    mov edi, r8d
     call set_focus_buf
     jmp fw_flush
 
@@ -1930,11 +1924,10 @@ found_unmap_node:
     mov [rbx + 8*r14], rax
     test rax, rax
     jz no_focus_left
-    push rax
+    mov r8d, [rax + NODE_WIN]   /* Keep win_id in r8d */
     mov rdi, rax
     call bsp_update_history
-    pop rax
-    mov edi, [rax + NODE_WIN]
+    mov edi, r8d
     call set_focus_buf
     jmp unmap_arrange_and_flush
 no_focus_left:
