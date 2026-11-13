@@ -24,11 +24,11 @@ Zero C, zero libc, zero libX11 — comunicação direta via protocolo wire sobre
 
 | Segmento / Métrica | Tamanho | Descrição |
 |:---|:---:|:---|
-| **`.text`** | **5.888 B** (~5,7 KB) | Código de máquina executável puro (lógica BSP, eventos X11, barra e atalhos) |
+| **`.text`** | **5.872 B** (~5,7 KB) | Código de máquina executável puro (lógica BSP, eventos X11, barra e atalhos) |
 | **`.data`** | **855 B** | Estruturas de soquete Unix, strings estáticas e tabelas de despacho |
 | **`.bss`** | **9.408 B** (~9,2 KB) | Buffers de I/O em anel e pool L1 de nós para até 128 janelas |
-| **Total Mapeado (ELF)** | **16.151 B** (~16 KB) | Cabe inteiramente em 4 páginas virtuais x86_64 do Linux |
-| **Tamanho do Binário em Disco** | **7,0 KB** (7.224 B) | Executável final estático e stripped (sem dependências dinâmicas) |
+| **Total Mapeado (ELF)** | **16.135 B** (~16 KB) | Cabe inteiramente em 4 páginas virtuais x86_64 do Linux |
+| **Tamanho do Binário em Disco** | **7,0 KB** (7.208 B) | Executável final estático e stripped (sem dependências dinâmicas) |
 | **RAM em Execução (`VmRSS`)** | **24 kB** | Menor consumo de memória da categoria (piso base do kernel Linux) |
 | **Consumo de Pilha (Stack)** | **0 B** | Arquitetura zero-stack com invariantes globais em registradores |
 | **Tempo de Startup a Frio** | **~0,55 ms** | Conexão, autodetecção dual-monitor, barra e 72 atalhos em menos de 1 ms |
