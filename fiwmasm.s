@@ -1959,6 +1959,7 @@ td_check_hash:
     mov dword ptr [rcx + 0], 0
     mov qword ptr [rcx + 8], 0
 td_hash_done:
+    mov dword ptr [r8 + NODE_WIN], 0    /* Clear window ID so free/detached nodes never match linear scan */
 
     mov r10, [r8 + NODE_PARENT]
     test r10, r10
@@ -2113,156 +2114,44 @@ bfwg_hash_inv:
     mov dword ptr [rdx + 0], 0
     mov qword ptr [rdx + 8], 0
 
-    /* 3. Fallback: Search all workspaces if hash missed (e.g. hash collision) */
+    /* 3. Fallback: Flat L1 linear scan of node_pool (zero stack, zero recursion) */
 bfwg_scan_fallback:
-    mov r10d, esi
-    xor r11d, r11d
+    mov ecx, [node_idx]         /* total nodes allocated so far (<= 128) */
+    test ecx, ecx
+    jz bfwg_null
+    lea rdx, [node_pool]
+
 bfwg_scan_loop:
-    lea rax, [bsp_roots]
-    mov rdi, [rax + 8*r11]
-    test rdi, rdi
-    jz bfwg_scan_next
-    mov esi, r10d
-    call bsp_find_node_by_win
-    test rax, rax
-    jnz bfwg_found_fallback
-bfwg_scan_next:
-    inc r11d
-    cmp r11d, WORKSPACE_COUNT
-    jl bfwg_scan_loop
+    cmp [rdx + NODE_WIN], esi
+    je bfwg_found
+    add rdx, 32                 /* 32 bytes per node */
+    dec ecx
+    jnz bfwg_scan_loop
 
 bfwg_not_found:
 bfwg_null:
     xor eax, eax
     ret
 
-bfwg_found_fallback:
-    /* Cache in MRU and Hash Table */
-    mov [win_mru_id], r10d
+bfwg_found:
+    mov rax, rdx                /* rax = leaf node pointer */
+    mov [win_mru_id], esi
     mov [win_mru_node], rax
-    mov edx, r10d
+
+    /* Update Hash Table bucket */
+    mov edx, esi
     shr edx, 4
-    xor edx, r10d
+    xor edx, esi
     and edx, 31
     shl edx, 4
     lea r8, [win_hash_tab + rdx]
-    mov [r8 + 0], r10d
+    mov [r8 + 0], esi
     mov [r8 + 8], rax
+
+    /* Extract workspace index (0..8) into ecx */
     movzx ecx, byte ptr [rax + NODE_INFO]
     shr ecx, 1
     and ecx, 0xF
-    ret
-
-bsp_find_node_by_win:
-    test rdi, rdi
-    jz bfn_null
-    test esi, esi
-    jz bfn_null
-
-    /* 1. Fast Path: 1-entry MRU Cache (~1 cycle) */
-    cmp esi, [win_mru_id]
-    jne bfn_check_hash
-    mov rax, [win_mru_node]
-    test rax, rax
-    jz bfn_check_hash
-    cmp [rax + NODE_WIN], esi
-    jne bfn_mru_inv
-    movzx ecx, byte ptr [rax + NODE_INFO]
-    shr ecx, 1
-    and ecx, 0xF
-    cmp ecx, WORKSPACE_COUNT
-    jge bfn_mru_inv
-    lea r8, [bsp_roots]
-    cmp rdi, [r8 + 8*rcx]
-    je bfn_ret_ok
-    xor eax, eax
-    ret
-bfn_mru_inv:
-    mov dword ptr [win_mru_id], 0
-
-    /* 2. O(1) Path: 32-entry Direct Hash Table (~3 cycles) */
-bfn_check_hash:
-    mov eax, esi
-    shr eax, 4
-    xor eax, esi
-    and eax, 31
-    shl eax, 4
-    lea rdx, [win_hash_tab + rax]
-    cmp [rdx + 0], esi
-    jne bfn_tree_search
-    mov rax, [rdx + 8]
-    test rax, rax
-    jz bfn_tree_search
-    cmp [rax + NODE_WIN], esi
-    jne bfn_hash_inv
-    movzx ecx, byte ptr [rax + NODE_INFO]
-    shr ecx, 1
-    and ecx, 0xF
-    cmp ecx, WORKSPACE_COUNT
-    jge bfn_hash_inv
-    lea r8, [bsp_roots]
-    cmp rdi, [r8 + 8*rcx]
-    jne bfn_hash_diff_ws
-    /* HIT: Promote to MRU and return */
-    mov [win_mru_id], esi
-    mov [win_mru_node], rax
-bfn_ret_ok:
-    ret
-
-bfn_hash_diff_ws:
-    /* Window belongs to another workspace root: tree rdi does NOT contain it */
-    xor eax, eax
-    ret
-
-bfn_hash_inv:
-    mov dword ptr [rdx + 0], 0
-
-    /* 3. Slow Path Fallback: Recursive BSP Tree Traversal */
-bfn_tree_search:
-    cmp [rdi + NODE_WIN], esi
-    je bfn_found_and_cache
-    cmp dword ptr [rdi + NODE_WIN], 0
-    jne bfn_null
-
-    push rdi
-    mov rdi, [rdi + NODE_FIRST]
-    test rdi, rdi
-    jz bfn_skip_first
-    call bfn_tree_search
-    test rax, rax
-    jnz bfn_pop_ret
-bfn_skip_first:
-    mov rdi, [rsp]
-    mov rdi, [rdi + NODE_SECOND]
-    test rdi, rdi
-    jz bfn_skip_second
-    call bfn_tree_search
-    test rax, rax
-    jnz bfn_pop_ret
-bfn_skip_second:
-    xor eax, eax
-bfn_pop_ret:
-    pop rdi
-    ret
-
-bfn_found_and_cache:
-    mov rax, rdi
-    /* Cache in MRU */
-    mov [win_mru_id], esi
-    mov [win_mru_node], rax
-    /* Cache in Hash Table */
-    mov ecx, esi
-    shr ecx, 4
-    xor ecx, esi
-    and ecx, 31
-    shl ecx, 4
-    lea rdx, [win_hash_tab + rcx]
-    mov [rdx + 0], esi
-    mov [rdx + 8], rax
-    ret
-
-bfn_null:
-    xor eax, eax
     ret
 
 /*
