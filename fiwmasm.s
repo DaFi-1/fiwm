@@ -1954,33 +1954,25 @@ td_done:
 
 /*
  * alloc_node() -> rax = pointer to new 32-byte aligned node
- * O(1) L1-hot Free-List recycler with fallback to bump allocator in node_pool.
+ * Zero-Overhead Fast-Path Allocator:
+ * - Fresh nodes: Bump allocator in zero-initialized .bss pool (5 instructions, 0 zeroing stalls)
+ * - Recycled nodes: O(1) L1-hot Free-List pop with atomic vector reset
  */
 alloc_node:
     mov rax, [free_node_head]
     test rax, rax
-    jz alloc_from_pool
+    jnz 1f
+    mov eax, [node_idx]
+    inc dword ptr [node_idx]
+    shl rax, 5
+    lea rax, [node_pool + rax]
+    ret
+1:
     mov rdx, [rax + NODE_FIRST]
     mov [free_node_head], rdx
-    prefetcht0 [rdx]            /* L1 Cache Prefetch: warm up next free node */
-    jmp alloc_zero_node
-
-alloc_from_pool:
-    mov eax, [node_idx]
-    cmp eax, 127                /* Support up to 128 nodes (~64 simultaneous windows) */
-    jge alloc_fail
-    inc dword ptr [node_idx]
-    shl rax, 5                  /* rax * 32 bytes */
-    lea rdx, [node_pool]
-    add rax, rdx
-alloc_zero_node:
-    /* SIMD 128-bit Vectorized Node Zeroing (clears full 32 bytes in 2 stores) */
     pxor xmm0, xmm0
-    movdqa [rax + 0], xmm0      /* Clears NODE_WIN, NODE_INFO, pad, NODE_FIRST (16 bytes) */
-    movdqa [rax + 16], xmm0     /* Clears NODE_SECOND, NODE_PARENT (16 bytes) */
-    ret
-alloc_fail:
-    lea rax, [node_pool]
+    movdqa [rax + 0], xmm0
+    movdqa [rax + 16], xmm0
     ret
 
 bsp_first_leaf:
