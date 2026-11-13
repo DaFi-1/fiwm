@@ -392,22 +392,10 @@ handle_btn_press:
     cmp ecx, r14d
     jne event_loop                      /* Not in active workspace */
 
-    /* Update focus to clicked window */
-    mov rbx, rax
-    lea rax, [bsp_focuses]
-    mov [rax + 8*r14], rbx
-    mov rdi, rbx
-    call bsp_update_history
-
-    /*
-     * Unified Atomic Batch:
-     * 1. set_focus_buf (paints borders + SetInputFocus)
-     * 2. X_GetGeometry (8 bytes)
-     * 3. X_RaiseWindow (16 bytes)
-     * All combined and flushed in ONE single sys_write!
-     */
-    mov edi, [drag_win]
-    call set_focus_buf
+    /* Update focus to clicked window and paint active borders */
+    mov rdi, rax
+    mov esi, r14d
+    call activate_node_focus
 
     mov edx, [drag_win]
     mov rax, rdx
@@ -699,11 +687,10 @@ key_hjkl_disp:
     mov r10d, edx               /* r10d = state/modifiers */
     and r10d, 1                 /* bit 0 = ShiftMask */
 
-    lea rbx, [bsp_focuses]
-    mov rdi, [rbx + 8*r14]      /* rdi = current focused leaf */
-    test rdi, rdi
+    call get_active_leaf
     jz event_loop
-    mov rbx, rdi                /* rbx = current focused leaf (callee-saved) */
+    mov rbx, rax                /* rbx = current focused leaf (callee-saved) */
+    mov rdi, rax
 
     call hjkl_decode_dir        /* esi = orient, edx = dir */
     call bsp_node_in_direction  /* rax = neighbor leaf node */
@@ -796,12 +783,7 @@ key_term:
     jmp event_loop
 
 key_kill:
-    lea rbx, [bsp_focuses]
-    mov rax, [rbx + 8*r14]
-    test rax, rax
-    jz event_loop
-    mov edx, [rax + NODE_WIN]
-    test edx, edx
+    call get_active_leaf
     jz event_loop
 
     /*
@@ -849,12 +831,7 @@ key_floating:
     mov r10d, 32                /* bit 5: is_floating */
 
 toggle_win_presentation:
-    lea rbx, [bsp_focuses]
-    mov rax, [rbx + 8*r14]
-    test rax, rax
-    jz event_loop
-    mov edx, [rax + NODE_WIN]
-    test edx, edx
+    call get_active_leaf
     jz event_loop
 
     xor bpl, r10b               /* Toggle presentation mode flag */
@@ -935,6 +912,18 @@ win_restore_layout:
     mov edi, r14d
     call bsp_arrange_ws
     jmp event_loop
+
+/*
+ * get_active_leaf() -> rax = leaf_node, edx = win_id (ZF set if no active window)
+ */
+get_active_leaf:
+    lea rax, [bsp_focuses]
+    mov rax, [rax + 8*r14]
+    test rax, rax
+    jz 1f
+    mov edx, [rax + NODE_WIN]
+    test edx, edx
+1:  ret
 
 /*
  * activate_node_focus(rdi = leaf_node_ptr, esi = ws_idx)
@@ -1194,14 +1183,10 @@ move_window_to_workspace:
     mov r12d, edi               /* target_ws */
 
     /* Get current focused leaf */
-    lea rax, [bsp_focuses]
-    mov rdi, [rax + 8*r14]
-    test rdi, rdi
+    call get_active_leaf
     jz mw_done
-
-    mov ebx, [rdi + NODE_WIN]   /* ebx = win */
-    test ebx, ebx
-    jz mw_done
+    mov rdi, rax
+    mov ebx, edx                /* ebx = win */
 
     /* Detach from current workspace (rdi = leaf_node) */
     call bsp_tree_detach
