@@ -1831,23 +1831,22 @@ ws_has_focus:
     mov ecx, ebp
     shr cl, 1
     and cl, 3
-    jnz ws_use_chosen
+    jz ws_auto_split
 
-    /* Alternate split: invert bit 0 of parent's NODE_INFO */
-    mov rax, [r10 + NODE_PARENT]
-    test rax, rax
-    jz ws_def_v
-    mov cl, [rax + NODE_INFO]
-    and cl, 1
-    xor cl, 1
-    jmp ws_apply_split
-ws_def_v:
-    xor cl, cl
-    jmp ws_apply_split
-
-ws_use_chosen:
+    /* Explicit split chosen by user (Alt+v or Alt+b) */
     dec cl                      /* 1 -> 0 (V), 2 -> 1 (H) */
     and bpl, ~6                 /* clear next_split_sel bits 1..2 */
+    jmp ws_apply_split
+
+ws_auto_split:
+    /* Alternate split: invert parent's split bit (or 0 if root) */
+    xor ecx, ecx
+    mov rax, [r10 + NODE_PARENT]
+    test rax, rax
+    jz ws_apply_split
+    movzx ecx, byte ptr [rax + NODE_INFO]
+    xor ecx, 1
+    and ecx, 1
 
 ws_apply_split:
     lea edx, [r8 + r8]          /* ws_idx << 1 */
@@ -1861,21 +1860,21 @@ ws_apply_split:
     mov [r10 + NODE_PARENT], r11
     mov [r9 + NODE_PARENT], r11
 
-    mov rax, [r11 + NODE_PARENT]
+    /* Branchless parent / root slot selection */
+    lea rcx, [bsp_roots]
+    lea rcx, [rcx + 8*r8]       /* Default target: &bsp_roots[ws_idx] */
+
     test rax, rax
-    jz ws_new_root
+    jz ws_link_done             /* If no parent, r11 becomes new root */
 
-    cmp [rax + NODE_FIRST], r10
-    jne ws_link_second
-    mov [rax + NODE_FIRST], r11
-    jmp ws_insert_done
-ws_link_second:
-    mov [rax + NODE_SECOND], r11
-    jmp ws_insert_done
+    /* Parent exists: select first or second child slot branchlessly via cmove */
+    lea rdx, [rax + NODE_FIRST]
+    lea rcx, [rax + NODE_SECOND]
+    cmp [rdx], r10
+    cmove rcx, rdx              /* If first == r10, rcx = &parent->first, else &parent->second */
 
-ws_new_root:
-    lea rax, [bsp_roots]
-    mov [rax + 8*r8], r11
+ws_link_done:
+    mov [rcx], r11              /* Link new split node into parent or root slot */
 
 ws_insert_done:
     lea rax, [bsp_focuses]
