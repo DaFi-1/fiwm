@@ -2416,59 +2416,92 @@ bsp_arrange_node:
 
 do_ws_split:
     push rdi                                 /* Save parent node (8 bytes) */
-    sub rsp, 32                              /* Allocate 32 bytes for child rects */
-    movups [rsp], xmm0                       /* [rsp] = Child 1 [x, y, w, h] (initialized from parent) */
-    movups [rsp + 16], xmm0                  /* [rsp + 16] = Child 2 [x, y, w, h] (SIMD cloned!) */
+    sub rsp, 16                              /* Allocate 16 bytes for Child 2 rect */
+
+    movq rax, xmm0                           /* rax = (y << 32) | x */
+    movhlps xmm1, xmm0
+    movq rdx, xmm1                           /* rdx = (h << 32) | w */
+
+    mov r8d, eax                             /* r8d = x */
+    mov r9, rax
+    shr r9, 32                               /* r9d = y */
+    mov r10d, edx                            /* r10d = w */
+    mov r11, rdx
+    shr r11, 32                              /* r11d = h */
 
     test byte ptr [rdi + NODE_INFO], 1       /* Bit 0 = split_type (0=V, 1=H) */
     jnz ws_split_horizontal
 
-    /* Vertical Split (X axis) */
-    mov eax, [rsp + 8]                       /* w */
-    shr eax, 1                               /* w / 2 */
-    lea ecx, [rax + 2]                       /* delta = (w / 2) + 2 */
-    sub eax, 2                               /* w1 = (w / 2) - 2 */
-    mov edx, [rsp + 8]
-    sub edx, ecx                             /* w2 = w - delta */
-    add ecx, [rsp + 0]                       /* x2 = x + delta */
+    /* Vertical Split (X axis): r10d = w, r8d = x */
+    mov ecx, r10d
+    shr ecx, 1                               /* half_w = w / 2 */
+    lea esi, [rcx + 2]                       /* delta = (w / 2) + 2 */
+    sub ecx, 2                               /* w1 = half_w - 2 */
+    sub r10d, esi                            /* w2 = w - delta */
+    add r8d, esi                             /* x2 = x + delta */
 
-    /* Child 1: update w -> w1 */
-    mov [rsp + 8], eax
+    /* Child 1: low = rax ([x, y]), high = (h << 32) | w1 */
+    mov rdx, r11
+    shl rdx, 32
+    mov ecx, ecx
+    or rdx, rcx                              /* rdx = (h << 32) | w1 */
 
-    /* Child 2: update x -> x2, w -> w2 (y and h are already cloned in SIMD!) */
-    mov [rsp + 16], ecx                      /* x2 */
-    mov [rsp + 24], edx                      /* w2 */
+    /* Child 2: low = (y << 32) | x2, high = (h << 32) | w2 */
+    mov rcx, r9
+    shl rcx, 32
+    mov r8d, r8d
+    or rcx, r8                               /* rcx = (y << 32) | x2 */
+    mov rsi, r11
+    shl rsi, 32
+    mov r10d, r10d
+    or rsi, r10                              /* rsi = (h << 32) | w2 */
     jmp ws_split_dispatch
 
 ws_split_horizontal:
-    /* Horizontal Split (Y axis) */
-    mov eax, [rsp + 12]                      /* h */
-    shr eax, 1                               /* h / 2 */
-    lea ecx, [rax + 2]                       /* delta = (h / 2) + 2 */
-    sub eax, 2                               /* h1 = (h / 2) - 2 */
-    mov edx, [rsp + 12]
-    sub edx, ecx                             /* h2 = h - delta */
-    add ecx, [rsp + 4]                       /* y2 = y + delta */
+    /* Horizontal Split (Y axis): r11d = h, r9d = y */
+    mov ecx, r11d
+    shr ecx, 1                               /* half_h = h / 2 */
+    lea esi, [rcx + 2]                       /* delta = (h / 2) + 2 */
+    sub ecx, 2                               /* h1 = half_h - 2 */
+    sub r11d, esi                            /* h2 = h - delta */
+    add r9d, esi                             /* y2 = y + delta */
 
-    /* Child 1: update h -> h1 */
-    mov [rsp + 12], eax
+    /* Child 1: low = rax ([x, y]), high = (h1 << 32) | w */
+    mov rdx, rcx
+    shl rdx, 32
+    mov r10d, r10d
+    or rdx, r10                              /* rdx = (h1 << 32) | w */
 
-    /* Child 2: update y -> y2, h -> h2 (x and w are already cloned in SIMD!) */
-    mov [rsp + 20], ecx                      /* y2 */
-    mov [rsp + 28], edx                      /* h2 */
+    /* Child 2: low = (y2 << 32) | x, high = (h2 << 32) | w */
+    mov rcx, r9
+    shl rcx, 32
+    mov r8d, r8d
+    or rcx, r8                               /* rcx = (y2 << 32) | x */
+    mov rsi, r11
+    shl rsi, 32
+    mov r10d, r10d
+    or rsi, r10                              /* rsi = (h2 << 32) | w */
 
 ws_split_dispatch:
+    /* Store Child 2 to [rsp] (16 bytes, naturally 64-bit aligned!) */
+    mov [rsp + 0], rcx                       /* Child 2 [x2, y2] */
+    mov [rsp + 8], rsi                       /* Child 2 [w2, h2] */
+
+    /* Pack Child 1 into xmm0 directly in registers */
+    movq xmm0, rax                           /* Child 1 [x, y] */
+    movq xmm1, rdx                           /* Child 1 [w, h] */
+    punpcklqdq xmm0, xmm1                    /* xmm0 = Child 1 [x, y, w, h] */
+
     /* Dispatch Child 1 */
-    mov rdi, [rsp + 32]                      /* Parent node */
+    mov rdi, [rsp + 16]                      /* Parent node */
     mov rdi, [rdi + NODE_FIRST]
-    movups xmm0, [rsp]                       /* Child 1 rect in 1 SIMD load */
     call bsp_arrange_node
 
-    /* Dispatch Child 2 (Precalculated! 0 recomputation!) */
-    mov rdi, [rsp + 32]                      /* Parent node */
+    /* Dispatch Child 2 (zero recomputation!) */
+    mov rdi, [rsp + 16]                      /* Parent node */
     mov rdi, [rdi + NODE_SECOND]
-    movups xmm0, [rsp + 16]                  /* Child 2 rect in 1 SIMD load */
-    add rsp, 40                              /* Pop frame + parent (32 + 8) */
+    movups xmm0, [rsp]                       /* Child 2 rect */
+    add rsp, 24                              /* Clean up frame + parent (16 + 8) */
     jmp bsp_arrange_node                     /* Pure Tail Call! */
 
 
