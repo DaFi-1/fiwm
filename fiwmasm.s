@@ -289,8 +289,8 @@ setup_drained:
 
 event_loop:
     /* Check if event_queue still has buffered events */
-    mov eax, [rip + ev_q_head]
-    cmp eax, [rip + ev_q_tail]
+    mov ecx, [rip + ev_q_head]
+    cmp ecx, [rip + ev_q_tail]
     jl ev_pop_buffered
 
     /* Coalesced I/O Flush: send all pending X11 commands before blocking on sys_read */
@@ -306,21 +306,22 @@ event_loop:
     test eax, eax
     jle exit_clean
 
-    /* Initialize queue head = 0, tail = bytes read */
-    mov dword ptr [rip + ev_q_head], 0
+    /* Initialize queue head = 0 (ecx), tail = bytes read (eax) */
+    xor ecx, ecx
     mov [rip + ev_q_tail], eax
 
 ev_pop_buffered:
     /* Capacity safety check: flush if out_buf > 1536 bytes to prevent overflow */
-    lea rax, [rip + out_buf + 1536]
-    cmp r15, rax
+    cmp r15d, offset out_buf + 1536
     jb 1f
+    push rcx
     call flush_out_buf
+    pop rcx
 1:
     /* Zero-Copy Event Dispatch: read directly from [event_queue + rcx] in rsi! */
-    mov ecx, [rip + ev_q_head]
+    lea eax, [rcx + 32]
+    mov [rip + ev_q_head], eax
     lea rsi, [event_queue + rcx]
-    add dword ptr [rip + ev_q_head], 32
 
     movzx eax, byte ptr [rsi]
     and eax, 0x7F
@@ -454,19 +455,21 @@ handle_motion:
     jz event_loop
 
     /* Event Coalescing: compress consecutive MotionNotify events */
-motion_coalesce_loop:
     mov eax, [rip + ev_q_head]
-    cmp eax, [rip + ev_q_tail]
+    mov ecx, [rip + ev_q_tail]
+motion_coalesce_loop:
+    cmp eax, ecx
     jge motion_process
     movzx r11d, byte ptr [event_queue + rax]
     and r11b, 0x7F
     cmp r11b, 6
     jne motion_process
     lea rsi, [event_queue + rax]
-    add dword ptr [rip + ev_q_head], 32
+    add eax, 32
     jmp motion_coalesce_loop
 
 motion_process:
+    mov [rip + ev_q_head], eax
     movsx ecx, word ptr [rsi + 20]      /* current rootX */
     movsx r8d, word ptr [rsi + 22]      /* current rootY */
 
@@ -965,8 +968,8 @@ sfb_root_focus:
     mov [r15 + 0], rax
     mov dword ptr [r15 + 8], 0
 
-    /* Packet 2: X_ClearArea on root window (Opcode 61, exposures=1, w=0, h=0) (16 bytes) */
-    mov dword ptr [r15 + 12], (4 << 16) | (1 << 8) | 61
+    /* Packet 2: X_ClearArea on root window (Opcode 61, exposures=0, w=0, h=0) (16 bytes) */
+    mov dword ptr [r15 + 12], (4 << 16) | 61
     mov [r15 + 16], edx
     mov qword ptr [r15 + 20], 0
     add r15, 28
@@ -1239,6 +1242,13 @@ emit_hide_win_pkt:
  * Scans node_pool and emits 20-byte off-screen ConfigureWindow packets for all active windows in ws_idx.
  */
 hide_ws_windows:
+    mov rdi, [bsp_roots + 8*rbx]
+    test rdi, rdi
+    jz hww_done
+    mov edi, [rdi + NODE_WIN]
+    test edi, edi
+    jnz emit_hide_win_pkt       /* O(1) Fast Path: single-window workspace */
+
     mov ecx, [rip + node_idx]
     test ecx, ecx
     jz hww_done
@@ -1938,7 +1948,7 @@ win_cache_put:
     mov [rip + win_mru_id], edi
     mov [rip + win_mru_node], rsi
     mov edx, edi
-    shr edx, 4
+    shr edx, 21
     xor edx, edi
     and edx, 31
     shl edx, 4
@@ -1961,7 +1971,7 @@ win_cache_evict:
     mov qword ptr [rip + win_mru_node], 0
 2:
     mov edx, edi
-    shr edx, 4
+    shr edx, 21
     xor edx, edi
     and edx, 31
     shl edx, 4
@@ -2002,7 +2012,7 @@ bfwg_mru_inv:
     /* 2. O(1) Path: 32-entry Direct Hash Table (~3 cycles) */
 bfwg_check_hash:
     mov eax, esi
-    shr eax, 4
+    shr eax, 21
     xor eax, esi
     and eax, 31
     shl eax, 4
@@ -2127,84 +2137,25 @@ bsp_arrange_node:
 
 do_ws_split:
     push rdi                                 /* Save parent node (8 bytes) */
-    sub rsp, 16                              /* Allocate 16 bytes for Child 2 rect */
+    sub rsp, 16                              /* Allocate 16 bytes for rect buffer */
+    movups [rsp], xmm0                       /* Store [x, y, w, h] */
 
-    movq rax, xmm0                           /* rax = (y << 32) | x */
-    movhlps xmm1, xmm0
-    movq rdx, xmm1                           /* rdx = (h << 32) | w */
+    movzx eax, byte ptr [rdi + NODE_INFO]
+    and eax, 1                               /* rax = 0 (Vertical: x,w) or 1 (Horizontal: y,h) */
 
-    mov r8d, eax                             /* r8d = x */
-    mov r9, rax
-    shr r9, 32                               /* r9d = y */
-    mov r10d, edx                            /* r10d = w */
-    mov r11, rdx
-    shr r11, 32                              /* r11d = h */
+    mov ecx, [rsp + 4*rax + 8]               /* ecx = dim (w or h) */
+    mov edx, ecx
+    shr ecx, 1                               /* half = dim / 2 */
+    lea esi, [rcx - 2]                       /* dim1 = half - 2 */
+    mov [rsp + 4*rax + 8], esi               /* Write Child 1 dim1 */
+    movups xmm0, [rsp]                       /* xmm0 = Child 1 [x, y, w1, h] or [x, y, w, h1] */
 
-    test byte ptr [rdi + NODE_INFO], 1       /* Bit 0 = split_type (0=V, 1=H) */
-    jnz ws_split_horizontal
-
-    /* Vertical Split (X axis): r10d = w, r8d = x */
-    mov ecx, r10d
-    shr ecx, 1                               /* half_w = w / 2 */
-    lea esi, [rcx + 2]                       /* delta = (w / 2) + 2 */
-    sub ecx, 2                               /* w1 = half_w - 2 */
-    sub r10d, esi                            /* w2 = w - delta */
-    add r8d, esi                             /* x2 = x + delta */
-
-    /* Child 1: low = rax ([x, y]), high = (h << 32) | w1 */
-    mov rdx, r11
-    shl rdx, 32
-    mov ecx, ecx
-    or rdx, rcx                              /* rdx = (h << 32) | w1 */
-
-    /* Child 2: low = (y << 32) | x2, high = (h << 32) | w2 */
-    mov rcx, r9
-    shl rcx, 32
-    mov r8d, r8d
-    or rcx, r8                               /* rcx = (y << 32) | x2 */
-    mov rsi, r11
-    shl rsi, 32
-    mov r10d, r10d
-    or rsi, r10                              /* rsi = (h << 32) | w2 */
-    jmp ws_split_dispatch
-
-ws_split_horizontal:
-    /* Horizontal Split (Y axis): r11d = h, r9d = y */
-    mov ecx, r11d
-    shr ecx, 1                               /* half_h = h / 2 */
-    lea esi, [rcx + 2]                       /* delta = (h / 2) + 2 */
-    sub ecx, 2                               /* h1 = half_h - 2 */
-    sub r11d, esi                            /* h2 = h - delta */
-    add r9d, esi                             /* y2 = y + delta */
-
-    /* Child 1: low = rax ([x, y]), high = (h1 << 32) | w */
-    mov rdx, rcx
-    shl rdx, 32
-    mov r10d, r10d
-    or rdx, r10                              /* rdx = (h1 << 32) | w */
-
-    /* Child 2: low = (y2 << 32) | x, high = (h2 << 32) | w */
-    mov rcx, r9
-    shl rcx, 32
-    mov r8d, r8d
-    or rcx, r8                               /* rcx = (y2 << 32) | x */
-    mov rsi, r11
-    shl rsi, 32
-    mov r10d, r10d
-    or rsi, r10                              /* rsi = (h2 << 32) | w */
-
-ws_split_dispatch:
-    /* Store Child 2 to [rsp] (16 bytes, naturally 64-bit aligned!) */
-    mov [rsp + 0], rcx                       /* Child 2 [x2, y2] */
-    mov [rsp + 8], rsi                       /* Child 2 [w2, h2] */
-
-    /* Pack Child 1 into xmm0 directly in registers */
-    movq xmm0, rax                           /* Child 1 [x, y] */
-    movq xmm1, rdx                           /* Child 1 [w, h] */
-    punpcklqdq xmm0, xmm1                    /* xmm0 = Child 1 [x, y, w, h] */
+    add ecx, 2                               /* delta = half + 2 */
+    sub edx, ecx                             /* dim2 = dim - delta */
+    add [rsp + 4*rax], ecx                   /* Child 2: pos2 = pos + delta */
+    mov [rsp + 4*rax + 8], edx               /* Child 2: dim2 = dim - delta */
 
     /* Dispatch Child 1 */
-    mov rdi, [rsp + 16]                      /* Parent node */
     mov rdi, [rdi + NODE_FIRST]
     call bsp_arrange_node
 
