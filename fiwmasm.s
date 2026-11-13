@@ -1268,11 +1268,10 @@ move_window_to_workspace:
 
     /* Batch hide window + re-arrange current workspace in ONE syscall */
     lea r15, [out_buf]
-    mov dword ptr [r15 + 0], (5 << 16) | 12  /* Opcode 12: ConfigureWindow */
-    mov [r15 + 4], ebx                       /* window ID */
-    mov dword ptr [r15 + 8], 3               /* CWX | CWY = 3 */
-    mov dword ptr [r15 + 12], -9999          /* x = -9999 (off-screen) */
-    mov dword ptr [r15 + 16], -9999          /* y = -9999 (off-screen) */
+    movdqa xmm0, [simd_hide_pkt]
+    pinsrd xmm0, ebx, 1
+    movdqu [r15 + 0], xmm0
+    mov dword ptr [r15 + 16], -9999
     add r15, 20
 
     mov edi, r14d
@@ -1290,9 +1289,16 @@ mw_done:
     pop rbx
     ret
 
+.align 16
+simd_hide_pkt:
+    .long (5 << 16) | 12        /* Opcode 12: ConfigureWindow (len=5) */
+    .long 0                     /* Placeholder for win_id */
+    .long 3                     /* CWX | CWY = 3 */
+    .long -9999                 /* x = -9999 (off-screen) */
+
 /*
  * hide_tree_collect(rdi = node, r15 = write cursor):
- * Appends 20-byte ConfigureWindow (x=-9999, y=-9999) for all leaf windows in tree to [r15].
+ * Vectorized SIMD serialization: stores 20-byte ConfigureWindow (x=-9999, y=-9999) to [r15].
  */
 hide_tree_collect:
     test rdi, rdi
@@ -1300,15 +1306,10 @@ hide_tree_collect:
     cmp dword ptr [rdi + NODE_WIN], 0
     je htc_recurse
 
-    /* Leaf window found: append 20-byte ConfigureWindow packet to [r15] */
-    mov eax, [rdi + NODE_WIN]
-    shl rax, 32
-    or rax, (5 << 16) | 12                   /* Opcode 12: ConfigureWindow (len=5) */
-    mov [r15 + 0], rax                       /* [0..3]=header, [4..7]=win_id */
-    mov rax, -9999
-    shl rax, 32
-    or rax, 3                                /* [8..11]=value_mask (3), [12..15]=x (-9999) */
-    mov [r15 + 8], rax
+    /* Leaf window found: 128-bit vector burst to [r15] */
+    movdqa xmm0, [simd_hide_pkt]
+    pinsrd xmm0, dword ptr [rdi + NODE_WIN], 1
+    movdqu [r15 + 0], xmm0
     mov dword ptr [r15 + 16], -9999          /* y = -9999 (off-screen) */
     add r15, 20
     ret
