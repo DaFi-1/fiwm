@@ -791,9 +791,7 @@ key_ws_prev:
     dec eax
     mov edx, WORKSPACE_COUNT - 1
     cmovs eax, edx
-    mov edi, eax
-    call focus_workspace
-    jmp event_loop
+    jmp ws_cycle_done
 
 key_ws_next:
     /* Branchless Modulo Wrap Next: if (cur_ws + 1 >= 9) cur_ws = 0 */
@@ -802,6 +800,8 @@ key_ws_next:
     xor edx, edx
     cmp eax, WORKSPACE_COUNT
     cmovge eax, edx
+
+ws_cycle_done:
     mov edi, eax
     call focus_workspace
     jmp event_loop
