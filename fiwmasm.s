@@ -873,25 +873,17 @@ do_floating_calc:
 
 /*
  * present_window_simd(edx = win_id, xmm0 = [x, y, w, h], eax = border_width, r15 = write cursor)
- * Emits 48 bytes (ConfigureWindow + X_RaiseWindow) via 128-bit SIMD burst.
+ * Emits unified atomic 36-byte ConfigureWindow packet (geometry, border, and stack_mode Above)
  */
 present_window_simd:
-    /* Packet 1: ConfigureWindow (32 bytes) */
     mov r8, rdx
     shl r8, 32
-    or r8, (8 << 16) | 12       /* Opcode 12, len = 8 words */
+    or r8, (9 << 16) | 12       /* Opcode 12, len = 9 words (36 bytes) */
     mov [r15 + 0], r8
-    mov dword ptr [r15 + 8], 31 /* CWX | CWY | CWWidth | CWHeight | CWBorderWidth */
+    mov dword ptr [r15 + 8], 0x5f /* CWX | CWY | CWWidth | CWHeight | CWBorderWidth | CWStackMode */
     movdqu [r15 + 12], xmm0     /* SIMD 128-bit store: [x, y, w, h] written all at once! */
-    mov [r15 + 28], eax         /* border_width */
-
-    /* Packet 2: X_RaiseWindow (ConfigureWindow, stack mode = Above) (16 bytes) */
-    mov r8, rdx
-    shl r8, 32
-    or r8, (4 << 16) | 12       /* Opcode 12, len = 4 words */
-    mov [r15 + 32], r8
-    mov qword ptr [r15 + 40], 64 /* CWStackMode = 64, Above = 0 in 1 quadword */
-    add r15, 48
+    mov [r15 + 28], rax         /* 64-bit store: border_width (eax) and stack_mode Above (0) */
+    add r15, 36
     jmp event_loop
 
 win_restore_layout:
@@ -1178,11 +1170,8 @@ move_window_to_workspace:
     call bsp_tree_detach
 
     /* Batch hide window + re-arrange current workspace */
-    movdqa xmm0, [simd_hide_pkt]
-    pinsrd xmm0, ebx, 1
-    movdqu [r15 + 0], xmm0
-    mov dword ptr [r15 + 16], -9999
-    add r15, 20
+    mov edi, ebx
+    call emit_hide_win_pkt
 
     mov edi, r14d
     call bsp_arrange_ws_buf
@@ -1195,12 +1184,20 @@ move_window_to_workspace:
 mw_done:
     ret
 
-.align 16
-simd_hide_pkt:
-    .long (5 << 16) | 12        /* Opcode 12: ConfigureWindow (len=5) */
-    .long 0                     /* Placeholder for win_id */
-    .long 3                     /* CWX | CWY = 3 */
-    .long -9999                 /* x = -9999 (off-screen) */
+/*
+ * emit_hide_win_pkt(edi = win_id, r15 = write cursor)
+ * Serializes 20-byte off-screen ConfigureWindow packet (x = -9999, y = -9999)
+ */
+emit_hide_win_pkt:
+    mov eax, edi
+    shl rax, 32
+    or rax, (5 << 16) | 12
+    mov [r15 + 0], rax
+    mov dword ptr [r15 + 8], 3
+    mov dword ptr [r15 + 12], -9999
+    mov dword ptr [r15 + 16], -9999
+    add r15, 20
+    ret
 
 /*
  * hide_ws_windows(ebx = ws_idx, r15 = write cursor):
@@ -1224,11 +1221,8 @@ hww_loop:
     jne hww_next
 
     /* Window belongs to target workspace: serialize 20-byte off-screen packet */
-    movdqa xmm0, [simd_hide_pkt]
-    pinsrd xmm0, eax, 1
-    movdqu [r15 + 0], xmm0
-    mov dword ptr [r15 + 16], -9999
-    add r15, 20
+    mov edi, eax
+    call emit_hide_win_pkt
 
 hww_next:
     add rdx, 32
