@@ -2581,98 +2581,77 @@ ws_split_dispatch:
 
 /*
  * bsp_node_in_direction(rdi = start_leaf, esi = orient, edx = dir)
- * True 2D BSP Tree Directional Traversal
+ * True 2D BSP Tree Directional Traversal (Zero-Stack Frameless)
  * orient: 0 = Vertical (h/l), 1 = Horizontal (k/j)
  * dir:    0 = Left / Up (first), 1 = Right / Down (second)
+ * Scratch registers used: rdi, esi, edx, r8, r9, rax
  */
 bsp_node_in_direction:
-    push rbx
-    push r12
-    push r13
-    push r14
-    push r15
-
     test rdi, rdi
     jz nid_null
     cmp dword ptr [rdi + NODE_WIN], 0
     je nid_null
 
-    mov r12, rdi                /* r12 = current node p */
-    mov r13d, esi               /* r13d = orient */
-    mov r14d, edx               /* r14d = dir */
-
 nid_climb:
-    mov rbx, [r12 + NODE_PARENT]
-    test rbx, rbx
+    mov r8, [rdi + NODE_PARENT]
+    test r8, r8
     jz nid_null                 /* Reached root without finding matching split */
 
     /* Check parent split orientation (bit 0 of NODE_INFO) */
-    movzx eax, byte ptr [rbx + NODE_INFO]
+    movzx eax, byte ptr [r8 + NODE_INFO]
     and eax, 1
-    cmp eax, r13d
+    cmp eax, esi
     jne nid_climb_next
 
-    /* Branchless check: on_first = (first == r12), want_first = (dir == 0) */
-    cmp [rbx + NODE_FIRST], r12
+    /* Branchless check: on_first == (dir != 0) -> crosses boundary */
+    cmp [r8 + NODE_FIRST], rdi
     sete al
-    test r14d, r14d
-    setz dl
     cmp al, dl
-    jne nid_found_branch
+    je nid_found_branch
 
 nid_climb_next:
-    mov r12, rbx
+    mov rdi, r8
     jmp nid_climb
 
 nid_found_branch:
-    /* Branchless child selection: want_first ? parent->first : parent->second */
-    mov r15, [rbx + NODE_SECOND]
-    mov rax, [rbx + NODE_FIRST]
-    test dl, dl
-    cmovnz r15, rax
+    /* Branchless child selection: edx == 0 ? first : second */
+    mov r9, [r8 + NODE_SECOND]
+    mov rax, [r8 + NODE_FIRST]
+    test edx, edx
+    cmovz r9, rax
 
 dive_down:
-    test r15, r15
+    test r9, r9
     jz nid_null
-    cmp dword ptr [r15 + NODE_WIN], 0
+    cmp dword ptr [r9 + NODE_WIN], 0
     jne nid_success             /* Found destination leaf! */
 
-    movzx eax, byte ptr [r15 + NODE_INFO]
+    movzx eax, byte ptr [r9 + NODE_INFO]
     and eax, 1
-    cmp eax, r13d
+    cmp eax, esi
     je dive_same_orient
 
     /* Perpendicular split: follow last-focused history bit (bit 7 of NODE_INFO) branchlessly */
-    test byte ptr [r15 + NODE_INFO], 0x80
-    mov rax, [r15 + NODE_SECOND]
-    mov r15, [r15 + NODE_FIRST]
-    cmovnz r15, rax
+    test byte ptr [r9 + NODE_INFO], 0x80
+    mov rax, [r9 + NODE_SECOND]
+    mov r9, [r9 + NODE_FIRST]
+    cmovnz r9, rax
     jmp dive_down
 
 dive_same_orient:
     /* Same orientation: take opposite side of dir to land on closest neighbor branchlessly */
-    mov rax, [r15 + NODE_FIRST]
-    mov r15, [r15 + NODE_SECOND]
-    test r14d, r14d
-    cmovnz r15, rax
+    mov rax, [r9 + NODE_FIRST]
+    mov r9, [r9 + NODE_SECOND]
+    test edx, edx
+    cmovnz r9, rax
     jmp dive_down
 
 nid_success:
-    mov rax, r15
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
+    mov rax, r9
     ret
 
 nid_null:
     xor eax, eax
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
     ret
 
 exit_clean:
