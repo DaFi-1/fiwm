@@ -596,8 +596,10 @@ handle_enter:
 
 handle_expose:
     mov edx, [rsi + 4]          /* drawable/window */
+    xor edi, edi                /* default target_mon = 0 */
     cmp edx, [bar_win + 0]
     je check_expose_count
+    inc edi                     /* target_mon = 1 */
     cmp edx, [bar_win + 4]
     jne event_loop
 
@@ -612,7 +614,7 @@ check_expose_count:
     test eax, eax
     jnz event_loop              /* More expose events incoming, don't redraw yet! */
 
-    call draw_all_bars
+    call draw_mon_bar
     jmp event_loop
 
 /*
@@ -1520,8 +1522,47 @@ grab_batch_send:
     ret
 
 /*
+ * draw_mon_bar(edi = target_mon 0 or 1):
+ * Surgical Per-Monitor Bar Redraw for Expose events:
+ * In dual-monitor setups, redraws ONLY the workspaces on the damaged monitor!
+ */
+draw_mon_bar:
+    push r15
+    push r12
+    mov r12d, edi               /* target_mon (0 or 1) */
+    lea r15, [out_buf]
+
+    test bpl, 8                 /* is_dual_mon */
+    jz dmb_single_mon
+
+    /* Dual-mon: iterate 0..8 and only draw workspaces belonging to target_mon */
+    xor edi, edi
+dmb_dual_loop:
+    movzx eax, byte ptr [ws_mon_table + rdi]
+    and eax, 1
+    cmp eax, r12d
+    jne dmb_dual_next
+    push rdi
+    call draw_single_ws_buf
+    pop rdi
+dmb_dual_next:
+    inc edi
+    cmp edi, WORKSPACE_COUNT
+    jl dmb_dual_loop
+    jmp dmb_flush
+
+dmb_single_mon:
+    call draw_all_bars_buf
+
+dmb_flush:
+    call flush_out_buf
+    pop r12
+    pop r15
+    ret
+
+/*
  * draw_all_bars():
- * Standalone entry point for Expose events: renders bars into out_buf and flushes.
+ * Standalone entry point: renders bars into out_buf and flushes.
  */
 draw_all_bars:
     push r15
@@ -1557,29 +1598,27 @@ draw_all_bars_buf:
 
 /*
  * draw_single_ws_buf(edi = ws_idx 0..8, r15 = write cursor):
- * Surgical O(1) Branchless Single-Digit Bar Renderer via X_ImageText8 (Opcode 76, 20 bytes):
- * Bit-slices both monitor (bit 0) and X offset (bits 1..7) from a single packed byte!
+ * Surgical O(1) Frameless Single-Digit Bar Renderer via X_ImageText8 (Opcode 76, 20 bytes):
+ * Zero stack frame, lea-shift multiplication, bit-slices monitor & X offset.
  */
 draw_single_ws_buf:
-    push rbx
-    mov ebx, edi                                /* ebx = target ws_idx (0..8) */
-
     xor ecx, ecx                                /* default single-monitor: mon_idx = 0 */
-    imul esi, ebx, 24
+    lea esi, [rdi + rdi*2]
+    shl esi, 3
     add esi, 10                                 /* default single-monitor X = 10 + ws_idx * 24 */
 
     test bpl, 8                                 /* bit 3 = is_dual_mon */
     jz dsw_emit
 
-    movzx ecx, byte ptr [ws_mon_table + rbx]    /* 1-byte packed load: (X & ~1) | mon_idx */
+    movzx ecx, byte ptr [ws_mon_table + rdi]    /* 1-byte packed load: (X & ~1) | mon_idx */
     mov esi, ecx
     and ecx, 1                                  /* bit 0 = mon_idx (0 or 1) */
     and esi, 0xFE                               /* bits 1..7 = precomputed even X coordinate! */
 
 dsw_emit:
-    /* Branchless GC selection: bar_gc + (ebx != cur_ws) */
+    /* Branchless GC selection: bar_gc + (edi != cur_ws) */
     mov edx, [bar_gc]
-    cmp ebx, r14d
+    cmp edi, r14d
     setne al
     movzx eax, al
     add edx, eax
@@ -1594,12 +1633,11 @@ dsw_emit:
     or esi, (13 << 16)
     mov [r15 + 12], esi
 
-    /* Character byte '1' + ebx */
-    lea eax, [rbx + '1']
+    /* Character byte '1' + edi */
+    lea eax, [rdi + '1']
     mov [r15 + 16], eax
 
     add r15, 20
-    pop rbx
     ret
 
 /*
