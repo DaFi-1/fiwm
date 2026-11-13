@@ -735,28 +735,13 @@ key_hjkl_disp:
     mov [rbx + NODE_WIN], r9d
     mov [r12 + NODE_WIN], r8d   /* r12 now holds the active window */
 
-    mov dword ptr [win_mru_id], 0
-    mov qword ptr [win_mru_node], 0
-
-    /* Update hash table for r8d (now at r12) */
-    mov edx, r8d
-    shr edx, 4
-    xor edx, r8d
-    and edx, 31
-    shl edx, 4
-    lea rcx, [win_hash_tab + rdx]
-    mov [rcx + 0], r8d
-    mov [rcx + 8], r12
-
-    /* Update hash table for r9d (now at rbx) */
-    mov edx, r9d
-    shr edx, 4
-    xor edx, r9d
-    and edx, 31
-    shl edx, 4
-    lea rcx, [win_hash_tab + rdx]
-    mov [rcx + 0], r9d
-    mov [rcx + 8], rbx
+    /* Update MRU and Hash Table for swapped windows */
+    mov edi, r8d
+    mov rsi, r12
+    call win_cache_put
+    mov edi, r9d
+    mov rsi, rbx
+    call win_cache_put
 
     /* Re-arrange grid to reflect new spatial layout */
     mov edi, r14d
@@ -1889,19 +1874,9 @@ ws_insert_done:
     call bsp_update_history
 
     /* Eager O(1) Cache Registration */
-    mov eax, [r9 + NODE_WIN]
-    mov [win_mru_id], eax
-    mov [win_mru_node], r9
-    mov edx, eax
-    shr edx, 4
-    xor edx, eax
-    and edx, 31
-    shl edx, 4
-    lea rcx, [win_hash_tab + rdx]
-    mov [rcx + 0], eax
-    mov [rcx + 8], r9
-
-    ret
+    mov edi, [r9 + NODE_WIN]
+    mov rsi, r9
+    jmp win_cache_put           /* Tail call */
 
 /*
  * bsp_tree_detach(rdi = leaf_node)
@@ -1912,23 +1887,8 @@ bsp_tree_detach:
     shr r9d, 1                              /* Extract ws_idx = NODE_INFO >> 1 */
 
     /* Eager Invalidation from MRU and Hash Table */
-    mov eax, [r8 + NODE_WIN]
-    cmp eax, [win_mru_id]
-    jne td_check_hash
-    mov dword ptr [win_mru_id], 0
-    mov qword ptr [win_mru_node], 0
-td_check_hash:
-    mov edx, eax
-    shr edx, 4
-    xor edx, eax
-    and edx, 31
-    shl edx, 4
-    lea rcx, [win_hash_tab + rdx]
-    cmp [rcx + 0], eax
-    jne td_hash_done
-    mov dword ptr [rcx + 0], 0
-    mov qword ptr [rcx + 8], 0
-td_hash_done:
+    mov edi, [r8 + NODE_WIN]
+    call win_cache_evict
     mov dword ptr [r8 + NODE_WIN], 0    /* Clear window ID so free/detached nodes never match linear scan */
 
     mov r10, [r8 + NODE_PARENT]
@@ -2029,6 +1989,51 @@ bfl_found:
     ret
 
 /*
+ * win_cache_put(edi = win_id, rsi = node_ptr)
+ * Atomically registers window in 1-cycle MRU cache and 32-entry Direct Hash Table.
+ * Clobbers: edx, rcx. Preserves all other registers.
+ */
+win_cache_put:
+    test edi, edi
+    jz 1f
+    mov [win_mru_id], edi
+    mov [win_mru_node], rsi
+    mov edx, edi
+    shr edx, 4
+    xor edx, edi
+    and edx, 31
+    shl edx, 4
+    lea rcx, [win_hash_tab + rdx]
+    mov [rcx + 0], edi
+    mov [rcx + 8], rsi
+1:  ret
+
+/*
+ * win_cache_evict(edi = win_id)
+ * Atomically invalidates window from MRU and Hash Table.
+ * Clobbers: edx, rcx. Preserves all other registers.
+ */
+win_cache_evict:
+    test edi, edi
+    jz 1f
+    cmp edi, [win_mru_id]
+    jne 2f
+    mov dword ptr [win_mru_id], 0
+    mov qword ptr [win_mru_node], 0
+2:
+    mov edx, edi
+    shr edx, 4
+    xor edx, edi
+    and edx, 31
+    shl edx, 4
+    lea rcx, [win_hash_tab + rdx]
+    cmp [rcx + 0], edi
+    jne 1f
+    mov dword ptr [rcx + 0], 0
+    mov qword ptr [rcx + 8], 0
+1:  ret
+
+/*
  * bsp_find_win_global(esi = win_id) -> rax = leaf_node, ecx = ws_idx (or rax=0 if not found)
  * Ultra-fast O(1) global window lookup across all workspaces.
  */
@@ -2104,20 +2109,10 @@ bfwg_null:
     ret
 
 bfwg_found:
-    mov rax, rdx                /* rax = leaf node pointer */
-    mov [win_mru_id], esi
-    mov [win_mru_node], rax
-
-    /* Update Hash Table bucket */
-    mov edx, esi
-    shr edx, 4
-    xor edx, esi
-    and edx, 31
-    shl edx, 4
-    lea r8, [win_hash_tab + rdx]
-    mov [r8 + 0], esi
-    mov [r8 + 8], rax
-
+    mov edi, esi
+    mov rsi, rdx                /* rsi = leaf node pointer */
+    call win_cache_put
+    mov rax, rsi
     /* Extract workspace index (0..8) into ecx */
     movzx ecx, byte ptr [rax + NODE_INFO]
     shr ecx, 1
