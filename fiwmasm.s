@@ -236,6 +236,15 @@ connected_ok:
     add ebx, 8
     sub ebx, eax                /* ebx = total remaining bytes to drain */
 
+    /* If first read only got the 8-byte xConnSetupPrefix, read body into in_buf + rax */
+    cmp eax, 64
+    jge 1f
+    lea esi, [in_buf + rax]
+    mov edx, 2040
+    xor eax, eax                /* SYS_READ = 0 */
+    syscall
+    sub ebx, eax
+1:
     /* Parse Screen Info directly from unified in_buf:
        - Header (8) + Fixed Body (32) = 40 bytes base.
        - vendor_len is at [rip + in_buf + 24]
@@ -270,8 +279,6 @@ drain_setup_loop:
     test ebx, ebx
     jle setup_drained
     mov edx, 2048
-    cmp edx, ebx
-    cmovg edx, ebx
     xor eax, eax                /* SYS_READ = 0 */
     mov esi, offset in_buf
     syscall
@@ -784,12 +791,11 @@ key_kill:
     jz event_loop
 
     /*
-     * Terminate client window and process tree (52 bytes coalesced in out_buf):
-     * 1. X_SendEvent (Opcode 25, len=11 words = 44 bytes): sends ICCCM ClientMessage
-     *    WM_PROTOCOLS / WM_DELETE_WINDOW so apps like Brave/Chrome cleanly shut down
-     *    all background audio and renderer processes.
-     * 2. X_KillClient (Opcode 113, len=2 words = 8 bytes): forces the X server to
-     *    sever the client's socket connection so non-ICCCM apps die immediately too.
+     * Close client window cleanly via ICCCM (44 bytes in out_buf):
+     * X_SendEvent (Opcode 25, len=11 words = 44 bytes): sends ClientMessage
+     * WM_PROTOCOLS / WM_DELETE_WINDOW without force-killing the X11 socket,
+     * preventing multi-process supervisors (e.g. Steam) from treating window
+     * close as an XIOError crash and respawning the window.
      */
     mov rax, rdx
     shl rax, 32
@@ -808,12 +814,7 @@ key_kill:
     movdqu [r15 + 28], xmm0             /* Zero payload data.l[1..4] (16 bytes) */
     mov eax, [rip + atom_wm_del]
     mov [r15 + 24], eax
-
-    mov rax, rdx
-    shl rax, 32
-    or rax, (2 << 16) | 113
-    mov [r15 + 44], rax
-    add r15, 52
+    add r15, 44
     jmp event_loop
 
 /*

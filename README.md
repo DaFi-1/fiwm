@@ -24,10 +24,10 @@ Zero C, zero libc, zero libX11 — comunicação direta via protocolo wire sobre
 
 | Segmento / Métrica | Tamanho | Descrição |
 |:---|:---:|:---|
-| **`.text`** | **5.491 B** (~5,4 KB) | Código de máquina executável puro (BSP/floating SSE2, hash O(1) e atalhos) |
+| **`.text`** | **5.490 B** (~5,4 KB) | Código de máquina executável puro (BSP/floating SSE2, hash O(1) e atalhos) |
 | **`.data`** | **567 B** | Estruturas de soquete Unix, vetores SIMD, strings estáticas e template `sh_argv` único |
 | **`.bss`** | **5.616 B** (~5,5 KB) | Buffers de I/O compactados e pool L1 de 64 nós BSP |
-| **Total Mapeado (ELF)** | **11.674 B** (~11,4 KB) | Cabe inteiramente em 3 páginas físicas de 4 KB x86_64 (`0x400078`–`0x402e20`) |
+| **Total Mapeado (ELF)** | **11.673 B** (~11,4 KB) | Cabe inteiramente em 3 páginas físicas de 4 KB x86_64 (`0x400078`–`0x402e20`) |
 | **Tamanho do Binário em Disco** | **6,4 KB** (6.536 B) | Executável final estático e stripped (sem dependências dinâmicas) |
 | **RAM em Execução (`VmRSS` / `VmData`)** | **24 kB / 12 kB** | Pico ativo (`VmHWM`) de apenas 24 kB mesmo com janelas abertas (3 páginas ELF) |
 | **Consumo de Pilha (Stack)** | **0 B** | Arquitetura zero-stack com invariantes globais em registradores |
@@ -55,7 +55,7 @@ O modificador padrão é **Alt** (`Mod1Mask`).
 |:---|:---|
 | `Alt + Enter` / `Alt + W` | Abrir terminal |
 | `Alt + D` | Abrir lançador de aplicativos / menu |
-| `Alt + Q` | Fechar janela em foco (ICCCM `WM_DELETE_WINDOW` + `KillClient`) |
+| `Alt + Q` | Fechar janela em foco (ICCCM `WM_DELETE_WINDOW`) |
 | `Alt + Shift + Q` | Encerrar o fiwm de forma limpa |
 | `Alt + F` | Alternar modo Tela Cheia (Fullscreen) |
 | `Alt + Shift + F` / `Alt + Space` | Alternar modo Janela Flutuante (Floating) |
