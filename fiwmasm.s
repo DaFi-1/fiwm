@@ -280,12 +280,16 @@ setup_drained:
 
     /* Create and map top status bar + SelectInput on root + Grab all 72 keys in ONE batched syscall! */
     call init_bar
+    lea r15, [out_buf]
 
 event_loop:
     /* Check if event_queue still has buffered events */
     mov eax, [ev_q_head]
     cmp eax, [ev_q_tail]
     jl ev_pop_buffered
+
+    /* Coalesced I/O Flush: send all pending X11 commands before blocking on sys_read */
+    call flush_out_buf
 
     /* Buffer is empty, read next chunk of events (up to 64 events = 2048 bytes) */
     xor eax, eax                /* SYS_READ = 0 (2 bytes!) */
@@ -302,6 +306,12 @@ event_loop:
     mov [ev_q_tail], eax
 
 ev_pop_buffered:
+    /* Capacity safety check: flush if out_buf > 1536 bytes to prevent overflow */
+    lea rax, [out_buf + 1536]
+    cmp r15, rax
+    jb 1f
+    call flush_out_buf
+1:
     /* Zero-Copy Event Dispatch: read directly from [event_queue + rcx] in rsi! */
     mov ecx, [ev_q_head]
     lea rsi, [event_queue + rcx]
@@ -483,23 +493,16 @@ motion_process:
     mov r8, rdx
     shl r8, 32
     or r8, (5 << 16) | 12               /* Opcode 12, len = 5 words */
-    mov [out_buf + 0], r8
+    mov [r15 + 0], r8
 
     /* Naturally aligned stores: 64-bit aligned at offset 8, 32-bit aligned at offset 16 */
     mov ecx, eax                        /* ecx = new_x */
     shl rcx, 32
     or rcx, 3                           /* CWX | CWY = 3 */
-    mov [out_buf + 8], rcx              /* 8-byte aligned store: mask + new_x */
+    mov [r15 + 8], rcx                  /* 8-byte aligned store: mask + new_x */
     shr rax, 32                         /* eax = new_y */
-    mov [out_buf + 16], eax             /* 4-byte aligned store: new_y */
-
-    push SYS_WRITE
-    pop rax
-    mov edi, r13d
-    lea rsi, [out_buf]
-    push 20
-    pop rdx
-    syscall
+    mov [r15 + 16], eax                 /* 4-byte aligned store: new_y */
+    add r15, 20
     jmp event_loop
 
 motion_resize:
@@ -529,23 +532,16 @@ motion_resize:
     mov r8, rdx
     shl r8, 32
     or r8, (5 << 16) | 12               /* Opcode 12, len = 5 words */
-    mov [out_buf + 0], r8
+    mov [r15 + 0], r8
 
     /* Naturally aligned stores: 64-bit aligned at offset 8, 32-bit aligned at offset 16 */
     mov ecx, eax                        /* ecx = new_w */
     shl rcx, 32
     or rcx, 12                          /* CWWidth | CWHeight = 12 */
-    mov [out_buf + 8], rcx              /* 8-byte aligned store: mask + new_w */
+    mov [r15 + 8], rcx                  /* 8-byte aligned store: mask + new_w */
     shr rax, 32                         /* eax = new_h */
-    mov [out_buf + 16], eax             /* 4-byte aligned store: new_h */
-
-    push SYS_WRITE
-    pop rax
-    mov edi, r13d
-    lea rsi, [out_buf]
-    push 20
-    pop rdx
-    syscall
+    mov [r15 + 16], eax                 /* 4-byte aligned store: new_h */
+    add r15, 20
     jmp event_loop
 
 handle_btn_release:
@@ -788,14 +784,12 @@ key_move_hjkl:
     mov rdi, rax
     call bsp_update_history
 
-    /* Re-arrange grid and set focus in ONE atomic syscall */
+    /* Re-arrange grid and set focus */
     push r8
-    lea r15, [out_buf]
     mov edi, r14d
     call bsp_arrange_ws_buf
     pop rdi
     call set_focus_buf
-    call flush_out_buf
     jmp event_loop
 
 /*
@@ -864,36 +858,29 @@ key_kill:
     jz event_loop
 
     /*
-     * Terminate client window and process tree (52 bytes batched in 1 syscall):
+     * Terminate client window and process tree (52 bytes batched in out_buf):
      * 1. X_SendEvent (Opcode 25, len=11 words = 44 bytes): sends ICCCM ClientMessage
      *    WM_PROTOCOLS / WM_DELETE_WINDOW so apps like Brave/Chrome cleanly shut down
      *    all background audio and renderer processes.
      * 2. X_KillClient (Opcode 113, len=2 words = 8 bytes): forces the X server to
      *    sever the client's socket connection so non-ICCCM apps die immediately too.
      */
-    mov dword ptr [out_buf + 0],  (11 << 16) | 25   /* X_SendEvent: propagate=0, len=11 */
-    mov [out_buf + 4],  edx                         /* destination = win */
-    mov dword ptr [out_buf + 8],  0                 /* event_mask = NoEventMask */
-    mov dword ptr [out_buf + 12], (32 << 8) | 33    /* ClientMessage (33), format=32 */
-    mov [out_buf + 16], edx                         /* window = win */
+    mov dword ptr [r15 + 0],  (11 << 16) | 25   /* X_SendEvent: propagate=0, len=11 */
+    mov [r15 + 4],  edx                         /* destination = win */
+    mov dword ptr [r15 + 8],  0                 /* event_mask = NoEventMask */
+    mov dword ptr [r15 + 12], (32 << 8) | 33    /* ClientMessage (33), format=32 */
+    mov [r15 + 16], edx                         /* window = win */
     mov eax, [atom_wm_proto]
-    mov [out_buf + 20], eax                         /* message_type = WM_PROTOCOLS */
+    mov [r15 + 20], eax                         /* message_type = WM_PROTOCOLS */
     mov eax, [atom_wm_del]
-    mov [out_buf + 24], eax                         /* data.l[0] = WM_DELETE_WINDOW */
-    mov qword ptr [out_buf + 28], 0                 /* data.l[1..2] = 0 */
-    mov qword ptr [out_buf + 36], 0                 /* data.l[3..4] = 0 */
+    mov [r15 + 24], eax                         /* data.l[0] = WM_DELETE_WINDOW */
+    mov qword ptr [r15 + 28], 0                 /* data.l[1..2] = 0 */
+    mov qword ptr [r15 + 36], 0                 /* data.l[3..4] = 0 */
 
     /* Also append X_KillClient (8 bytes) */
-    mov dword ptr [out_buf + 44], (2 << 16) | 113
-    mov [out_buf + 48], edx
-
-    push SYS_WRITE
-    pop rax
-    mov edi, r13d
-    lea rsi, [out_buf]
-    push 52
-    pop rdx
-    syscall
+    mov dword ptr [r15 + 44], (2 << 16) | 113
+    mov [r15 + 48], edx
+    add r15, 52
     jmp event_loop
 
 key_fullscreen:
@@ -924,25 +911,18 @@ key_fullscreen:
     mov rax, rdx
     shl rax, 32
     or rax, (8 << 16) | 12      /* Opcode 12, len = 8 words */
-    mov [out_buf + 0], rax
-    mov dword ptr [out_buf + 8], 31             /* x, y, w, h, border_width */
-    movdqu [out_buf + 12], xmm0                 /* SIMD 128-bit store: [x, y, w, h] in 1 instruction! */
-    mov dword ptr [out_buf + 28], 0             /* border_width = 0 for fullscreen */
+    mov [r15 + 0], rax
+    mov dword ptr [r15 + 8], 31             /* x, y, w, h, border_width */
+    movdqu [r15 + 12], xmm0                 /* SIMD 128-bit store: [x, y, w, h] in 1 instruction! */
+    mov dword ptr [r15 + 28], 0             /* border_width = 0 for fullscreen */
 
     /* Packet 2: X_RaiseWindow (ConfigureWindow, stack mode = Above) (16 bytes) */
     mov rax, rdx
     shl rax, 32
     or rax, (4 << 16) | 12      /* Opcode 12, len = 4 words */
-    mov [out_buf + 32], rax
-    mov qword ptr [out_buf + 40], 64            /* CWStackMode = 64, Above = 0 in 1 quadword */
-
-    push SYS_WRITE
-    pop rax
-    mov edi, r13d
-    lea rsi, [out_buf]
-    push 48
-    pop rdx
-    syscall
+    mov [r15 + 32], rax
+    mov qword ptr [r15 + 40], 64            /* CWStackMode = 64, Above = 0 in 1 quadword */
+    add r15, 48
     jmp event_loop
 
 fs_restore:
@@ -996,28 +976,21 @@ key_floating:
     add edi, [rbx + 4]          /* edi = fy */
 
     /* Packet 1: ConfigureWindow (x, y, w, h, border_width = 1) (32 bytes) */
-    mov dword ptr [out_buf + 0], (8 << 16) | 12
-    mov [out_buf + 4], edx
-    mov dword ptr [out_buf + 8], 31             /* x, y, w, h, border_width */
-    mov [out_buf + 12], esi                     /* x */
-    mov [out_buf + 16], edi                     /* y */
-    mov [out_buf + 20], r8d                     /* w */
-    mov [out_buf + 24], r9d                     /* h */
-    mov dword ptr [out_buf + 28], 1             /* border_width = 1 */
+    mov dword ptr [r15 + 0], (8 << 16) | 12
+    mov [r15 + 4], edx
+    mov dword ptr [r15 + 8], 31             /* x, y, w, h, border_width */
+    mov [r15 + 12], esi                     /* x */
+    mov [r15 + 16], edi                     /* y */
+    mov [r15 + 20], r8d                     /* w */
+    mov [r15 + 24], r9d                     /* h */
+    mov dword ptr [r15 + 28], 1             /* border_width = 1 */
 
     /* Packet 2: X_RaiseWindow (ConfigureWindow, stack mode = Above) (16 bytes) */
-    mov dword ptr [out_buf + 32], (4 << 16) | 12
-    mov [out_buf + 36], edx
-    mov dword ptr [out_buf + 40], 64            /* CWStackMode = 64 */
-    mov dword ptr [out_buf + 44], 0             /* Above = 0 */
-
-    push SYS_WRITE
-    pop rax
-    mov edi, r13d
-    lea rsi, [out_buf]
-    push 48
-    pop rdx
-    syscall
+    mov dword ptr [r15 + 32], (4 << 16) | 12
+    mov [r15 + 36], edx
+    mov dword ptr [r15 + 40], 64            /* CWStackMode = 64 */
+    mov dword ptr [r15 + 44], 0             /* Above = 0 */
+    add r15, 48
     jmp event_loop
 
 fl_restore:
@@ -1026,9 +999,7 @@ fl_restore:
     jmp event_loop
 
 set_focus:
-    lea r15, [out_buf]
-    call set_focus_buf
-    jmp flush_out_buf
+    jmp set_focus_buf
 
 .align 16
 simd_border_inact_pkt:
@@ -1106,17 +1077,19 @@ focus_ret:
 /*
  * flush_out_buf(r15 = write cursor at end of out_buf)
  * Sends all bytes accumulated in [out_buf .. r15) in ONE single sys_write!
+ * Automatically resets r15 to out_buf.
  */
 flush_out_buf:
     lea rsi, [out_buf]
     mov rdx, r15
     sub rdx, rsi
-    jle flush_ret
+    jle flush_reset
     push SYS_WRITE
     pop rax
     mov edi, r13d
     syscall
-flush_ret:
+flush_reset:
+    lea r15, [out_buf]
     ret
 
 /*
@@ -1181,13 +1154,10 @@ parent_fork:
 focus_workspace:
     push rbx
     push r12
-    push r15
 
     mov r12d, edi               /* r12d = new_ws */
     cmp r12d, r14d
     je fw_done
-
-    lea r15, [out_buf]          /* r15 = unified batch write cursor */
 
     /* Determine target monitor m (0 or 1) */
     mov edi, r12d
@@ -1258,7 +1228,7 @@ fw_focus:
     call bsp_update_history
     mov edi, r8d
     call set_focus_buf
-    jmp fw_flush
+    jmp fw_done
 
 fw_focus_empty:
     xor edi, edi
@@ -1270,23 +1240,18 @@ fw_focus_empty:
     mov qword ptr [r15 + 8], 0
     add r15, 16
 
-fw_flush:
-    call flush_out_buf
-
 fw_done:
-    pop r15
     pop r12
     pop rbx
     ret
 
 /*
  * move_window_to_workspace(edi = target_ws 0..8)
- * Batches hiding the moved window + rearranging the current workspace into 1 syscall!
+ * Batches hiding the moved window + rearranging the current workspace in out_buf!
  */
 move_window_to_workspace:
     push rbx
     push r12
-    push r15
 
     mov r12d, edi               /* target_ws */
     cmp r12d, r14d
@@ -1307,8 +1272,7 @@ move_window_to_workspace:
     call bsp_tree_detach
     pop rdi
 
-    /* Batch hide window + re-arrange current workspace in ONE syscall */
-    lea r15, [out_buf]
+    /* Batch hide window + re-arrange current workspace */
     movdqa xmm0, [simd_hide_pkt]
     pinsrd xmm0, ebx, 1
     movdqu [r15 + 0], xmm0
@@ -1317,7 +1281,6 @@ move_window_to_workspace:
 
     mov edi, r14d
     call bsp_arrange_ws_buf
-    call flush_out_buf
 
     /* Insert window into target workspace tree */
     mov edi, ebx
@@ -1325,7 +1288,6 @@ move_window_to_workspace:
     call bsp_tree_insert_into_ws
 
 mw_done:
-    pop r15
     pop r12
     pop rbx
     ret
@@ -1519,7 +1481,6 @@ grab_batch_send:
  */
 draw_mon_bar:
     mov r8d, edi                /* target_mon (0 or 1) */
-    lea r15, [out_buf]
 
     test bpl, 8                 /* is_dual_mon */
     jz dmb_single_mon
@@ -1536,22 +1497,17 @@ dmb_dual_next:
     inc edi
     cmp edi, WORKSPACE_COUNT
     jl dmb_dual_loop
-    jmp dmb_flush
+    ret
 
 dmb_single_mon:
-    call draw_all_bars_buf
-
-dmb_flush:
-    jmp flush_out_buf
+    jmp draw_all_bars_buf
 
 /*
  * draw_all_bars():
- * Standalone entry point: renders bars into out_buf and flushes (Frameless).
+ * Standalone entry point: renders bars into out_buf (Frameless).
  */
 draw_all_bars:
-    lea r15, [out_buf]
-    call draw_all_bars_buf
-    jmp flush_out_buf
+    jmp draw_all_bars_buf
 
 /*
  * draw_all_bars_buf(r15 = write cursor):
@@ -1908,7 +1864,6 @@ handle_map:
 
     mov edi, r12d
     call set_focus_buf
-    call flush_out_buf
     jmp event_loop
 
 handle_unmap:
@@ -1958,7 +1913,6 @@ no_focus_left:
 unmap_arrange_and_flush:
     mov edi, r14d
     call bsp_arrange_ws_buf
-    call flush_out_buf
     jmp event_loop
 
 /*
@@ -2453,15 +2407,10 @@ buh_ret:
 
 /*
  * bsp_arrange_ws(edi = ws_idx)
- * Standalone entry point: arranges workspace into out_buf and flushes.
+ * Standalone entry point: arranges workspace into [r15].
  */
 bsp_arrange_ws:
-    push r15
-    lea r15, [out_buf]
-    call bsp_arrange_ws_buf
-    call flush_out_buf
-    pop r15
-    ret
+    jmp bsp_arrange_ws_buf
 
 .align 16
 geom_init_offsets:
