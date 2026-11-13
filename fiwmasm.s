@@ -1160,9 +1160,7 @@ focus_workspace:
     je fw_bar_and_focus         /* Other monitor is viewing old_ws: do NOT hide! */
 
 fw_do_hide:
-    lea rax, [bsp_roots]
-    mov rdi, [rax + 8*rbx]
-    call hide_tree_collect
+    call hide_ws_windows
     jmp fw_bar_and_focus
 
 fw_same_ws:
@@ -1248,31 +1246,39 @@ simd_hide_pkt:
     .long -9999                 /* x = -9999 (off-screen) */
 
 /*
- * hide_tree_collect(rdi = node, r15 = write cursor):
- * Vectorized SIMD serialization: stores 20-byte ConfigureWindow (x=-9999, y=-9999) to [r15].
+ * hide_ws_windows(ebx = ws_idx, r15 = write cursor):
+ * Flat L1 Cache Scan (Zero Stack, Zero Recursion):
+ * Scans node_pool and emits 20-byte off-screen ConfigureWindow packets for all active windows in ws_idx.
  */
-hide_tree_collect:
-    test rdi, rdi
-    jz htc_ret
-    cmp dword ptr [rdi + NODE_WIN], 0
-    je htc_recurse
+hide_ws_windows:
+    mov ecx, [node_idx]
+    test ecx, ecx
+    jz hww_done
+    lea rdx, [node_pool]
 
-    /* Leaf window found: 128-bit vector burst to [r15] */
+hww_loop:
+    mov eax, [rdx + NODE_WIN]
+    test eax, eax
+    jz hww_next
+    movzx esi, byte ptr [rdx + NODE_INFO]
+    shr esi, 1
+    and esi, 0xF
+    cmp esi, ebx
+    jne hww_next
+
+    /* Window belongs to target workspace: serialize 20-byte off-screen packet */
     movdqa xmm0, [simd_hide_pkt]
-    pinsrd xmm0, dword ptr [rdi + NODE_WIN], 1
+    pinsrd xmm0, eax, 1
     movdqu [r15 + 0], xmm0
-    mov dword ptr [r15 + 16], -9999          /* y = -9999 (off-screen) */
+    mov dword ptr [r15 + 16], -9999
     add r15, 20
-    ret
 
-htc_recurse:
-    push rdi
-    mov rdi, [rdi + NODE_FIRST]
-    call hide_tree_collect
-    pop rdi
-    mov rdi, [rdi + NODE_SECOND]
-    jmp hide_tree_collect
-htc_ret:
+hww_next:
+    add rdx, 32
+    dec ecx
+    jnz hww_loop
+
+hww_done:
     ret
 
 /*
