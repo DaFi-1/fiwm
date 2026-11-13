@@ -785,10 +785,10 @@ key_move_hjkl:
     call bsp_update_history
 
     /* Re-arrange grid and set focus */
-    push r8
+    mov r12d, r8d
     mov edi, r14d
     call bsp_arrange_ws_buf
-    pop rdi
+    mov edi, r12d
     call set_focus_buf
     jmp event_loop
 
@@ -1152,25 +1152,23 @@ parent_fork:
  * - Batches hide + status bar update + arrangement + focus in ONE atomic sys_write!
  */
 focus_workspace:
-    push rbx
-    push r12
+    cmp edi, r14d
+    je fw_done
 
     mov r12d, edi               /* r12d = new_ws */
-    cmp r12d, r14d
-    je fw_done
 
     /* Determine target monitor m (0 or 1) */
     mov edi, r12d
     call get_mon_for_ws         /* eax = m */
-    mov edx, eax                /* edx = target monitor m */
+    mov r10d, eax               /* r10d = target monitor m */
 
     /* Get old workspace currently shown on target monitor m */
-    movzx ebx, byte ptr [mon_cur_ws + rdx]  /* ebx = old_ws on monitor m */
+    movzx ebx, byte ptr [mon_cur_ws + r10]  /* ebx = old_ws on monitor m */
     cmp ebx, r12d
     je fw_same_ws
 
     /* Update visible workspace on target monitor */
-    mov [mon_cur_ws + rdx], r12b
+    mov [mon_cur_ws + r10], r12b
 
     /*
      * Zero-Flicker Workspace Transition:
@@ -1178,16 +1176,14 @@ focus_workspace:
      * 2. Move old workspace windows off-screen (-9999, -9999) SECOND (eliminating screen blanking!).
      * 3. Update status bar and focus THIRD, all committed in ONE atomic sys_write!
      */
-    push rdx
     mov edi, r12d
     call bsp_arrange_ws_buf
-    pop rdx
 
     /* Check if old_ws is displayed on the other monitor (in dual monitor mode) */
     test bpl, 8                 /* bit 3 = is_dual_mon */
     jz fw_do_hide               /* Single monitor: always hide old_ws */
 
-    mov eax, edx
+    mov eax, r10d
     xor eax, 1                  /* other monitor = m ^ 1 */
     movzx eax, byte ptr [mon_cur_ws + rax]
     cmp eax, ebx
@@ -1228,7 +1224,7 @@ fw_focus:
     call bsp_update_history
     mov edi, r8d
     call set_focus_buf
-    jmp fw_done
+    ret
 
 fw_focus_empty:
     xor edi, edi
@@ -1241,8 +1237,6 @@ fw_focus_empty:
     add r15, 16
 
 fw_done:
-    pop r12
-    pop rbx
     ret
 
 /*
@@ -1250,16 +1244,14 @@ fw_done:
  * Batches hiding the moved window + rearranging the current workspace in out_buf!
  */
 move_window_to_workspace:
-    push rbx
-    push r12
-
-    mov r12d, edi               /* target_ws */
-    cmp r12d, r14d
+    cmp edi, r14d
     je mw_done
 
+    mov r12d, edi               /* target_ws */
+
     /* Get current focused leaf */
-    lea rbx, [bsp_focuses]
-    mov rdi, [rbx + 8*r14]
+    lea rax, [bsp_focuses]
+    mov rdi, [rax + 8*r14]
     test rdi, rdi
     jz mw_done
 
@@ -1267,10 +1259,8 @@ move_window_to_workspace:
     test ebx, ebx
     jz mw_done
 
-    /* Detach from current workspace */
-    push rdi
+    /* Detach from current workspace (rdi = leaf_node) */
     call bsp_tree_detach
-    pop rdi
 
     /* Batch hide window + re-arrange current workspace */
     movdqa xmm0, [simd_hide_pkt]
@@ -1288,8 +1278,6 @@ move_window_to_workspace:
     call bsp_tree_insert_into_ws
 
 mw_done:
-    pop r12
-    pop rbx
     ret
 
 .align 16
@@ -1334,10 +1322,6 @@ htc_ret:
  * =========================================================================
  */
 init_bar:
-    push rbx
-    push r12
-    push r15
-
     lea r15, [out_buf]                          /* r15 = unified batch write cursor */
     xor r12d, r12d                              /* r12d = monitor index (0 or 1) */
 
@@ -1468,10 +1452,6 @@ grab_batch_loop:
 
 grab_batch_send:
     call flush_out_buf
-
-    pop r15
-    pop r12
-    pop rbx
     ret
 
 /*
@@ -1615,8 +1595,6 @@ dsw_emit:
  * =========================================================================
  */
 detect_monitors:
-    push rbx
-
     /* Default: 1 monitor = full screen (wm_state bit 3 starts as 0) */
     mov eax, [screen_w]
     mov edx, [screen_h]
@@ -1763,7 +1741,6 @@ mon_detect_done:
     mov eax, [in_buf + 40]
     mov [atom_wm_del], eax
 
-    pop rbx
     ret
 
 /*
@@ -1919,41 +1896,36 @@ unmap_arrange_and_flush:
  * bsp_tree_insert_into_ws(edi = win, esi = ws_idx)
  */
 bsp_tree_insert_into_ws:
-    push rbx
-    push r12
-    push r13
-    push r14
-
-    mov r14d, esi               /* ws_idx */
+    mov r8d, esi               /* ws_idx */
 
     call alloc_node
     mov [rax + NODE_WIN], edi
-    lea edx, [r14 + r14]        /* edx = ws_idx << 1 */
-    mov [rax + NODE_INFO], dl   /* packed NODE_INFO: (ws_idx << 1) | 0 */
-    mov r12, rax                /* r12 = new leaf */
+    lea edx, [r8 + r8]         /* edx = ws_idx << 1 */
+    mov [rax + NODE_INFO], dl  /* packed NODE_INFO: (ws_idx << 1) | 0 */
+    mov r9, rax                /* r9 = new leaf */
 
     lea rax, [bsp_roots]
-    mov rbx, [rax + 8*r14]
-    test rbx, rbx
+    mov r10, [rax + 8*r8]
+    test r10, r10
     jnz ws_split_leaf
 
     /* First window on this workspace becomes root */
     lea rax, [bsp_roots]
-    mov [rax + 8*r14], r12
+    mov [rax + 8*r8], r9
     jmp ws_insert_done
 
 ws_split_leaf:
     lea rax, [bsp_focuses]
-    mov rbx, [rax + 8*r14]
-    test rbx, rbx
+    mov r10, [rax + 8*r8]
+    test r10, r10
     jnz ws_has_focus
     lea rax, [bsp_roots]
-    mov rdi, [rax + 8*r14]
+    mov rdi, [rax + 8*r8]
     call bsp_first_leaf
-    mov rbx, rax
+    mov r10, rax
 ws_has_focus:
     call alloc_node
-    mov r13, rax                /* r13 = new split node */
+    mov r11, rax               /* r11 = new split node */
 
     /* Determine split direction from bpl bits 1..2: 1 = V, 2 = H, 0 = auto */
     mov ecx, ebp
@@ -1962,7 +1934,7 @@ ws_has_focus:
     jnz ws_use_chosen
 
     /* Alternate split: invert bit 0 of parent's NODE_INFO */
-    mov rax, [rbx + NODE_PARENT]
+    mov rax, [r10 + NODE_PARENT]
     test rax, rax
     jz ws_def_v
     mov cl, [rax + NODE_INFO]
@@ -1978,43 +1950,43 @@ ws_use_chosen:
     and bpl, ~6                 /* clear next_split_sel bits 1..2 */
 
 ws_apply_split:
-    lea edx, [r14 + r14]        /* ws_idx << 1 */
+    lea edx, [r8 + r8]          /* ws_idx << 1 */
     or cl, dl                   /* pack (ws_idx << 1) | split_type into 1 byte! */
-    mov [r13 + NODE_INFO], cl
-    mov rax, [rbx + NODE_PARENT]
-    mov [r13 + NODE_PARENT], rax
+    mov [r11 + NODE_INFO], cl
+    mov rax, [r10 + NODE_PARENT]
+    mov [r11 + NODE_PARENT], rax
 
-    mov [r13 + NODE_FIRST], rbx
-    mov [r13 + NODE_SECOND], r12
-    mov [rbx + NODE_PARENT], r13
-    mov [r12 + NODE_PARENT], r13
+    mov [r11 + NODE_FIRST], r10
+    mov [r11 + NODE_SECOND], r9
+    mov [r10 + NODE_PARENT], r11
+    mov [r9 + NODE_PARENT], r11
 
-    mov rax, [r13 + NODE_PARENT]
+    mov rax, [r11 + NODE_PARENT]
     test rax, rax
     jz ws_new_root
 
-    cmp [rax + NODE_FIRST], rbx
+    cmp [rax + NODE_FIRST], r10
     jne ws_link_second
-    mov [rax + NODE_FIRST], r13
+    mov [rax + NODE_FIRST], r11
     jmp ws_insert_done
 ws_link_second:
-    mov [rax + NODE_SECOND], r13
+    mov [rax + NODE_SECOND], r11
     jmp ws_insert_done
 
 ws_new_root:
     lea rax, [bsp_roots]
-    mov [rax + 8*r14], r13
+    mov [rax + 8*r8], r11
 
 ws_insert_done:
     lea rax, [bsp_focuses]
-    mov [rax + 8*r14], r12
-    mov rdi, r12
+    mov [rax + 8*r8], r9
+    mov rdi, r9
     call bsp_update_history
 
     /* Eager O(1) Cache Registration */
-    mov eax, [r12 + NODE_WIN]
+    mov eax, [r9 + NODE_WIN]
     mov [win_mru_id], eax
-    mov [win_mru_node], r12
+    mov [win_mru_node], r9
     mov edx, eax
     shr edx, 4
     xor edx, eax
@@ -2022,29 +1994,20 @@ ws_insert_done:
     shl edx, 4
     lea rcx, [win_hash_tab + rdx]
     mov [rcx + 0], eax
-    mov [rcx + 8], r12
+    mov [rcx + 8], r9
 
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
     ret
 
 /*
  * bsp_tree_detach(rdi = leaf_node)
  */
 bsp_tree_detach:
-    push rbx
-    push r12
-    push r13
-    push r14
-
-    mov rbx, rdi
-    movzx r14d, byte ptr [rbx + NODE_INFO]
-    shr r14d, 1                             /* Extract ws_idx = NODE_INFO >> 1 */
+    mov r8, rdi
+    movzx r9d, byte ptr [r8 + NODE_INFO]
+    shr r9d, 1                              /* Extract ws_idx = NODE_INFO >> 1 */
 
     /* Eager Invalidation from MRU and Hash Table */
-    mov eax, [rbx + NODE_WIN]
+    mov eax, [r8 + NODE_WIN]
     cmp eax, [win_mru_id]
     jne td_check_hash
     mov dword ptr [win_mru_id], 0
@@ -2062,38 +2025,34 @@ td_check_hash:
     mov qword ptr [rcx + 8], 0
 td_hash_done:
 
-    mov r12, [rbx + NODE_PARENT]
-    test r12, r12
+    mov r10, [r8 + NODE_PARENT]
+    test r10, r10
     jnz td_has_parent
 
-    /* Removing root: push leaf node (rbx) onto O(1) free-list! */
+    /* Removing root: push leaf node (r8) onto O(1) free-list! */
     mov rax, [free_node_head]
-    mov [rbx + NODE_FIRST], rax
-    mov [free_node_head], rbx
+    mov [r8 + NODE_FIRST], rax
+    mov [free_node_head], r8
 
     lea rax, [bsp_roots]
-    mov qword ptr [rax + 8*r14], 0
+    mov qword ptr [rax + 8*r9], 0
     lea rax, [bsp_focuses]
-    mov qword ptr [rax + 8*r14], 0
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
+    mov qword ptr [rax + 8*r9], 0
     ret
 
 td_has_parent:
-    /* Branchless sibling selection: if (first == rbx) sibling = second */
-    mov r13, [r12 + NODE_FIRST]
-    mov rax, [r12 + NODE_SECOND]
-    cmp r13, rbx
-    cmove r13, rax
+    /* Branchless sibling selection: if (first == r8) sibling = second */
+    mov r11, [r10 + NODE_FIRST]
+    mov rax, [r10 + NODE_SECOND]
+    cmp r11, r8
+    cmove r11, rax
 
-    mov rax, [r12 + NODE_PARENT]
-    mov [r13 + NODE_PARENT], rax
+    mov rax, [r10 + NODE_PARENT]
+    mov [r11 + NODE_PARENT], rax
 
     /* Branchless grandparent / root slot selection */
     lea rcx, [bsp_roots]
-    lea rcx, [rcx + 8*r14]      /* Default target: &bsp_roots[ws_idx] */
+    lea rcx, [rcx + 8*r9]       /* Default target: &bsp_roots[ws_idx] */
 
     test rax, rax
     jz td_store_sib             /* If no grandparent, update bsp_roots directly */
@@ -2101,24 +2060,19 @@ td_has_parent:
     /* Grandparent exists: select first or second child slot branchlessly via cmovne */
     lea rdx, [rax + NODE_FIRST]
     lea rcx, [rax + NODE_SECOND]
-    cmp [rdx], r12
+    cmp [rdx], r10
     cmovne rdx, rcx
     mov rcx, rdx
 
 td_store_sib:
-    mov [rcx], r13              /* Relink promoted sibling */
+    mov [rcx], r11              /* Relink promoted sibling */
 
 td_done:
-    /* Push both detached leaf (rbx) and split parent (r12) onto O(1) free-list! */
+    /* Push both detached leaf (r8) and split parent (r10) onto O(1) free-list! */
     mov rax, [free_node_head]
-    mov [r12 + NODE_FIRST], rax
-    mov [rbx + NODE_FIRST], r12
-    mov [free_node_head], rbx
-
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
+    mov [r10 + NODE_FIRST], rax
+    mov [r8 + NODE_FIRST], r10
+    mov [free_node_head], r8
     ret
 
 /*
@@ -2226,48 +2180,42 @@ bfwg_hash_inv:
 
     /* 3. Fallback: Search all workspaces if hash missed (e.g. hash collision) */
 bfwg_scan_fallback:
-    push r12
-    push r13
-    mov r12d, esi
-    xor r13d, r13d
+    mov r10d, esi
+    xor r11d, r11d
 bfwg_scan_loop:
     lea rax, [bsp_roots]
-    mov rdi, [rax + 8*r13]
+    mov rdi, [rax + 8*r11]
     test rdi, rdi
     jz bfwg_scan_next
-    mov esi, r12d
+    mov esi, r10d
     call bsp_find_node_by_win
     test rax, rax
     jnz bfwg_found_fallback
 bfwg_scan_next:
-    inc r13d
-    cmp r13d, WORKSPACE_COUNT
+    inc r11d
+    cmp r11d, WORKSPACE_COUNT
     jl bfwg_scan_loop
 
 bfwg_not_found:
-    pop r13
-    pop r12
 bfwg_null:
     xor eax, eax
     ret
 
 bfwg_found_fallback:
     /* Cache in MRU and Hash Table */
-    mov [win_mru_id], r12d
+    mov [win_mru_id], r10d
     mov [win_mru_node], rax
-    mov edx, r12d
+    mov edx, r10d
     shr edx, 4
-    xor edx, r12d
+    xor edx, r10d
     and edx, 31
     shl edx, 4
     lea r8, [win_hash_tab + rdx]
-    mov [r8 + 0], r12d
+    mov [r8 + 0], r10d
     mov [r8 + 8], rax
     movzx ecx, byte ptr [rax + NODE_INFO]
     shr ecx, 1
     and ecx, 0xF
-    pop r13
-    pop r12
     ret
 
 bsp_find_node_by_win:
@@ -2422,39 +2370,28 @@ geom_init_offsets:
 /*
  * bsp_arrange_ws_buf(edi = ws_idx, r15 = write cursor)
  * Appends ConfigureWindow (32 bytes) packets for all windows in ws_idx to [r15].
+ * Frameless Zero-Stack tail dispatch into bsp_arrange_node.
  */
 bsp_arrange_ws_buf:
-    push rbx
-    push r12
-    push r13
-    push r14
-
-    mov r12d, edi               /* ws_idx */
-
     lea rax, [bsp_roots]
-    mov r13, [rax + 8*r12]      /* r13 = root node */
-    test r13, r13
+    mov r8, [rax + 8*rdi]       /* r8 = root node */
+    test r8, r8
     jz arrange_ws_done
 
-    /* Get monitor geometry for this workspace */
-    mov edi, r12d
+    /* Get monitor geometry for this workspace (rdi = ws_idx) */
     call get_mon_for_ws         /* eax = 0 or 1 */
     shl eax, 4                  /* * 16 bytes */
-    lea rbx, [mon_geom]
-    add rbx, rax
+    lea rcx, [mon_geom]
+    add rcx, rax
 
     /* Vectorized root rect setup: loads [x, y, w, h] and applies gaps in 1 SIMD op */
-    movdqu xmm0, [rbx]
+    movdqu xmm0, [rcx]
     paddd xmm0, [geom_init_offsets]
 
-    mov rdi, r13                /* rdi = root node */
-    call bsp_arrange_node
+    mov rdi, r8                 /* rdi = root node */
+    jmp bsp_arrange_node        /* Pure Tail Call! */
 
 arrange_ws_done:
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
     ret
 
 /*
