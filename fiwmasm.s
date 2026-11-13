@@ -210,21 +210,17 @@ connected_ok:
     cmp byte ptr [in_buf], 1
     jne exit_fail
 
-    movzx ecx, word ptr [in_buf + 6]
-    shl ecx, 2                  /* ecx = remaining setup reply bytes to drain */
+    movzx ebx, word ptr [in_buf + 6]
+    shl ebx, 2                  /* ebx = remaining setup reply bytes to drain (syscall-preserved) */
 
     /* Read first chunk into in_buf (up to 576 bytes - fits in 1 KB I/O overlay!) */
     xor eax, eax                /* SYS_READ = 0, rdi still == r13d! */
     lea rsi, [in_buf]
     mov edx, 576
-    cmp edx, ecx
-    cmovg edx, ecx
-    push rcx
-    push rdx
+    cmp edx, ebx
+    cmovg edx, ebx
     syscall
-    pop rdx
-    pop rcx
-    sub ecx, eax                /* remaining bytes */
+    sub ebx, eax                /* remaining bytes */
 
     /* Parse Screen Info from first chunk */
     movzx eax, word ptr [in_buf + 16]   /* vendor_len */
@@ -253,19 +249,17 @@ connected_ok:
 
     /* Drain all remaining setup reply bytes from socket (rdi still == r13d!) */
 drain_setup_loop:
-    test ecx, ecx
+    test ebx, ebx
     jle setup_drained
     mov edx, 576
-    cmp edx, ecx
-    cmovg edx, ecx
-    push rcx
+    cmp edx, ebx
+    cmovg edx, ebx
     xor eax, eax                /* SYS_READ = 0 */
     lea rsi, [in_buf]
     syscall
-    pop rcx
     test eax, eax
     jle setup_drained
-    sub ecx, eax
+    sub ebx, eax
     jmp drain_setup_loop
 
 setup_drained:
@@ -1292,36 +1286,39 @@ create_bar_loop:
     jnz create_bar_loop
 create_bar_done:
 
-    /* 3. Pre-create 2 static GCs for X_ImageText8 (Eliminates PolyFillRectangle AND ChangeGC!):
+    /* 3. Pre-create 2 static GCs for X_ImageText8:
        - bar_gc + 0: active workspace digit GC (fg = 0xc2c2b0, bg = #000000)
        - bar_gc + 1: inactive workspace digit GC (fg = 0x685742, bg = #000000)
      */
     mov ecx, [bar_gc]
     mov edx, [bar_win + 0]
+    mov rsi, 12                                 /* GCForeground (4) | GCBackground (8) */
+    shl rsi, 32
+    or rsi, rdx                                 /* rsi = (12 << 32) | bar_win */
 
     /* GC 0: Active text + background cell (24 bytes) */
-    mov dword ptr [r15 + 0], (6 << 16) | 55
-    mov [r15 + 4], ecx
-    mov [r15 + 8], edx
-    mov dword ptr [r15 + 12], 12                /* GCForeground (4) | GCBackground (8) */
-    mov dword ptr [r15 + 16], 0xc2c2b0          /* fg = active cream/gold */
-    mov dword ptr [r15 + 20], BG_COLOR          /* bg = bar pure black background (#000000) */
+    mov eax, ecx
+    shl rax, 32
+    or rax, (6 << 16) | 55
+    mov [r15 + 0], rax
+    mov [r15 + 8], rsi
+    mov qword ptr [r15 + 16], 0xc2c2b0          /* fg = active cream/gold, bg = 0 */
 
     /* GC 1: Inactive text + background cell (24 bytes) */
     inc ecx
-    mov dword ptr [r15 + 24], (6 << 16) | 55
-    mov [r15 + 28], ecx
-    mov [r15 + 32], edx
-    mov dword ptr [r15 + 36], 12
-    mov dword ptr [r15 + 40], 0x685742          /* fg = inactive brown/gray */
-    mov dword ptr [r15 + 44], BG_COLOR          /* bg = bar pure black background (#000000) */
+    mov eax, ecx
+    shl rax, 32
+    or rax, (6 << 16) | 55
+    mov [r15 + 24], rax
+    mov [r15 + 32], rsi
+    mov qword ptr [r15 + 40], 0x685742          /* fg = inactive brown/gray, bg = 0 */
 
     /* 4. SelectInput and set background color on root window (20 bytes) */
-    mov dword ptr [r15 + 48], (5 << 16) | 2     /* Opcode 2: ChangeWindowAttributes (len=5) */
     mov eax, [root_win]
-    mov [r15 + 52], eax
-    mov dword ptr [r15 + 56], 0x00000802        /* CWBackPixel (0x2) | CWEventMask (0x800) */
-    mov dword ptr [r15 + 60], BG_COLOR          /* CWBackPixel value: root desktop background (#000000) */
+    shl rax, 32
+    or rax, (5 << 16) | 2                       /* Opcode 2: ChangeWindowAttributes (len=5) */
+    mov [r15 + 48], rax
+    mov qword ptr [r15 + 56], 0x00000802        /* CWBackPixel (0x2) | CWEventMask (0x800), pixel 0 */
     mov dword ptr [r15 + 64], 0x00180001        /* SubstructureRedirect | SubstructureNotify | KeyPress */
     add r15, 68
 
@@ -1330,7 +1327,9 @@ create_bar_done:
 
     /* 6. Append all 72 X_GrabKey requests (1152 bytes) into [r15] and flush in ONE syscall! */
     lea rbx, [shortcut_keys]
-    mov r12d, [root_win]
+    mov r8, [root_win]
+    shl r8, 32
+    or r8, (4 << 16) | (1 << 8) | 33            /* Opcode 33: X_GrabKey (len=4, owner_events=1) */
 
 grab_batch_loop:
     movzx edi, byte ptr [rbx]                   /* keycode */
@@ -1338,12 +1337,8 @@ grab_batch_loop:
     jz grab_batch_send
     movzx esi, byte ptr [rbx + 1]               /* modifiers */
 
-    /* Precalculate 64-bit header + win_id */
-    mov rax, r12
-    shl rax, 32
-    or rax, (4 << 16) | (1 << 8) | 33           /* Opcode 33: X_GrabKey (len=4, owner_events=1) */
-    mov [r15 + 0], rax
-    mov [r15 + 16], rax
+    mov [r15 + 0], r8
+    mov [r15 + 16], r8
 
     /* Pack (modifiers | (keycode << 16) | (pointer_mode << 24)) */
     mov edx, edi
@@ -1355,7 +1350,6 @@ grab_batch_loop:
     /* Pack edx + keyboard_mode (1) into 64-bit */
     mov rax, 1                                  /* keyboard_mode = 1 (Async) */
     shl rax, 32
-    mov edx, edx
     or rax, rdx
     mov [r15 + 8], rax                          /* standard combo */
 
