@@ -375,15 +375,13 @@ handle_btn_press:
     mov [drag_orig_x], edi
     mov [drag_orig_y], esi
 
-    /* Find window in active workspace BSP tree */
-    lea rcx, [bsp_roots]
-    mov rdi, [rcx + 8*r14]
-    push rdx
+    /* Find window in active workspace BSP tree via O(1) global lookup */
     mov esi, edx
-    call bsp_find_node_by_win
-    pop rdx
+    call bsp_find_win_global
     test rax, rax
     jz event_loop                       /* Not a managed window */
+    cmp ecx, r14d
+    jne event_loop                      /* Not in active workspace */
 
     /* Update focus to clicked window */
     mov rbx, rax
@@ -549,15 +547,13 @@ handle_enter:
     test edx, edx
     jz event_loop
 
-    /* Find leaf node with this window in active workspace */
-    lea rax, [bsp_roots]
-    mov rdi, [rax + 8*r14]
-    push rdx
+    /* Find leaf node with this window in active workspace via O(1) global lookup */
     mov esi, edx
-    call bsp_find_node_by_win
-    pop rdx
+    call bsp_find_win_global
     test rax, rax
     jz event_loop               /* Window not in active workspace BSP tree */
+    cmp ecx, r14d
+    jne event_loop              /* Window not in active workspace */
 
     /* Check if already focused */
     lea rbx, [bsp_focuses]
@@ -743,6 +739,27 @@ key_move_hjkl:
     mov [r12 + NODE_WIN], r9d
     mov [rax + NODE_WIN], r8d
     mov dword ptr [win_mru_id], 0
+    mov qword ptr [win_mru_node], 0
+
+    /* Update hash table for r8d (now at rax) */
+    mov edx, r8d
+    shr edx, 4
+    xor edx, r8d
+    and edx, 31
+    shl edx, 4
+    lea rcx, [win_hash_tab + rdx]
+    mov [rcx + 0], r8d
+    mov [rcx + 8], rax
+
+    /* Update hash table for r9d (now at r12) */
+    mov edx, r9d
+    shr edx, 4
+    xor edx, r9d
+    and edx, 31
+    shl edx, 4
+    lea rcx, [win_hash_tab + rdx]
+    mov [rcx + 0], r9d
+    mov [rcx + 8], r12
 
     /* Update focus to follow the moved window */
     lea rbx, [bsp_focuses]
@@ -1745,23 +1762,11 @@ handle_map:
     jz event_loop
     mov r12d, edx
 
-    /* Check if window is already managed in any workspace */
-    xor ecx, ecx
-find_ws_map:
-    lea rax, [bsp_roots]
-    mov rdi, [rax + 8*rcx]
-    test rdi, rdi
-    jz fwm_next                 /* Bitwise null skip: skip empty workspaces instantly */
-    push rcx
+    /* Check if window is already managed in any workspace via O(1) global lookup */
     mov esi, r12d
-    call bsp_find_node_by_win
-    pop rcx
+    call bsp_find_win_global
     test rax, rax
     jnz event_loop              /* Already managed: ignore duplicate MapRequest! */
-fwm_next:
-    inc ecx
-    cmp ecx, WORKSPACE_COUNT
-    jl find_ws_map
 
     /* Insert into active workspace BSP tree */
     mov edi, r12d
@@ -1836,42 +1841,28 @@ handle_unmap:
     test edx, edx
     jz event_loop
 
-    /* Find leaf node with this window across all workspaces */
-    xor ecx, ecx
-find_ws_unmap:
-    lea rax, [bsp_roots]
-    mov rdi, [rax + 8*rcx]
-    test rdi, rdi
-    jz fwu_next                 /* Bitwise null skip: skip empty workspaces instantly */
-    push rcx
-    push rdx
+    /* O(1) Global Window Lookup */
     mov esi, edx
-    call bsp_find_node_by_win
-    pop rdx
-    pop rcx
+    call bsp_find_win_global
     test rax, rax
-    jnz found_unmap_node
-fwu_next:
-    inc ecx
-    cmp ecx, WORKSPACE_COUNT
-    jl find_ws_unmap
-    jmp event_loop
+    jz event_loop               /* Window not managed by fiwm */
 
 found_unmap_node:
     /* Detach node from its workspace */
+    mov r12d, ecx               /* r12d = workspace index (0..8) */
     mov rdi, rax
     call bsp_tree_detach
 
     /* If it was in active workspace, re-arrange and focus in ONE syscall */
-    cmp ecx, r14d
+    cmp r12d, r14d
     jne event_loop
 
     lea r15, [out_buf]
     lea rax, [bsp_roots]
-    mov rdi, [rax + 8*rcx]
+    mov rdi, [rax + 8*r14]
     call bsp_first_leaf
     lea rbx, [bsp_focuses]
-    mov [rbx + 8*rcx], rax
+    mov [rbx + 8*r14], rax
     test rax, rax
     jz no_focus_left
     push rax
@@ -1921,13 +1912,7 @@ bsp_tree_insert_into_ws:
     /* First window on this workspace becomes root */
     lea rax, [bsp_roots]
     mov [rax + 8*r14], r12
-    lea rax, [bsp_focuses]
-    mov [rax + 8*r14], r12
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
-    ret
+    jmp ws_insert_done
 
 ws_split_leaf:
     lea rax, [bsp_focuses]
@@ -1997,6 +1982,20 @@ ws_insert_done:
     mov [rax + 8*r14], r12
     mov rdi, r12
     call bsp_update_history
+
+    /* Eager O(1) Cache Registration */
+    mov eax, [r12 + NODE_WIN]
+    mov [win_mru_id], eax
+    mov [win_mru_node], r12
+    mov edx, eax
+    shr edx, 4
+    xor edx, eax
+    and edx, 31
+    shl edx, 4
+    lea rcx, [win_hash_tab + rdx]
+    mov [rcx + 0], eax
+    mov [rcx + 8], r12
+
     pop r14
     pop r13
     pop r12
@@ -2015,6 +2014,26 @@ bsp_tree_detach:
     mov rbx, rdi
     movzx r14d, byte ptr [rbx + NODE_INFO]
     shr r14d, 1                             /* Extract ws_idx = NODE_INFO >> 1 */
+
+    /* Eager Invalidation from MRU and Hash Table */
+    mov eax, [rbx + NODE_WIN]
+    cmp eax, [win_mru_id]
+    jne td_check_hash
+    mov dword ptr [win_mru_id], 0
+    mov qword ptr [win_mru_node], 0
+td_check_hash:
+    mov edx, eax
+    shr edx, 4
+    xor edx, eax
+    and edx, 31
+    shl edx, 4
+    lea rcx, [win_hash_tab + rdx]
+    cmp [rcx + 0], eax
+    jne td_hash_done
+    mov dword ptr [rcx + 0], 0
+    mov qword ptr [rcx + 8], 0
+td_hash_done:
+
     mov r12, [rbx + NODE_PARENT]
     test r12, r12
     jnz td_has_parent
@@ -2119,6 +2138,108 @@ bfl_null:
     ret
 bfl_found:
     mov rax, rdi
+    ret
+
+/*
+ * bsp_find_win_global(esi = win_id) -> rax = leaf_node, ecx = ws_idx (or rax=0 if not found)
+ * Ultra-fast O(1) global window lookup across all workspaces.
+ */
+bsp_find_win_global:
+    test esi, esi
+    jz bfwg_null
+
+    /* 1. Fast Path: 1-entry MRU Cache (~1 cycle) */
+    cmp esi, [win_mru_id]
+    jne bfwg_check_hash
+    mov rax, [win_mru_node]
+    test rax, rax
+    jz bfwg_check_hash
+    cmp [rax + NODE_WIN], esi
+    jne bfwg_mru_inv
+    movzx ecx, byte ptr [rax + NODE_INFO]
+    shr ecx, 1
+    and ecx, 0xF
+    cmp ecx, WORKSPACE_COUNT
+    jge bfwg_mru_inv
+    ret
+
+bfwg_mru_inv:
+    mov dword ptr [win_mru_id], 0
+    mov qword ptr [win_mru_node], 0
+
+    /* 2. O(1) Path: 32-entry Direct Hash Table (~3 cycles) */
+bfwg_check_hash:
+    mov eax, esi
+    shr eax, 4
+    xor eax, esi
+    and eax, 31
+    shl eax, 4
+    lea rdx, [win_hash_tab + rax]
+    cmp [rdx + 0], esi
+    jne bfwg_scan_fallback
+    mov rax, [rdx + 8]
+    test rax, rax
+    jz bfwg_scan_fallback
+    cmp [rax + NODE_WIN], esi
+    jne bfwg_hash_inv
+    movzx ecx, byte ptr [rax + NODE_INFO]
+    shr ecx, 1
+    and ecx, 0xF
+    cmp ecx, WORKSPACE_COUNT
+    jge bfwg_hash_inv
+    /* HIT: Promote to MRU */
+    mov [win_mru_id], esi
+    mov [win_mru_node], rax
+    ret
+
+bfwg_hash_inv:
+    mov dword ptr [rdx + 0], 0
+    mov qword ptr [rdx + 8], 0
+
+    /* 3. Fallback: Search all workspaces if hash missed (e.g. hash collision) */
+bfwg_scan_fallback:
+    push r12
+    push r13
+    mov r12d, esi
+    xor r13d, r13d
+bfwg_scan_loop:
+    lea rax, [bsp_roots]
+    mov rdi, [rax + 8*r13]
+    test rdi, rdi
+    jz bfwg_scan_next
+    mov esi, r12d
+    call bsp_find_node_by_win
+    test rax, rax
+    jnz bfwg_found_fallback
+bfwg_scan_next:
+    inc r13d
+    cmp r13d, WORKSPACE_COUNT
+    jl bfwg_scan_loop
+
+bfwg_not_found:
+    pop r13
+    pop r12
+bfwg_null:
+    xor eax, eax
+    ret
+
+bfwg_found_fallback:
+    /* Cache in MRU and Hash Table */
+    mov [win_mru_id], r12d
+    mov [win_mru_node], rax
+    mov edx, r12d
+    shr edx, 4
+    xor edx, r12d
+    and edx, 31
+    shl edx, 4
+    lea r8, [win_hash_tab + rdx]
+    mov [r8 + 0], r12d
+    mov [r8 + 8], rax
+    movzx ecx, byte ptr [rax + NODE_INFO]
+    shr ecx, 1
+    and ecx, 0xF
+    pop r13
+    pop r12
     ret
 
 bsp_find_node_by_win:
