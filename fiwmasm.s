@@ -1622,17 +1622,21 @@ dsw_emit:
     movzx eax, al
     add edx, eax
 
-    /* X_ImageText8 (Opcode 76, n=1 char, length=5 words = 20 bytes) */
-    mov dword ptr [r15 + 0], (5 << 16) | (1 << 8) | 76
+    /* 64-bit Store 1: Header (0x0005014c) + bar_win[rcx] (low 32b = header, high 32b = win_id) */
     mov eax, [bar_win + 4*rcx]
-    mov [r15 + 4], eax
-    mov [r15 + 8], edx
+    shl rax, 32
+    or rax, (5 << 16) | (1 << 8) | 76
+    mov [r15 + 0], rax
 
-    /* Pack X (low 16b) and Y=13 (high 16b) */
+    /* 64-bit Store 2: GC ID + (Y=13 | X) (low 32b = GC, high 32b = (13 << 16) | X) */
     or esi, (13 << 16)
-    mov [r15 + 12], esi
+    mov rax, rsi
+    shl rax, 32
+    mov edx, edx
+    or rax, rdx
+    mov [r15 + 8], rax
 
-    /* Character byte '1' + edi */
+    /* 32-bit Store 3: Character byte '1' + edi */
     lea eax, [rdi + '1']
     mov [r15 + 16], eax
 
