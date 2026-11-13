@@ -805,28 +805,35 @@ key_kill:
     jz event_loop
 
     /*
-     * Terminate client window and process tree (52 bytes batched in out_buf):
+     * Terminate client window and process tree (52 bytes coalesced in out_buf):
      * 1. X_SendEvent (Opcode 25, len=11 words = 44 bytes): sends ICCCM ClientMessage
      *    WM_PROTOCOLS / WM_DELETE_WINDOW so apps like Brave/Chrome cleanly shut down
      *    all background audio and renderer processes.
      * 2. X_KillClient (Opcode 113, len=2 words = 8 bytes): forces the X server to
      *    sever the client's socket connection so non-ICCCM apps die immediately too.
      */
-    mov dword ptr [r15 + 0],  (11 << 16) | 25   /* X_SendEvent: propagate=0, len=11 */
-    mov [r15 + 4],  edx                         /* destination = win */
-    mov dword ptr [r15 + 8],  0                 /* event_mask = NoEventMask */
-    mov dword ptr [r15 + 12], (32 << 8) | 33    /* ClientMessage (33), format=32 */
-    mov [r15 + 16], edx                         /* window = win */
-    mov eax, [atom_wm_proto]
-    mov [r15 + 20], eax                         /* message_type = WM_PROTOCOLS */
-    mov eax, [atom_wm_del]
-    mov [r15 + 24], eax                         /* data.l[0] = WM_DELETE_WINDOW */
-    mov qword ptr [r15 + 28], 0                 /* data.l[1..2] = 0 */
-    mov qword ptr [r15 + 36], 0                 /* data.l[3..4] = 0 */
+    mov rax, rdx
+    shl rax, 32
+    or rax, (11 << 16) | 25
+    mov [r15 + 0], rax
 
-    /* Also append X_KillClient (8 bytes) */
-    mov dword ptr [r15 + 44], (2 << 16) | 113
-    mov [r15 + 48], edx
+    mov rax, (32 << 40) | (33 << 32)
+    mov [r15 + 8], rax
+
+    mov eax, [atom_wm_proto]
+    shl rax, 32
+    or rax, rdx
+    mov [r15 + 16], rax
+
+    pxor xmm0, xmm0
+    movdqu [r15 + 28], xmm0             /* Zero payload data.l[1..4] (16 bytes) */
+    mov eax, [atom_wm_del]
+    mov [r15 + 24], eax
+
+    mov rax, rdx
+    shl rax, 32
+    or rax, (2 << 16) | 113
+    mov [r15 + 44], rax
     add r15, 52
     jmp event_loop
 
