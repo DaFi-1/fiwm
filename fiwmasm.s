@@ -374,6 +374,7 @@ handle_btn_press:
     mov [drag_start_y], r8d
     mov [drag_orig_x], edi
     mov [drag_orig_y], esi
+    mov qword ptr [drag_last_coords], -1
 
     /* Find window in active workspace BSP tree via O(1) global lookup */
     mov esi, edx
@@ -480,12 +481,23 @@ motion_process:
     sub esi, [drag_start_y]
     add esi, [drag_orig_y]              /* new_y */
 
-    /* ConfigureWindow (x, y) */
-    mov dword ptr [out_buf + 0], (5 << 16) | 12
-    mov [out_buf + 4], edx
+    /* Zero-Delta Motion Filter: drop redundant rendering frames (64-bit check) */
+    shl rsi, 32
+    mov eax, eax                        /* clear upper 32 bits of rax */
+    or rax, rsi                         /* rax = (new_y << 32) | new_x */
+    cmp rax, [drag_last_coords]
+    je event_loop                       /* Exact duplicate frame: skip syscall & Xorg repaint! */
+    mov [drag_last_coords], rax
+
+    /* Precalculate 64-bit header + win_id */
+    mov r8, rdx
+    shl r8, 32
+    or r8, (5 << 16) | 12               /* Opcode 12, len = 5 words */
+
+    /* ConfigureWindow (x, y) - 20 bytes written in 2x 64-bit + 1x 32-bit stores */
+    mov [out_buf + 0], r8
     mov dword ptr [out_buf + 8], 3      /* CWX | CWY = 3 */
-    mov [out_buf + 12], eax
-    mov [out_buf + 16], esi
+    mov [out_buf + 12], rax
 
     push SYS_WRITE
     pop rax
@@ -511,12 +523,23 @@ motion_resize:
     cmp esi, 50
     cmovl esi, r10d
 
-    /* ConfigureWindow (w, h) */
-    mov dword ptr [out_buf + 0], (5 << 16) | 12
-    mov [out_buf + 4], edx
+    /* Zero-Delta Motion Filter: drop redundant rendering frames (64-bit check) */
+    shl rsi, 32
+    mov eax, eax                        /* clear upper 32 bits of rax */
+    or rax, rsi                         /* rax = (new_h << 32) | new_w */
+    cmp rax, [drag_last_coords]
+    je event_loop                       /* Exact duplicate frame: skip syscall & Xorg repaint! */
+    mov [drag_last_coords], rax
+
+    /* Precalculate 64-bit header + win_id */
+    mov r8, rdx
+    shl r8, 32
+    or r8, (5 << 16) | 12               /* Opcode 12, len = 5 words */
+
+    /* ConfigureWindow (w, h) - 20 bytes written in 2x 64-bit + 1x 32-bit stores */
+    mov [out_buf + 0], r8
     mov dword ptr [out_buf + 8], 12     /* CWWidth | CWHeight = 12 */
-    mov [out_buf + 12], eax
-    mov [out_buf + 16], esi
+    mov [out_buf + 12], rax
 
     push SYS_WRITE
     pop rax
@@ -529,6 +552,7 @@ motion_resize:
 
 handle_btn_release:
     mov dword ptr [drag_win], 0
+    mov qword ptr [drag_last_coords], -1
     jmp event_loop
 
 handle_enter:
@@ -2888,6 +2912,7 @@ drag_orig_w:    .long 0         /* Window W at drag start */
 drag_orig_h:    .long 0         /* Window H at drag start */
 drag_start_x:   .long 0         /* Mouse Root X at drag start */
 drag_start_y:   .long 0         /* Mouse Root Y at drag start */
+drag_last_coords: .quad 0       /* Last rendered (Y<<32)|X or (H<<32)|W for Zero-Delta filtering */
 
 /*
  * Shared I/O Buffer (1056 bytes total) + node_pool (512 bytes) = 1568 bytes contiguous!
