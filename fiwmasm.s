@@ -1892,18 +1892,16 @@ td_has_parent:
     mov [r11 + NODE_PARENT], rax
 
     /* Branchless grandparent / root slot selection */
-    lea rcx, [bsp_roots]
-    lea rcx, [rcx + 8*r9]       /* Default target: &bsp_roots[ws_idx] */
+    lea rcx, [bsp_roots + 8*r9] /* Default target: &bsp_roots[ws_idx] */
 
     test rax, rax
     jz td_store_sib             /* If no grandparent, update bsp_roots directly */
 
-    /* Grandparent exists: select first or second child slot branchlessly via cmovne */
+    /* Grandparent exists: select first or second child slot branchlessly */
     lea rdx, [rax + NODE_FIRST]
     lea rcx, [rax + NODE_SECOND]
     cmp [rdx], r10
-    cmovne rdx, rcx
-    mov rcx, rdx
+    cmove rcx, rdx
 
 td_store_sib:
     mov [rcx], r11              /* Relink promoted sibling */
