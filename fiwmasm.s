@@ -320,34 +320,38 @@ ev_pop_buffered:
     movzx eax, byte ptr [rsi]
     and eax, 0x7F
 
-    /* Direct O(1) Computed Jump Table Dispatch (eliminates 8-branch cascade) */
+    /* Direct O(1) 16-bit Relative Jump Table Dispatch (High Density, Cache Line Aligned) */
     cmp eax, 20
     ja event_loop
-    jmp [event_jump_table + rax*8]
+    lea rdx, [event_disp_base]
+    movsx rax, word ptr [event_jump_table + rax*2]
+    add rdx, rax
+    jmp rdx
 
-.align 8
+.align 2
 event_jump_table:
-    .quad event_loop        /* 0: Error */
-    .quad event_loop        /* 1: Reply */
-    .quad handle_key        /* 2: KeyPress */
-    .quad event_loop        /* 3: KeyRelease */
-    .quad handle_btn_press  /* 4: ButtonPress */
-    .quad handle_btn_release /* 5: ButtonRelease */
-    .quad handle_motion     /* 6: MotionNotify */
-    .quad handle_enter      /* 7: EnterNotify */
-    .quad event_loop        /* 8: LeaveNotify */
-    .quad event_loop        /* 9: FocusIn */
-    .quad event_loop        /* 10: FocusOut */
-    .quad event_loop        /* 11: KeymapNotify */
-    .quad handle_expose     /* 12: Expose */
-    .quad event_loop        /* 13: GraphicsExpose */
-    .quad event_loop        /* 14: NoExpose */
-    .quad event_loop        /* 15: VisibilityNotify */
-    .quad event_loop        /* 16: CreateNotify */
-    .quad handle_unmap      /* 17: DestroyNotify */
-    .quad handle_unmap      /* 18: UnmapNotify */
-    .quad event_loop        /* 19: MapNotify */
-    .quad handle_map        /* 20: MapRequest */
+    .short event_loop - event_disp_base         /* 0: Error */
+    .short event_loop - event_disp_base         /* 1: Reply */
+    .short handle_key - event_disp_base         /* 2: KeyPress */
+    .short event_loop - event_disp_base         /* 3: KeyRelease */
+    .short handle_btn_press - event_disp_base   /* 4: ButtonPress */
+    .short handle_btn_release - event_disp_base /* 5: ButtonRelease */
+    .short handle_motion - event_disp_base      /* 6: MotionNotify */
+    .short handle_enter - event_disp_base       /* 7: EnterNotify */
+    .short event_loop - event_disp_base         /* 8: LeaveNotify */
+    .short event_loop - event_disp_base         /* 9: FocusIn */
+    .short event_loop - event_disp_base         /* 10: FocusOut */
+    .short event_loop - event_disp_base         /* 11: KeymapNotify */
+    .short handle_expose - event_disp_base      /* 12: Expose */
+    .short event_loop - event_disp_base         /* 13: GraphicsExpose */
+    .short event_loop - event_disp_base         /* 14: NoExpose */
+    .short event_loop - event_disp_base         /* 15: VisibilityNotify */
+    .short event_loop - event_disp_base         /* 16: CreateNotify */
+    .short handle_unmap - event_disp_base       /* 17: DestroyNotify */
+    .short handle_unmap - event_disp_base       /* 18: UnmapNotify */
+    .short event_loop - event_disp_base         /* 19: MapNotify */
+    .short handle_map - event_disp_base         /* 20: MapRequest */
+event_disp_base:
 
 handle_btn_press:
     /*
@@ -615,70 +619,74 @@ handle_key:
     movzx ecx, byte ptr [rsi + 1]   /* keycode */
     movzx edx, word ptr [rsi + 28]  /* state/modifiers */
 
-    /* O(1) Keycode Jump Table Dispatch (keycodes 10..65 -> index 0..55) */
+    /* O(1) 16-bit Relative Keycode Jump Table Dispatch (High Density, Cache Line Aligned) */
     sub ecx, 10
     cmp ecx, 55
     ja event_loop
-    jmp [key_jump_table + rcx*8]
+    lea r11, [key_disp_base]
+    movsx rax, word ptr [key_jump_table + rcx*2]
+    add r11, rax
+    jmp r11
 
-.align 8
+.align 2
 key_jump_table:
-    .quad key_ws_dispatch   /* 0:  kc 10 (Alt+1) */
-    .quad key_ws_dispatch   /* 1:  kc 11 (Alt+2) */
-    .quad key_ws_dispatch   /* 2:  kc 12 (Alt+3) */
-    .quad key_ws_dispatch   /* 3:  kc 13 (Alt+4) */
-    .quad key_ws_dispatch   /* 4:  kc 14 (Alt+5) */
-    .quad key_ws_dispatch   /* 5:  kc 15 (Alt+6) */
-    .quad key_ws_dispatch   /* 6:  kc 16 (Alt+7) */
-    .quad key_ws_dispatch   /* 7:  kc 17 (Alt+8) */
-    .quad key_ws_dispatch   /* 8:  kc 18 (Alt+9) */
-    .quad event_loop        /* 9:  kc 19 */
-    .quad event_loop        /* 10: kc 20 */
-    .quad event_loop        /* 11: kc 21 */
-    .quad event_loop        /* 12: kc 22 */
-    .quad event_loop        /* 13: kc 23 */
-    .quad key_q             /* 14: kc 24 (Alt+q / Alt+Shift+q) */
-    .quad key_term          /* 15: kc 25 (Alt+w) */
-    .quad event_loop        /* 16: kc 26 */
-    .quad event_loop        /* 17: kc 27 */
-    .quad event_loop        /* 18: kc 28 */
-    .quad event_loop        /* 19: kc 29 */
-    .quad event_loop        /* 20: kc 30 */
-    .quad event_loop        /* 21: kc 31 */
-    .quad event_loop        /* 22: kc 32 */
-    .quad event_loop        /* 23: kc 33 */
-    .quad event_loop        /* 24: kc 34 */
-    .quad event_loop        /* 25: kc 35 */
-    .quad key_term          /* 26: kc 36 (Alt+Return) */
-    .quad event_loop        /* 27: kc 37 */
-    .quad key_ws_prev       /* 28: kc 38 (Alt+a) */
-    .quad key_ws_next       /* 29: kc 39 (Alt+s) */
-    .quad key_menu          /* 30: kc 40 (Alt+d) */
-    .quad key_f             /* 31: kc 41 (Alt+f / Alt+Shift+f) */
-    .quad event_loop        /* 32: kc 42 */
-    .quad key_hjkl_disp     /* 33: kc 43 (Alt+h) */
-    .quad key_hjkl_disp     /* 34: kc 44 (Alt+j) */
-    .quad key_hjkl_disp     /* 35: kc 45 (Alt+k) */
-    .quad key_hjkl_disp     /* 36: kc 46 (Alt+l) */
-    .quad event_loop        /* 37: kc 47 */
-    .quad event_loop        /* 38: kc 48 */
-    .quad event_loop        /* 39: kc 49 */
-    .quad event_loop        /* 40: kc 50 */
-    .quad event_loop        /* 41: kc 51 */
-    .quad event_loop        /* 42: kc 52 */
-    .quad event_loop        /* 43: kc 53 */
-    .quad event_loop        /* 44: kc 54 */
-    .quad key_split_h       /* 45: kc 55 (Alt+v) */
-    .quad key_split_v       /* 46: kc 56 (Alt+b) */
-    .quad event_loop        /* 47: kc 57 */
-    .quad event_loop        /* 48: kc 58 */
-    .quad event_loop        /* 49: kc 59 */
-    .quad event_loop        /* 50: kc 60 */
-    .quad event_loop        /* 51: kc 61 */
-    .quad event_loop        /* 52: kc 62 */
-    .quad event_loop        /* 53: kc 63 */
-    .quad event_loop        /* 54: kc 64 */
-    .quad key_floating      /* 55: kc 65 (Alt+Space) */
+    .short key_ws_dispatch - key_disp_base   /* 0:  kc 10 (Alt+1) */
+    .short key_ws_dispatch - key_disp_base   /* 1:  kc 11 (Alt+2) */
+    .short key_ws_dispatch - key_disp_base   /* 2:  kc 12 (Alt+3) */
+    .short key_ws_dispatch - key_disp_base   /* 3:  kc 13 (Alt+4) */
+    .short key_ws_dispatch - key_disp_base   /* 4:  kc 14 (Alt+5) */
+    .short key_ws_dispatch - key_disp_base   /* 5:  kc 15 (Alt+6) */
+    .short key_ws_dispatch - key_disp_base   /* 6:  kc 16 (Alt+7) */
+    .short key_ws_dispatch - key_disp_base   /* 7:  kc 17 (Alt+8) */
+    .short key_ws_dispatch - key_disp_base   /* 8:  kc 18 (Alt+9) */
+    .short event_loop - key_disp_base        /* 9:  kc 19 */
+    .short event_loop - key_disp_base        /* 10: kc 20 */
+    .short event_loop - key_disp_base        /* 11: kc 21 */
+    .short event_loop - key_disp_base        /* 12: kc 22 */
+    .short event_loop - key_disp_base        /* 13: kc 23 */
+    .short key_q - key_disp_base             /* 14: kc 24 (Alt+q / Alt+Shift+q) */
+    .short key_term - key_disp_base          /* 15: kc 25 (Alt+w) */
+    .short event_loop - key_disp_base        /* 16: kc 26 */
+    .short event_loop - key_disp_base        /* 17: kc 27 */
+    .short event_loop - key_disp_base        /* 18: kc 28 */
+    .short event_loop - key_disp_base        /* 19: kc 29 */
+    .short event_loop - key_disp_base        /* 20: kc 30 */
+    .short event_loop - key_disp_base        /* 21: kc 31 */
+    .short event_loop - key_disp_base        /* 22: kc 32 */
+    .short event_loop - key_disp_base        /* 23: kc 33 */
+    .short event_loop - key_disp_base        /* 24: kc 34 */
+    .short event_loop - key_disp_base        /* 25: kc 35 */
+    .short key_term - key_disp_base          /* 26: kc 36 (Alt+Return) */
+    .short event_loop - key_disp_base        /* 27: kc 37 */
+    .short key_ws_prev - key_disp_base       /* 28: kc 38 (Alt+a) */
+    .short key_ws_next - key_disp_base       /* 29: kc 39 (Alt+s) */
+    .short key_menu - key_disp_base          /* 30: kc 40 (Alt+d) */
+    .short key_f - key_disp_base             /* 31: kc 41 (Alt+f / Alt+Shift+f) */
+    .short event_loop - key_disp_base        /* 32: kc 42 */
+    .short key_hjkl_disp - key_disp_base     /* 33: kc 43 (Alt+h) */
+    .short key_hjkl_disp - key_disp_base     /* 34: kc 44 (Alt+j) */
+    .short key_hjkl_disp - key_disp_base     /* 35: kc 45 (Alt+k) */
+    .short key_hjkl_disp - key_disp_base     /* 36: kc 46 (Alt+l) */
+    .short event_loop - key_disp_base        /* 37: kc 47 */
+    .short event_loop - key_disp_base        /* 38: kc 48 */
+    .short event_loop - key_disp_base        /* 39: kc 49 */
+    .short event_loop - key_disp_base        /* 40: kc 50 */
+    .short event_loop - key_disp_base        /* 41: kc 51 */
+    .short event_loop - key_disp_base        /* 42: kc 52 */
+    .short event_loop - key_disp_base        /* 43: kc 53 */
+    .short event_loop - key_disp_base        /* 44: kc 54 */
+    .short key_split_h - key_disp_base       /* 45: kc 55 (Alt+v) */
+    .short key_split_v - key_disp_base       /* 46: kc 56 (Alt+b) */
+    .short event_loop - key_disp_base        /* 47: kc 57 */
+    .short event_loop - key_disp_base        /* 48: kc 58 */
+    .short event_loop - key_disp_base        /* 49: kc 59 */
+    .short event_loop - key_disp_base        /* 50: kc 60 */
+    .short event_loop - key_disp_base        /* 51: kc 61 */
+    .short event_loop - key_disp_base        /* 52: kc 62 */
+    .short event_loop - key_disp_base        /* 53: kc 63 */
+    .short event_loop - key_disp_base        /* 54: kc 64 */
+    .short key_floating - key_disp_base      /* 55: kc 65 (Alt+Space) */
+key_disp_base:
 
 key_ws_dispatch:
     test edx, 1                 /* ShiftMask = 1 ? */
