@@ -682,7 +682,6 @@ key_f:
  * Fuses directional focus (Alt+HJKL) and directional window swap (Alt+Shift+HJKL).
  */
 key_hjkl_disp:
-    add ecx, 10                 /* restore keycode 43..46 */
     mov r10d, edx               /* r10d = state/modifiers */
     and r10d, 1                 /* bit 0 = ShiftMask */
 
@@ -691,7 +690,14 @@ key_hjkl_disp:
     mov rbx, rax                /* rbx = current focused leaf (callee-saved) */
     mov rdi, rax
 
-    call hjkl_decode_dir        /* esi = orient, edx = dir */
+    /* Inlined branchless direction decoder: ecx was keycode - 10 (33..36) */
+    sub ecx, 33                 /* ecx = 0..3 (h, j, k, l) */
+    mov edx, ecx
+    and edx, 1                  /* dir: 0(h)->0, 1(j)->1, 2(k)->0, 3(l)->1 */
+    shr ecx, 1
+    xor ecx, edx                /* orient: h->0, j->1, k->1, l->0 */
+    mov esi, ecx
+
     call bsp_node_in_direction  /* rax = neighbor leaf node */
     test rax, rax
     jz event_loop               /* No neighbor in that direction */
@@ -724,21 +730,6 @@ hjkl_apply_focus:
     mov esi, r14d
     call activate_node_focus
     jmp event_loop
-
-/*
- * hjkl_decode_dir(ecx = keycode 43..46)
- * Outputs:
- *   esi = orient (0 = Vertical, 1 = Horizontal)
- *   edx = dir (0 = Left/Up, 1 = Right/Down)
- */
-hjkl_decode_dir:
-    sub ecx, 43
-    mov edx, ecx
-    and edx, 1                  /* dir: 43(h)->0, 44(j)->1, 45(k)->0, 46(l)->1 */
-    shr ecx, 1
-    xor ecx, edx                /* orient: h->0, j->1, k->1, l->0 */
-    mov esi, ecx
-    ret
 
 key_split_h:
     and bpl, ~6
