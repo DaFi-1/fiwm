@@ -480,33 +480,10 @@ motion_process:
     /* Button 1 = Move: direct algebraic offset (new_x = cur_x - eventX) */
     mov eax, ecx
     sub eax, [drag_off_x]               /* new_x */
-
     mov esi, r8d
     sub esi, [drag_off_y]               /* new_y */
-
-    /* Zero-Delta Motion Filter: drop redundant rendering frames (64-bit check) */
-    shl rsi, 32
-    mov eax, eax                        /* clear upper 32 bits of rax */
-    or rax, rsi                         /* rax = (new_y << 32) | new_x */
-    cmp rax, [drag_last_coords]
-    je event_loop                       /* Exact duplicate frame: skip syscall & Xorg repaint! */
-    mov [drag_last_coords], rax
-
-    /* Precalculate 64-bit header + win_id */
-    mov r8, rdx
-    shl r8, 32
-    or r8, (5 << 16) | 12               /* Opcode 12, len = 5 words */
-    mov [r15 + 0], r8
-
-    /* Naturally aligned stores: 64-bit aligned at offset 8, 32-bit aligned at offset 16 */
-    mov ecx, eax                        /* ecx = new_x */
-    shl rcx, 32
-    or rcx, 3                           /* CWX | CWY = 3 */
-    mov [r15 + 8], rcx                  /* 8-byte aligned store: mask + new_x */
-    shr rax, 32                         /* eax = new_y */
-    mov [r15 + 16], eax                 /* 4-byte aligned store: new_y */
-    add r15, 20
-    jmp event_loop
+    mov r9d, 3                          /* CWX | CWY = 3 */
+    jmp motion_emit
 
 motion_resize:
     /* Branchless Clamping: MAX(50, orig + delta) via cmovl */
@@ -522,11 +499,13 @@ motion_resize:
     add esi, [drag_orig_h]
     cmp esi, 50
     cmovl esi, r10d
+    mov r9d, 12                         /* CWWidth | CWHeight = 12 */
 
+motion_emit:
     /* Zero-Delta Motion Filter: drop redundant rendering frames (64-bit check) */
     shl rsi, 32
     mov eax, eax                        /* clear upper 32 bits of rax */
-    or rax, rsi                         /* rax = (new_h << 32) | new_w */
+    or rax, rsi                         /* rax = (val2 << 32) | val1 */
     cmp rax, [drag_last_coords]
     je event_loop                       /* Exact duplicate frame: skip syscall & Xorg repaint! */
     mov [drag_last_coords], rax
@@ -538,12 +517,12 @@ motion_resize:
     mov [r15 + 0], r8
 
     /* Naturally aligned stores: 64-bit aligned at offset 8, 32-bit aligned at offset 16 */
-    mov ecx, eax                        /* ecx = new_w */
+    mov ecx, eax                        /* ecx = val1 */
     shl rcx, 32
-    or rcx, 12                          /* CWWidth | CWHeight = 12 */
-    mov [r15 + 8], rcx                  /* 8-byte aligned store: mask + new_w */
-    shr rax, 32                         /* eax = new_h */
-    mov [r15 + 16], eax                 /* 4-byte aligned store: new_h */
+    or rcx, r9                          /* mask (3 or 12) */
+    mov [r15 + 8], rcx                  /* 8-byte aligned store: mask + val1 */
+    shr rax, 32                         /* eax = val2 */
+    mov [r15 + 16], eax                 /* 4-byte aligned store: val2 */
     add r15, 20
     jmp event_loop
 
