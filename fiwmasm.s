@@ -361,19 +361,13 @@ handle_btn_press:
     movsx r10d, word ptr [rsi + 26]     /* eventY */
     movzx eax, byte ptr [rsi + 1]       /* button */
 
-    /* win_x = rootX - eventX, win_y = rootY - eventY */
-    mov edi, ecx
-    sub edi, r9d                        /* win_x */
-    mov esi, r8d
-    sub esi, r10d                       /* win_y */
-
     /* Save drag state */
     mov [drag_win], edx
     mov [drag_btn], eax
+    mov [drag_off_x], r9d
+    mov [drag_off_y], r10d
     mov [drag_start_x], ecx
     mov [drag_start_y], r8d
-    mov [drag_orig_x], edi
-    mov [drag_orig_y], esi
     mov qword ptr [drag_last_coords], -1
 
     /* Find window in active workspace BSP tree via O(1) global lookup */
@@ -470,16 +464,12 @@ motion_process:
     cmp dword ptr [drag_btn], 3         /* Button 3 = Resize */
     je motion_resize
 
-    /* Button 1 = Move */
-    /* new_x = orig_x + (cur_x - start_x) */
+    /* Button 1 = Move: direct algebraic offset (new_x = cur_x - eventX) */
     mov eax, ecx
-    sub eax, [drag_start_x]
-    add eax, [drag_orig_x]              /* new_x */
+    sub eax, [drag_off_x]               /* new_x */
 
-    /* new_y = orig_y + (cur_y - start_y) */
     mov esi, r8d
-    sub esi, [drag_start_y]
-    add esi, [drag_orig_y]              /* new_y */
+    sub esi, [drag_off_y]               /* new_y */
 
     /* Zero-Delta Motion Filter: drop redundant rendering frames (64-bit check) */
     shl rsi, 32
@@ -493,11 +483,15 @@ motion_process:
     mov r8, rdx
     shl r8, 32
     or r8, (5 << 16) | 12               /* Opcode 12, len = 5 words */
-
-    /* ConfigureWindow (x, y) - 20 bytes written in 2x 64-bit + 1x 32-bit stores */
     mov [out_buf + 0], r8
-    mov dword ptr [out_buf + 8], 3      /* CWX | CWY = 3 */
-    mov [out_buf + 12], rax
+
+    /* Naturally aligned stores: 64-bit aligned at offset 8, 32-bit aligned at offset 16 */
+    mov ecx, eax                        /* ecx = new_x */
+    shl rcx, 32
+    or rcx, 3                           /* CWX | CWY = 3 */
+    mov [out_buf + 8], rcx              /* 8-byte aligned store: mask + new_x */
+    shr rax, 32                         /* eax = new_y */
+    mov [out_buf + 16], eax             /* 4-byte aligned store: new_y */
 
     push SYS_WRITE
     pop rax
@@ -535,11 +529,15 @@ motion_resize:
     mov r8, rdx
     shl r8, 32
     or r8, (5 << 16) | 12               /* Opcode 12, len = 5 words */
-
-    /* ConfigureWindow (w, h) - 20 bytes written in 2x 64-bit + 1x 32-bit stores */
     mov [out_buf + 0], r8
-    mov dword ptr [out_buf + 8], 12     /* CWWidth | CWHeight = 12 */
-    mov [out_buf + 12], rax
+
+    /* Naturally aligned stores: 64-bit aligned at offset 8, 32-bit aligned at offset 16 */
+    mov ecx, eax                        /* ecx = new_w */
+    shl rcx, 32
+    or rcx, 12                          /* CWWidth | CWHeight = 12 */
+    mov [out_buf + 8], rcx              /* 8-byte aligned store: mask + new_w */
+    shr rax, 32                         /* eax = new_h */
+    mov [out_buf + 16], eax             /* 4-byte aligned store: new_h */
 
     push SYS_WRITE
     pop rax
@@ -2913,8 +2911,8 @@ ev_q_tail:      .long 0         /* Total bytes available in event_queue */
 /* Drag State for Mod + Mouse Move/Resize */
 drag_win:       .long 0         /* Target window being moved or resized */
 drag_btn:       .long 0         /* 1 = Move (Button 1), 3 = Resize (Button 3) */
-drag_orig_x:    .long 0         /* Window X at drag start */
-drag_orig_y:    .long 0         /* Window Y at drag start */
+drag_off_x:     .long 0         /* Relative click X offset inside window */
+drag_off_y:     .long 0         /* Relative click Y offset inside window */
 drag_orig_w:    .long 0         /* Window W at drag start */
 drag_orig_h:    .long 0         /* Window H at drag start */
 drag_start_x:   .long 0         /* Mouse Root X at drag start */
