@@ -56,7 +56,8 @@ echo "[*] Launching Xephyr on display ${TEST_DISP} (800x600, headless)..."
 rm -f "/tmp/.X11-unix/X${TEST_DISP#:}" "/tmp/.X${TEST_DISP#:}-lock" /tmp/headless_parent_sc.pid
 PARENT_PID=""
 PARENT_WIN=""
-python3 /home/a/fiwm/tests/headless_parent.py 800 600 >/tmp/headless_parent_sc.pid 2>/dev/null &
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 "$SCRIPT_DIR/headless_parent.py" 800 600 >/tmp/headless_parent_sc.pid 2>/dev/null &
 PARENT_PID=$!
 sleep 0.2
 if [ -s /tmp/headless_parent_sc.pid ]; then
@@ -263,13 +264,15 @@ fi
 if command -v zathura >/dev/null 2>&1; then
     echo ""
     echo "--- [9] Duplicate MapRequest (Zathura) Fullscreen Test ---"
+    # Create minimal test PDF
+    printf '%%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000052 00000 n \n0000000101 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n178\n%%%%EOF\n' > /tmp/fiwm_test_sample.pdf
     DISPLAY="$TEST_DISP" xdotool key alt+6
     sleep 0.2
-    DISPLAY="$TEST_DISP" zathura "/home/a/Downloads/Competente-o-Suficiente-ebook.pdf" >/dev/null 2>&1 &
+    DISPLAY="$TEST_DISP" zathura /tmp/fiwm_test_sample.pdf >/dev/null 2>&1 &
     ZAT_TEST_PID=$!
     W_VAL=""
     for i in $(seq 1 25); do
-        W_VAL=$(DISPLAY="$TEST_DISP" xwininfo -root -tree 2>/dev/null | grep -E "Competente|zathura" | grep -v '\-9999' | grep -o '[0-9]\+x[0-9]\+' | cut -d'x' -f1 | sort -n | tail -n 1 || true)
+        W_VAL=$(DISPLAY="$TEST_DISP" xwininfo -root -tree 2>/dev/null | grep -E "fiwm_test_sample|zathura" | grep -v '\-9999' | grep -o '[0-9]\+x[0-9]\+' | cut -d'x' -f1 | sort -n | tail -n 1 || true)
         if [ -n "$W_VAL" ] && [ "$W_VAL" -ge 780 ]; then
             break
         fi

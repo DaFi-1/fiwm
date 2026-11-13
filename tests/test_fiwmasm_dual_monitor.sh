@@ -49,7 +49,8 @@ make fiwmasm >/dev/null
 rm -f "/tmp/.X11-unix/X${TEST_DISP#:}" "/tmp/.X${TEST_DISP#:}-lock" /tmp/headless_parent_dm.pid
 PARENT_PID=""
 PARENT_WIN=""
-python3 /home/a/fiwm/tests/headless_parent.py 1024 768 >/tmp/headless_parent_dm.pid 2>/dev/null &
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 "$SCRIPT_DIR/headless_parent.py" 1024 768 >/tmp/headless_parent_dm.pid 2>/dev/null &
 PARENT_PID=$!
 sleep 0.2
 if [ -s /tmp/headless_parent_dm.pid ]; then
