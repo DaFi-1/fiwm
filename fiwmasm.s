@@ -604,16 +604,91 @@ handle_key:
     movzx ecx, byte ptr [rsi + 1]   /* keycode */
     movzx edx, word ptr [rsi + 28]  /* state/modifiers */
 
-    /* Check Alt+1..9 (keycodes 10 to 18) */
-    cmp ecx, 10
-    jl check_other_keys
-    cmp ecx, 18
-    jg check_other_keys
+    /* O(1) Keycode Jump Table Dispatch (keycodes 10..65 -> index 0..55) */
+    sub ecx, 10
+    cmp ecx, 55
+    ja event_loop
+    jmp [key_jump_table + rcx*8]
 
-    sub ecx, 10                 /* ecx = target workspace 0..8 */
+.align 8
+key_jump_table:
+    .quad key_ws_dispatch   /* 0:  kc 10 (Alt+1) */
+    .quad key_ws_dispatch   /* 1:  kc 11 (Alt+2) */
+    .quad key_ws_dispatch   /* 2:  kc 12 (Alt+3) */
+    .quad key_ws_dispatch   /* 3:  kc 13 (Alt+4) */
+    .quad key_ws_dispatch   /* 4:  kc 14 (Alt+5) */
+    .quad key_ws_dispatch   /* 5:  kc 15 (Alt+6) */
+    .quad key_ws_dispatch   /* 6:  kc 16 (Alt+7) */
+    .quad key_ws_dispatch   /* 7:  kc 17 (Alt+8) */
+    .quad key_ws_dispatch   /* 8:  kc 18 (Alt+9) */
+    .quad event_loop        /* 9:  kc 19 */
+    .quad event_loop        /* 10: kc 20 */
+    .quad event_loop        /* 11: kc 21 */
+    .quad event_loop        /* 12: kc 22 */
+    .quad event_loop        /* 13: kc 23 */
+    .quad key_q             /* 14: kc 24 (Alt+q / Alt+Shift+q) */
+    .quad key_term          /* 15: kc 25 (Alt+w) */
+    .quad event_loop        /* 16: kc 26 */
+    .quad event_loop        /* 17: kc 27 */
+    .quad event_loop        /* 18: kc 28 */
+    .quad event_loop        /* 19: kc 29 */
+    .quad event_loop        /* 20: kc 30 */
+    .quad event_loop        /* 21: kc 31 */
+    .quad event_loop        /* 22: kc 32 */
+    .quad event_loop        /* 23: kc 33 */
+    .quad event_loop        /* 24: kc 34 */
+    .quad event_loop        /* 25: kc 35 */
+    .quad key_term          /* 26: kc 36 (Alt+Return) */
+    .quad event_loop        /* 27: kc 37 */
+    .quad key_ws_prev       /* 28: kc 38 (Alt+a) */
+    .quad key_ws_next       /* 29: kc 39 (Alt+s) */
+    .quad key_menu          /* 30: kc 40 (Alt+d) */
+    .quad key_f             /* 31: kc 41 (Alt+f / Alt+Shift+f) */
+    .quad event_loop        /* 32: kc 42 */
+    .quad key_hjkl_disp     /* 33: kc 43 (Alt+h) */
+    .quad key_hjkl_disp     /* 34: kc 44 (Alt+j) */
+    .quad key_hjkl_disp     /* 35: kc 45 (Alt+k) */
+    .quad key_hjkl_disp     /* 36: kc 46 (Alt+l) */
+    .quad event_loop        /* 37: kc 47 */
+    .quad event_loop        /* 38: kc 48 */
+    .quad event_loop        /* 39: kc 49 */
+    .quad event_loop        /* 40: kc 50 */
+    .quad event_loop        /* 41: kc 51 */
+    .quad event_loop        /* 42: kc 52 */
+    .quad event_loop        /* 43: kc 53 */
+    .quad event_loop        /* 44: kc 54 */
+    .quad key_split_h       /* 45: kc 55 (Alt+v) */
+    .quad key_split_v       /* 46: kc 56 (Alt+b) */
+    .quad event_loop        /* 47: kc 57 */
+    .quad event_loop        /* 48: kc 58 */
+    .quad event_loop        /* 49: kc 59 */
+    .quad event_loop        /* 50: kc 60 */
+    .quad event_loop        /* 51: kc 61 */
+    .quad event_loop        /* 52: kc 62 */
+    .quad event_loop        /* 53: kc 63 */
+    .quad event_loop        /* 54: kc 64 */
+    .quad key_floating      /* 55: kc 65 (Alt+Space) */
+
+key_ws_dispatch:
     test edx, 1                 /* ShiftMask = 1 ? */
     jnz key_move_to_ws
     jmp key_focus_ws
+
+key_q:
+    test edx, 1                 /* ShiftMask = 1 */
+    jnz exit_clean              /* Alt+Shift+q: Quit WM */
+    jmp key_kill                /* Alt+q: Kill Active Window */
+
+key_f:
+    test edx, 1                 /* Shift pressed? */
+    jnz key_floating            /* Alt+Shift+f: Floating Toggle */
+    jmp key_fullscreen          /* Alt+f: Fullscreen Toggle */
+
+key_hjkl_disp:
+    add ecx, 10                 /* restore keycode 43..46 */
+    test edx, 1                 /* Shift pressed? */
+    jnz key_move_hjkl           /* Alt + Shift + HJKL: Swap/Move window between splits */
+    jmp key_focus_hjkl          /* Alt + HJKL: Change focus between splits */
 
 key_focus_ws:
     mov edi, ecx
@@ -623,66 +698,6 @@ key_focus_ws:
 key_move_to_ws:
     mov edi, ecx
     call move_window_to_workspace
-    jmp event_loop
-
-check_other_keys:
-    /* Alt+a (38): Workspace Anterior (Prev) */
-    cmp ecx, 38
-    je key_ws_prev
-
-    /* Alt+s (39): Próxima Workspace (Next) */
-    cmp ecx, 39
-    je key_ws_next
-
-    /* Alt+d (40): Menu / scripts */
-    cmp ecx, 40
-    je key_menu
-
-    /* Alt+w (25) or Alt+Return (36): Terminal */
-    cmp ecx, 25
-    je key_term
-    cmp ecx, 36
-    je key_term
-
-    /* Alt+q (24) */
-    cmp ecx, 24
-    jne check_nav_keys
-    test edx, 1                 /* ShiftMask = 1 */
-    jnz exit_clean              /* Alt+Shift+q: Quit WM */
-    jmp key_kill                /* Alt+q: Kill Active Window */
-
-check_nav_keys:
-    /* Alt+Shift+f or Alt+Space (65): Toggle Floating */
-    cmp ecx, 65
-    je key_floating
-
-    /* Alt+f (41) */
-    cmp ecx, 41
-    jne check_hjkl
-    test edx, 1                 /* Shift pressed? */
-    jnz key_floating            /* Alt+Shift+f: Floating Toggle */
-    jmp key_fullscreen          /* Alt+f: Fullscreen Toggle */
-
-check_hjkl:
-    /* Navigation with HJKL (keycodes 43, 44, 45, 46) */
-    cmp ecx, 43
-    jl check_split_keys
-    cmp ecx, 46
-    jg check_split_keys
-
-    test edx, 1                 /* Shift pressed? */
-    jnz key_move_hjkl           /* Alt + Shift + HJKL: Swap/Move window between splits */
-    jmp key_focus_hjkl          /* Alt + HJKL: Change focus between splits */
-
-check_split_keys:
-    /* Alt+v (55): Select Next Split = Horizontal for focused window */
-    cmp ecx, 55
-    je key_split_h
-
-    /* Alt+b (56): Select Next Split = Vertical for focused window */
-    cmp ecx, 56
-    je key_split_v
-
     jmp event_loop
 
 key_focus_hjkl:
