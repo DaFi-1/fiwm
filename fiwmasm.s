@@ -102,6 +102,13 @@ find_display:
     test r10, r10
     jz display_done
 
+    cmp dword ptr [r10], 0x48544150 /* "PATH" */
+    jne 1f
+    cmp byte ptr [r10 + 4], '='
+    jne 1f
+    lea rax, [r10 + 5]
+    mov [rip + saved_path], rax
+1:
     cmp [r10], r11
     jne next_env
 
@@ -115,9 +122,9 @@ find_display:
 copy_disp:
     mov al, [r10]
     test al, al
-    jz display_done
+    jz next_env
     cmp al, '.'
-    je display_done
+    je next_env
     mov [rdi], al
     inc rdi
     inc r10
@@ -134,7 +141,7 @@ display_done:
     jnz env_ok
     mov rsi, [rip + saved_envp]
     mov edi, offset env_buf
-    mov ecx, 18
+    mov ecx, 17
 env_copy:
     mov rax, [rsi]
     test rax, rax
@@ -355,29 +362,28 @@ handle_btn_press:
     /*
      * ButtonPress Event:
      * [rsi + 1]: detail (button: 1 = Left, 3 = Right)
-     * [rsi + 12]: event window
-     * [rsi + 16]: child window (if clicked on subwindow/decoration)
+     * [rsi + 12]: event window (root_win via root grab)
+     * [rsi + 16]: child window (clicked client window under pointer)
      * [rsi + 20]: rootX (INT16)
      * [rsi + 22]: rootY (INT16)
-     * [rsi + 24]: eventX (INT16)
-     * [rsi + 26]: eventY (INT16)
      */
-    mov edx, [rsi + 12]                 /* window */
+    mov edx, [rsi + 16]                 /* child window (when grabbed on root_win) */
+    test edx, edx
+    jnz 1f
+    mov edx, [rsi + 12]                 /* fallback: event window */
     test edx, edx
     jz event_loop
-
-    /* Read click position and calculate window geometry before ANY function call! */
+1:
+    /* Read click position before ANY function call! */
     movsx ecx, word ptr [rsi + 20]      /* rootX */
     movsx r8d, word ptr [rsi + 22]      /* rootY */
-    movsx r9d, word ptr [rsi + 24]      /* eventX */
-    movsx r10d, word ptr [rsi + 26]     /* eventY */
     movzx eax, byte ptr [rsi + 1]       /* button */
 
     /* Save drag state */
     mov [rip + drag_win], edx
     mov [rip + drag_btn], eax
-    mov [rip + drag_off_x], r9d
-    mov [rip + drag_off_y], r10d
+    mov [rip + drag_off_x], ecx
+    mov [rip + drag_off_y], r8d
     mov [rip + drag_start_x], ecx
     mov [rip + drag_start_y], r8d
     mov qword ptr [rip + drag_last_coords], -1
@@ -424,6 +430,10 @@ handle_btn_press:
     cmp byte ptr [rip + in_buf], 1            /* Success reply? */
     jne event_loop
 
+    movsx eax, word ptr [rip + in_buf + 12]   /* win_x */
+    sub [rip + drag_off_x], eax               /* drag_off_x = rootX - win_x */
+    movsx eax, word ptr [rip + in_buf + 14]   /* win_y */
+    sub [rip + drag_off_y], eax               /* drag_off_y = rootY - win_y */
     movzx eax, word ptr [rip + in_buf + 16]   /* width */
     movzx edx, word ptr [rip + in_buf + 18]   /* height */
     mov [rip + drag_orig_w], eax
@@ -542,8 +552,7 @@ handle_enter:
     jne event_loop              /* Window not in active workspace */
 
     /* Check if already focused */
-    mov ebx, offset bsp_focuses
-    cmp rax, [rbx + 8*r14]
+    cmp rax, [bsp_focuses + 8*r14]
     je event_loop               /* Already focused */
 
     /* Update focus */
@@ -890,8 +899,7 @@ win_restore_layout:
  * get_active_leaf() -> rax = leaf_node, edx = win_id (ZF set if no active window)
  */
 get_active_leaf:
-    mov eax, offset bsp_focuses
-    mov rax, [rax + 8*r14]
+    mov rax, [bsp_focuses + 8*r14]
     test rax, rax
     jz 1f
     mov edx, [rax + NODE_WIN]
@@ -906,8 +914,7 @@ get_active_leaf:
  * 3. If node == NULL: clears surface and resets focus to root
  */
 activate_node_focus:
-    mov eax, offset bsp_focuses
-    mov [rax + 8*rsi], rdi
+    mov [bsp_focuses + 8*rsi], rdi
     test rdi, rdi
     jz anf_root
     mov edx, [rdi + NODE_WIN]
@@ -1054,16 +1061,9 @@ child_term:
 execvp_direct:
     mov [rip + out_buf + 0], r8       /* argv[0] = prog_name */
     mov qword ptr [rip + out_buf + 8], 0
-    mov r9, rdx
-2:  mov rsi, [r9]
-    add r9, 8
+    mov rsi, [rip + saved_path]
     test rsi, rsi
     jz spawn_ret
-    cmp dword ptr [rsi], 0x48544150 /* "PATH" */
-    jne 2b
-    cmp byte ptr [rsi + 4], '='
-    jne 2b
-    add rsi, 5
 3:  cmp byte ptr [rsi], 0
     je spawn_ret
     lea rdi, [rip + out_buf + 16]
@@ -1173,8 +1173,7 @@ fw_bar_and_focus:
 
 fw_focus:
     /* Focus active window on new workspace (or clear focus to root if empty) */
-    mov eax, offset bsp_focuses
-    mov rdi, [rax + 8*r12]
+    mov rdi, [bsp_focuses + 8*r12]
     mov esi, r12d
     jmp activate_node_focus
 
@@ -1207,8 +1206,7 @@ move_window_to_workspace:
     mov edi, r14d
     call bsp_arrange_ws_buf
 
-    mov eax, offset bsp_focuses
-    mov rdi, [rax + 8*r14]
+    mov rdi, [bsp_focuses + 8*r14]
     mov esi, r14d
     call activate_node_focus
 
@@ -1393,8 +1391,22 @@ grab_batch_loop:
     jmp grab_batch_loop
 
 grab_batch_send:
-    call flush_out_buf
-    ret
+    /* 7. Append 4 root-level X_GrabButton requests (Button 1 & 3, Mod1 & Mod1|NumLock = 96 B) */
+    xor r8, 0x0002013d                          /* r8 = (root_win << 32) | (6 << 16) | 28 */
+    mov ecx, 0x0101004c                         /* mask=0x4c, ptr_mode=1, kbd_mode=1, confine=0 */
+    mov rdx, 0x0008000100000000                 /* button=1, mod=0x08 */
+1:  mov [r15 + 0], r8
+    mov [r15 + 8], rcx
+    mov [r15 + 16], rdx
+    mov [r15 + 24], r8
+    mov [r15 + 32], rcx
+    bts rdx, 52                                 /* mod |= 0x10 (0x08 -> 0x18) */
+    mov [r15 + 40], rdx
+    add r15, 48
+    btr rdx, 52                                 /* restore mod = 0x08 */
+    bts rdx, 33                                 /* button: 1 -> 3 (bit 33) */
+    jnc 1b
+    jmp flush_out_buf
 
 /*
  * draw_mon_bar(edi = target_mon 0 or 1):
@@ -1670,10 +1682,9 @@ handle_map:
 1:  mov [rip + last_focused_win], r12d
 
     /*
-     * Fused Pre-Map Window Pipeline (136 bytes):
+     * Fused Pre-Map Window Pipeline (40 bytes):
      * 1. ChangeWindowAttributes: CWBorderPixel(0x08) | CWEventMask(0x800) = 0x808 (20 bytes)
-     * 2. 4x X_GrabButton (96 bytes)
-     * 3. X_MapWindow (8 bytes) + X_SetInputFocus (12 bytes)
+     * 2. X_MapWindow (8 bytes) + X_SetInputFocus (12 bytes)
      */
     mov rax, r12
     shl rax, 32
@@ -1684,47 +1695,23 @@ handle_map:
     mov [r15 + 8], rcx
     mov dword ptr [r15 + 16], 0x00000010
 
-    mov rcx, rax
-    or rcx, (6 << 16) | 28
-    movq xmm1, rcx
-    mov ecx, (1 << 24) | (1 << 16) | 0x4C
-    pinsrd xmm1, ecx, 2
-
-    /* Button 1 + Mod1 (0x08) */
-    movdqu [r15 + 20], xmm1
-    mov rcx, 0x0008000100000000
-    mov [r15 + 36], rcx
-
-    /* Button 1 + Mod1 | NumLock (0x18) */
-    movdqu [r15 + 44], xmm1
-    mov rdx, 0x0018000100000000
-    mov [r15 + 60], rdx
-
-    /* Button 3 + Mod1 (0x08) */
-    movdqu [r15 + 68], xmm1
-    mov rcx, 0x0008000300000000
-    mov [r15 + 84], rcx
-
-    /* Button 3 + Mod1 | NumLock (0x18) */
-    movdqu [r15 + 92], xmm1
-    mov rdx, 0x0018000300000000
-    mov [r15 + 108], rdx
-
     /* X_MapWindow (8 bytes) + X_SetInputFocus (12 bytes) */
     mov rcx, rax
     or rcx, (2 << 16) | 8
-    mov [r15 + 116], rcx
+    mov [r15 + 20], rcx
     or rax, (3 << 16) | (1 << 8) | 42
-    mov [r15 + 124], rax
-    mov dword ptr [r15 + 132], 0
+    mov [r15 + 28], rax
+    mov dword ptr [r15 + 36], 0
 
-    add r15, 136
+    add r15, 40
     jmp event_loop
 
 handle_unmap:
     mov edx, [rsi + 8]
     test edx, edx
     jz event_loop
+    cmp edx, [rip + last_unmapped_win]
+    je event_loop               /* O(1) filter for trailing DestroyNotify after UnmapNotify! */
 
     /* O(1) Global Window Lookup */
     mov esi, edx
@@ -1733,6 +1720,7 @@ handle_unmap:
     jz event_loop               /* Window not managed by fiwm */
 
 found_unmap_node:
+    mov [rip + last_unmapped_win], edx
     /* Detach node from its workspace */
     mov r12d, ecx               /* r12d = workspace index (0..8) */
     mov rdi, rax
@@ -1744,8 +1732,7 @@ found_unmap_node:
 
     mov edi, r14d
     call bsp_arrange_ws_buf
-    mov eax, offset bsp_focuses
-    mov rdi, [rax + 8*r14]
+    mov rdi, [bsp_focuses + 8*r14]
     mov esi, r14d
     call activate_node_focus
     jmp event_loop
@@ -1755,6 +1742,7 @@ found_unmap_node:
  */
 bsp_tree_insert_into_ws:
     mov r8d, esi               /* ws_idx */
+    mov dword ptr [rip + last_unmapped_win], 0
 
     call alloc_node
     mov [rax + NODE_WIN], edi
@@ -1762,18 +1750,16 @@ bsp_tree_insert_into_ws:
     mov [rax + NODE_INFO], dl  /* packed NODE_INFO: (ws_idx << 1) | 0 */
     mov r9, rax                /* r9 = new leaf */
 
-    mov eax, offset bsp_roots
-    mov rdi, [rax + 8*r8]
+    mov rdi, [bsp_roots + 8*r8]
     test rdi, rdi
     jnz ws_split_leaf
 
     /* First window on this workspace becomes root */
-    mov [rax + 8*r8], r9
+    mov [bsp_roots + 8*r8], r9
     jmp ws_insert_done
 
 ws_split_leaf:
-    mov eax, offset bsp_focuses
-    mov r10, [rax + 8*r8]
+    mov r10, [bsp_focuses + 8*r8]
     test r10, r10
     jnz ws_has_focus
     call bsp_first_leaf
@@ -1831,8 +1817,7 @@ ws_link_done:
     mov [rcx], r11              /* Link new split node into parent or root slot */
 
 ws_insert_done:
-    mov eax, offset bsp_focuses
-    mov [rax + 8*r8], r9
+    mov [bsp_focuses + 8*r8], r9
     mov rdi, r9
     call bsp_update_history
 
@@ -1858,15 +1843,13 @@ bsp_tree_detach:
     test r10, r10
     jnz td_has_parent
 
-    /* Removing root: push leaf node (r8) onto O(1) free-list! */
+    /* Removing root: push leaf node (r8) onto O(1) free-list! (r10 == 0) */
     mov rax, [rip + free_node_head]
     mov [r8 + NODE_FIRST], rax
     mov [rip + free_node_head], r8
 
-    mov eax, offset bsp_roots
-    mov qword ptr [rax + 8*r9], 0
-    mov eax, offset bsp_focuses
-    mov qword ptr [rax + 8*r9], 0
+    mov [bsp_roots + 8*r9], r10
+    mov [bsp_focuses + 8*r9], r10
     ret
 
 td_has_parent:
@@ -1895,8 +1878,7 @@ td_store_sib:
     mov [rcx], r11              /* Relink promoted sibling */
     mov rdi, r11
     call bsp_first_leaf
-    mov ecx, offset bsp_focuses
-    mov [rcx + 8*r9], rax
+    mov [bsp_focuses + 8*r9], rax
 
 td_done:
     /* Push both detached leaf (r8) and split parent (r10) onto O(1) free-list! */
@@ -2098,13 +2080,6 @@ buh_loop:
     jmp buh_loop
 buh_ret:
     ret
-
-.align 16
-geom_init_offsets:
-    .long GAP_PX
-    .long GAP_PX + BAR_HEIGHT + GAP_PX
-    .long -(GAP_PX * 2)
-    .long -(BAR_HEIGHT + GAP_PX * 3)
 
 /*
  * bsp_arrange_ws_buf(edi = ws_idx, r15 = write cursor)
@@ -2404,6 +2379,13 @@ start_xorg:
 5:  ret
 
 .data
+.align 16
+geom_init_offsets:
+    .long GAP_PX
+    .long GAP_PX + BAR_HEIGHT + GAP_PX
+    .long -(GAP_PX * 2)
+    .long -(BAR_HEIGHT + GAP_PX * 3)
+
 sock_addr:
     .short AF_UNIX
 sock_path:
@@ -2536,6 +2518,7 @@ bar_gc:         .long 0         /* base GC ID (bar_gc+0=bg, +1=active, +2=inacti
 atom_wm_proto:  .long 0         /* WM_PROTOCOLS atom */
 atom_wm_del:    .long 0         /* WM_DELETE_WINDOW atom */
 saved_envp:     .quad 0
+saved_path:     .quad 0
 xorg_pid:       .quad 0
 /*
  * cur_ws lives permanently in register r14 (Zero RAM!).
@@ -2549,9 +2532,10 @@ free_node_head: .quad 0         /* O(1) recycled BSP node free-list head */
 win_mru_node:   .quad 0
 win_hash_tab:   .space 512      /* 32 entries * 16 bytes (win_id, pad, node_ptr) */
 drag_last_coords: .quad 0       /* Last rendered (Y<<32)|X or (H<<32)|W for Zero-Delta filtering */
-env_buf:        .space 160      /* Up to 19 env vars + DISPLAY=:0 + NULL for TTY login */
+env_buf:        .space 152      /* Up to 18 env vars + DISPLAY=:0 + NULL for TTY login */
 
 last_focused_win: .long 0       /* Last window with active border (for de-focus) */
+last_unmapped_win: .long 0      /* Last detached XID for O(1) DestroyNotify deduplication */
 win_mru_id:     .long 0
 node_idx:       .long 0
 ev_q_head:      .long 0         /* Current read offset in event_queue */
