@@ -81,7 +81,19 @@ _start:
     xor ebp, ebp                /* bpl = permanent 8-bit bitwise state register (Zero RAM!) */
     mov r8, [rsp]               /* argc */
     lea r9, [rsp + 8*r8 + 16]   /* r9 = envp */
-    mov [saved_envp], r9
+    mov [rip + saved_envp], r9
+
+    /* Auto-reap exited children in kernel (SIGCHLD=17 -> SIG_IGN=1): zero zombies, zero wait4! */
+    mov byte ptr [rip + in_buf], 1
+    push 13                     /* SYS_RT_SIGACTION */
+    pop rax
+    push 17                     /* SIGCHLD */
+    pop rdi
+    mov esi, offset in_buf
+    xor edx, edx
+    push 8
+    pop r10
+    syscall
 
     mov r11, 0x3d59414c50534944  /* "DISPLAY=" (hoisted once outside loop) */
 
@@ -99,7 +111,7 @@ find_display:
     or bpl, 16                  /* set bit 4 (disp_found = 1) */
     inc r10
 
-    lea rdi, [sock_path_num]
+    mov edi, offset sock_path_num
 copy_disp:
     mov al, [r10]
     test al, al
@@ -120,8 +132,8 @@ display_done:
        otherwise st & co. cannot connect to the X server we talk to. */
     test bpl, 16                /* check bit 4 (disp_found) */
     jnz env_ok
-    mov rsi, [saved_envp]
-    lea rdi, [env_buf]
+    mov rsi, [rip + saved_envp]
+    mov edi, offset env_buf
     mov ecx, 18
 env_copy:
     mov rax, [rsi]
@@ -133,22 +145,21 @@ env_copy:
     dec ecx
     jnz env_copy
 env_copied:
-    lea rax, [disp_env_str]
+    mov eax, offset disp_env_str
     mov [rdi], rax
     mov qword ptr [rdi + 8], 0
-    lea rax, [env_buf]
-    mov [saved_envp], rax
+    mov eax, offset env_buf
+    mov [rip + saved_envp], rax
 env_ok:
     xor r12d, r12d              /* r12d = connect attempts (0 = Xorg not spawned) */
 
 do_connect:
-    /* 1. sys_socket(AF_UNIX, SOCK_STREAM, 0) - 8-bit imm8 loads! */
+    /* 1. sys_socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0) */
     push SYS_SOCKET
     pop rax
     push AF_UNIX
     pop rdi
-    push SOCK_STREAM
-    pop rsi
+    mov esi, 0x80001            /* SOCK_STREAM (1) | SOCK_CLOEXEC (0x80000) */
     xor edx, edx
     syscall
     test eax, eax
@@ -158,7 +169,7 @@ do_connect:
     /* 2. sys_connect(sock_fd, &sock_addr, sizeof(sock_addr)) */
     mov al, SYS_CONNECT         /* upper bits of eax are 0 after socket fd < 256! */
     mov edi, r13d
-    lea rsi, [sock_addr]
+    mov esi, offset sock_addr
     mov dl, 22                  /* AF_UNIX(2) + "/tmp/.X11-unix/X"(16) + "0\0\0\0"(4); edx was 0 */
     syscall
     test eax, eax
@@ -172,14 +183,14 @@ do_connect:
     /* Autostart: only for display ":0" and only once */
     test r12d, r12d
     jnz retry_wait
-    cmp byte ptr [sock_path_num], '0'
+    cmp byte ptr [rip + sock_path_num], '0'
     jne exit_fail
-    cmp byte ptr [sock_path_num + 1], 0
+    cmp byte ptr [rip + sock_path_num + 1], 0
     jne exit_fail
     call start_xorg
     test rax, rax
     jle exit_fail
-    mov [xorg_pid], rax
+    mov [rip + xorg_pid], rax
     mov r12d, 1
 
 retry_wait:
@@ -198,54 +209,54 @@ retry_wait:
 connected_ok:
     /* 3. Send X11 Setup Request (12 bytes) - eax == 0 and rdi == r13d from connect! */
     mov al, SYS_WRITE
-    lea rsi, [x11_setup_req]
+    mov esi, offset x11_setup_req
     mov dl, 12                  /* edx was 110 (< 256), so upper 24 bits are 0! */
     syscall
 
     /* 4. Read X11 Setup Reply directly into in_buf (up to 2048 bytes in ONE syscall!) */
     xor eax, eax                /* SYS_READ = 0 */
-    lea rsi, [in_buf]
+    mov esi, offset in_buf
     mov edx, 2048
     syscall
     test eax, eax
     jle exit_fail
-    cmp byte ptr [in_buf], 1
+    cmp byte ptr [rip + in_buf], 1
     jne exit_fail
 
     /* Calculate remaining bytes: total = 8 + (additional_data_len * 4) */
-    movzx ebx, word ptr [in_buf + 6]
+    movzx ebx, word ptr [rip + in_buf + 6]
     shl ebx, 2
     add ebx, 8
     sub ebx, eax                /* ebx = total remaining bytes to drain */
 
     /* Parse Screen Info directly from unified in_buf:
        - Header (8) + Fixed Body (32) = 40 bytes base.
-       - vendor_len is at [in_buf + 24]
-       - num_formats is at [in_buf + 29]
+       - vendor_len is at [rip + in_buf + 24]
+       - num_formats is at [rip + in_buf + 29]
      */
-    movzx eax, word ptr [in_buf + 24]   /* vendor_len */
+    movzx eax, word ptr [rip + in_buf + 24]   /* vendor_len */
     add eax, 3
     and eax, -4
     add eax, 40
-    movzx edx, byte ptr [in_buf + 29]   /* num_formats */
+    movzx edx, byte ptr [rip + in_buf + 29]   /* num_formats */
     shl edx, 3
     add eax, edx                        /* screen_offset */
 
     mov edx, [in_buf + rax]
-    mov [root_win], edx
+    mov [rip + root_win], edx
 
     movzx edx, word ptr [in_buf + rax + 20]
-    mov [mon_geom + 8], edx
+    mov [rip + mon_geom + 8], edx
     movzx edx, word ptr [in_buf + rax + 22]
-    mov [mon_geom + 12], edx
+    mov [rip + mon_geom + 12], edx
 
-    /* Extract resource_id_base (at [in_buf + 12]) */
-    mov edx, [in_buf + 12]
-    mov [bar_win + 0], edx
+    /* Extract resource_id_base (at [rip + in_buf + 12]) */
+    mov edx, [rip + in_buf + 12]
+    mov [rip + bar_win + 0], edx
     inc edx
-    mov [bar_win + 4], edx
+    mov [rip + bar_win + 4], edx
     inc edx
-    mov [bar_gc], edx
+    mov [rip + bar_gc], edx
 
     /* Drain all remaining setup reply bytes in full 2048-byte bursts */
 drain_setup_loop:
@@ -255,7 +266,7 @@ drain_setup_loop:
     cmp edx, ebx
     cmovg edx, ebx
     xor eax, eax                /* SYS_READ = 0 */
-    lea rsi, [in_buf]
+    mov esi, offset in_buf
     syscall
     test eax, eax
     jle setup_drained
@@ -271,8 +282,8 @@ setup_drained:
 
 event_loop:
     /* Check if event_queue still has buffered events */
-    mov eax, [ev_q_head]
-    cmp eax, [ev_q_tail]
+    mov eax, [rip + ev_q_head]
+    cmp eax, [rip + ev_q_tail]
     jl ev_pop_buffered
 
     /* Coalesced I/O Flush: send all pending X11 commands before blocking on sys_read */
@@ -281,7 +292,7 @@ event_loop:
     /* Buffer is empty, read next chunk of events (up to 30 events = 960 bytes) */
     xor eax, eax                /* SYS_READ = 0 (2 bytes!) */
     mov edi, r13d
-    lea rsi, [event_queue]
+    mov esi, offset event_queue
     mov edx, 960
     syscall
 
@@ -289,20 +300,20 @@ event_loop:
     jle exit_clean
 
     /* Initialize queue head = 0, tail = bytes read */
-    mov dword ptr [ev_q_head], 0
-    mov [ev_q_tail], eax
+    mov dword ptr [rip + ev_q_head], 0
+    mov [rip + ev_q_tail], eax
 
 ev_pop_buffered:
     /* Capacity safety check: flush if out_buf > 1536 bytes to prevent overflow */
-    lea rax, [out_buf + 1536]
+    lea rax, [rip + out_buf + 1536]
     cmp r15, rax
     jb 1f
     call flush_out_buf
 1:
     /* Zero-Copy Event Dispatch: read directly from [event_queue + rcx] in rsi! */
-    mov ecx, [ev_q_head]
+    mov ecx, [rip + ev_q_head]
     lea rsi, [event_queue + rcx]
-    add dword ptr [ev_q_head], 32
+    add dword ptr [rip + ev_q_head], 32
 
     movzx eax, byte ptr [rsi]
     and eax, 0x7F
@@ -310,7 +321,7 @@ ev_pop_buffered:
     /* Direct O(1) 16-bit Relative Jump Table Dispatch (High Density, Cache Line Aligned) */
     cmp eax, 20
     ja event_loop
-    lea rdx, [event_disp_base]
+    mov edx, offset event_disp_base
     movsx rax, word ptr [event_jump_table + rax*2]
     add rdx, rax
     jmp rdx
@@ -363,13 +374,13 @@ handle_btn_press:
     movzx eax, byte ptr [rsi + 1]       /* button */
 
     /* Save drag state */
-    mov [drag_win], edx
-    mov [drag_btn], eax
-    mov [drag_off_x], r9d
-    mov [drag_off_y], r10d
-    mov [drag_start_x], ecx
-    mov [drag_start_y], r8d
-    mov qword ptr [drag_last_coords], -1
+    mov [rip + drag_win], edx
+    mov [rip + drag_btn], eax
+    mov [rip + drag_off_x], r9d
+    mov [rip + drag_off_y], r10d
+    mov [rip + drag_start_x], ecx
+    mov [rip + drag_start_y], r8d
+    mov qword ptr [rip + drag_last_coords], -1
 
     /* Find window in active workspace BSP tree via O(1) global lookup */
     mov esi, edx
@@ -384,7 +395,7 @@ handle_btn_press:
     mov esi, r14d
     call activate_node_focus
 
-    mov edx, [drag_win]
+    mov edx, [rip + drag_win]
     mov rax, rdx
     shl rax, 32
 
@@ -405,18 +416,18 @@ handle_btn_press:
     /* Read 32-byte X_GetGeometry reply directly into in_buf */
     xor eax, eax                        /* SYS_READ */
     mov edi, r13d
-    lea rsi, [in_buf]
+    mov esi, offset in_buf
     push 32
     pop rdx
     syscall
 
-    cmp byte ptr [in_buf], 1            /* Success reply? */
+    cmp byte ptr [rip + in_buf], 1            /* Success reply? */
     jne event_loop
 
-    movzx eax, word ptr [in_buf + 16]   /* width */
-    movzx edx, word ptr [in_buf + 18]   /* height */
-    mov [drag_orig_w], eax
-    mov [drag_orig_h], edx
+    movzx eax, word ptr [rip + in_buf + 16]   /* width */
+    movzx edx, word ptr [rip + in_buf + 18]   /* height */
+    mov [rip + drag_orig_w], eax
+    mov [rip + drag_orig_h], edx
 
     /* Mark as floating (bit 5 in bpl) */
     or bpl, 32
@@ -428,35 +439,35 @@ handle_motion:
      * [rsi + 20]: rootX (INT16)
      * [rsi + 22]: rootY (INT16)
      */
-    mov edx, [drag_win]
+    mov edx, [rip + drag_win]
     test edx, edx
     jz event_loop
 
     /* Event Coalescing: compress consecutive MotionNotify events */
 motion_coalesce_loop:
-    mov eax, [ev_q_head]
-    cmp eax, [ev_q_tail]
+    mov eax, [rip + ev_q_head]
+    cmp eax, [rip + ev_q_tail]
     jge motion_process
     movzx r11d, byte ptr [event_queue + rax]
     and r11b, 0x7F
     cmp r11b, 6
     jne motion_process
     lea rsi, [event_queue + rax]
-    add dword ptr [ev_q_head], 32
+    add dword ptr [rip + ev_q_head], 32
     jmp motion_coalesce_loop
 
 motion_process:
     movsx ecx, word ptr [rsi + 20]      /* current rootX */
     movsx r8d, word ptr [rsi + 22]      /* current rootY */
 
-    cmp dword ptr [drag_btn], 3         /* Button 3 = Resize */
+    cmp dword ptr [rip + drag_btn], 3         /* Button 3 = Resize */
     je motion_resize
 
     /* Button 1 = Move: direct algebraic offset (new_x = cur_x - eventX) */
     mov eax, ecx
-    sub eax, [drag_off_x]               /* new_x */
+    sub eax, [rip + drag_off_x]               /* new_x */
     mov esi, r8d
-    sub esi, [drag_off_y]               /* new_y */
+    sub esi, [rip + drag_off_y]               /* new_y */
     mov r9d, 3                          /* CWX | CWY = 3 */
     jmp motion_emit
 
@@ -464,14 +475,14 @@ motion_resize:
     /* Branchless Clamping: MAX(50, orig + delta) via cmovl */
     mov r10d, 50
     mov eax, ecx
-    sub eax, [drag_start_x]
-    add eax, [drag_orig_w]
+    sub eax, [rip + drag_start_x]
+    add eax, [rip + drag_orig_w]
     cmp eax, 50
     cmovl eax, r10d
 
     mov esi, r8d
-    sub esi, [drag_start_y]
-    add esi, [drag_orig_h]
+    sub esi, [rip + drag_start_y]
+    add esi, [rip + drag_orig_h]
     cmp esi, 50
     cmovl esi, r10d
     mov r9d, 12                         /* CWWidth | CWHeight = 12 */
@@ -481,9 +492,9 @@ motion_emit:
     shl rsi, 32
     mov eax, eax                        /* clear upper 32 bits of rax */
     or rax, rsi                         /* rax = (val2 << 32) | val1 */
-    cmp rax, [drag_last_coords]
+    cmp rax, [rip + drag_last_coords]
     je event_loop                       /* Exact duplicate frame: skip syscall & Xorg repaint! */
-    mov [drag_last_coords], rax
+    mov [rip + drag_last_coords], rax
 
     /* Precalculate 64-bit header + win_id */
     mov r8, rdx
@@ -502,8 +513,8 @@ motion_emit:
     jmp event_loop
 
 handle_btn_release:
-    mov dword ptr [drag_win], 0
-    mov qword ptr [drag_last_coords], -1
+    mov dword ptr [rip + drag_win], 0
+    mov qword ptr [rip + drag_last_coords], -1
     jmp event_loop
 
 handle_enter:
@@ -531,7 +542,7 @@ handle_enter:
     jne event_loop              /* Window not in active workspace */
 
     /* Check if already focused */
-    lea rbx, [bsp_focuses]
+    mov ebx, offset bsp_focuses
     cmp rax, [rbx + 8*r14]
     je event_loop               /* Already focused */
 
@@ -543,7 +554,7 @@ handle_enter:
 
 handle_expose:
     mov edx, [rsi + 4]          /* drawable/window */
-    sub edx, [bar_win + 0]
+    sub edx, [rip + bar_win + 0]
     cmp edx, 1
     ja event_loop
     mov edi, edx                /* edi = 0 (Monitor 0) or 1 (Monitor 1) */
@@ -575,7 +586,7 @@ handle_key:
     sub ecx, 10
     cmp ecx, 55
     ja event_loop
-    lea r11, [key_disp_base]
+    mov r11d, offset key_disp_base
     movsx rax, word ptr [key_jump_table + rcx*2]
     add r11, rax
     jmp r11
@@ -642,8 +653,8 @@ key_disp_base:
 
 key_ws_dispatch:
     mov edi, ecx
-    lea rax, [focus_workspace]
-    lea r10, [move_window_to_workspace]
+    mov eax, offset focus_workspace
+    mov r10d, offset move_window_to_workspace
     test edx, 1
     cmovnz rax, r10
     call rax
@@ -748,13 +759,12 @@ ws_cycle_done:
     jmp event_loop
 
 key_menu:
-    lea rsi, [cmd_menu]
+    mov esi, offset cmd_menu
     call spawn_cmd
     jmp event_loop
 
 key_term:
-    lea rsi, [cmd_term]
-    call spawn_cmd
+    call spawn_term
     jmp event_loop
 
 key_kill:
@@ -777,14 +787,14 @@ key_kill:
     mov rax, (32 << 40) | (33 << 32)
     mov [r15 + 8], rax
 
-    mov eax, [atom_wm_proto]
+    mov eax, [rip + atom_wm_proto]
     shl rax, 32
     or rax, rdx
     mov [r15 + 16], rax
 
     pxor xmm0, xmm0
     movdqu [r15 + 28], xmm0             /* Zero payload data.l[1..4] (16 bytes) */
-    mov eax, [atom_wm_del]
+    mov eax, [rip + atom_wm_del]
     mov [r15 + 24], eax
 
     mov rax, rdx
@@ -880,7 +890,7 @@ win_restore_layout:
  * get_active_leaf() -> rax = leaf_node, edx = win_id (ZF set if no active window)
  */
 get_active_leaf:
-    lea rax, [bsp_focuses]
+    mov eax, offset bsp_focuses
     mov rax, [rax + 8*r14]
     test rax, rax
     jz 1f
@@ -896,7 +906,7 @@ get_active_leaf:
  * 3. If node == NULL: clears surface and resets focus to root
  */
 activate_node_focus:
-    lea rax, [bsp_focuses]
+    mov eax, offset bsp_focuses
     mov [rax + 8*rsi], rdi
     test rdi, rdi
     jz anf_root
@@ -933,15 +943,15 @@ set_focus_buf:
     jnz sfb_has_win
 
     /* Clear focus: de-focus old window and give focus to root */
-    mov eax, [last_focused_win]
+    mov eax, [rip + last_focused_win]
     test eax, eax
     jz sfb_root_focus
     mov edx, BORDER_INACTIVE
     call emit_border_pkt
-    mov dword ptr [last_focused_win], 0
+    mov dword ptr [rip + last_focused_win], 0
 
 sfb_root_focus:
-    mov edx, [root_win]
+    mov edx, [rip + root_win]
     mov rax, rdx
     shl rax, 32
     or rax, (3 << 16) | (1 << 8) | 42  /* Opcode 42: SetInputFocus (revert_to=1) (12 bytes) */
@@ -956,7 +966,7 @@ sfb_root_focus:
     ret
 
 sfb_has_win:
-    mov eax, [last_focused_win]
+    mov eax, [rip + last_focused_win]
     cmp eax, edi
     je sfb_do_input_focus       /* Already has active border */
 
@@ -972,7 +982,7 @@ sfb_paint_active:
     mov edx, BORDER_ACTIVE
     call emit_border_pkt
 
-    mov [last_focused_win], edi
+    mov [rip + last_focused_win], edi
 
 sfb_do_input_focus:
     mov eax, edi
@@ -990,7 +1000,7 @@ focus_ret:
  * Automatically resets r15 to out_buf.
  */
 flush_out_buf:
-    lea rsi, [out_buf]
+    mov esi, offset out_buf
     mov rdx, r15
     sub rdx, rsi
     jle flush_reset
@@ -1003,46 +1013,86 @@ flush_reset:
     ret
 
 /*
- * spawn_cmd(rsi = cmd_ptr)
- * Uses SYS_VFORK (58) for the inner child to avoid page-table copying before execve!
+ * spawn_term / spawn_cmd(rsi = cmd_ptr, or 0 for direct PATH terminal exec)
+ * Single SYS_VFORK + SYS_EXECVE (kernel auto-reaps via SIGCHLD=SIG_IGN, socket auto-closes via SOCK_CLOEXEC).
  */
+spawn_term:
+    xor esi, esi
 spawn_cmd:
-    mov [sh_argv + 16], rsi
-    push SYS_FORK
+    mov [rip + sh_argv + 16], rsi
+    call flush_out_buf
+    push SYS_VFORK
     pop rax
     syscall
     test eax, eax
-    jnz parent_fork
+    jnz spawn_ret
 
-    mov al, SYS_VFORK           /* eax == 0 in child! */
+    mov rdx, [rip + saved_envp]
+    mov r8, [rip + sh_argv + 16]
+    test r8, r8
+    jz child_term
+
+    mov al, SYS_EXECVE          /* eax == 0 in vfork child! */
+    mov edi, offset sh_bin
+    mov esi, offset sh_argv
     syscall
-    test eax, eax
-    jnz child_exit
-
-    mov al, SYS_CLOSE           /* eax == 0 in grandchild! */
-    mov edi, r13d
-    syscall
-
-    mov al, SYS_EXECVE          /* eax == 0 after close! */
-    lea rdi, [sh_bin]
-    lea rsi, [sh_argv]
-    mov rdx, [saved_envp]
-    syscall
-
 child_exit:
     push SYS_EXIT
     pop rax
     xor edi, edi
     syscall
 
-parent_fork:
-    mov edi, eax
-    push SYS_WAIT4
+child_term:
+    cmp word ptr [rip + sock_path_num], '0'
+    jne 1f
+    mov r8d, offset str_ftasm
+    call execvp_direct
+1:  mov r8d, offset str_st
+    call execvp_direct
+    jmp child_exit
+
+execvp_direct:
+    mov [rip + out_buf + 0], r8       /* argv[0] = prog_name */
+    mov qword ptr [rip + out_buf + 8], 0
+    mov r9, rdx
+2:  mov rsi, [r9]
+    add r9, 8
+    test rsi, rsi
+    jz spawn_ret
+    cmp dword ptr [rsi], 0x48544150 /* "PATH" */
+    jne 2b
+    cmp byte ptr [rsi + 4], '='
+    jne 2b
+    add rsi, 5
+3:  cmp byte ptr [rsi], 0
+    je spawn_ret
+    lea rdi, [rip + out_buf + 16]
+4:  lodsb
+    test al, al
+    jz 5f
+    cmp al, ':'
+    je 6f
+    stosb
+    jmp 4b
+5:  dec rsi
+6:  mov al, '/'
+    stosb
+    mov rcx, r8
+7:  mov al, [rcx]
+    stosb
+    inc rcx
+    test al, al
+    jnz 7b
+    mov r10, rsi
+    push SYS_EXECVE
     pop rax
-    xor esi, esi
-    xor edx, edx
-    xor r10d, r10d
+    lea rdi, [rip + out_buf + 16]
+    lea rsi, [rip + out_buf + 0]
     syscall
+    mov rsi, r10
+    jmp 3b
+
+spawn_ret:
     ret
 
 /*
@@ -1123,7 +1173,7 @@ fw_bar_and_focus:
 
 fw_focus:
     /* Focus active window on new workspace (or clear focus to root if empty) */
-    lea rax, [bsp_focuses]
+    mov eax, offset bsp_focuses
     mov rdi, [rax + 8*r12]
     mov esi, r12d
     jmp activate_node_focus
@@ -1157,6 +1207,11 @@ move_window_to_workspace:
     mov edi, r14d
     call bsp_arrange_ws_buf
 
+    mov eax, offset bsp_focuses
+    mov rdi, [rax + 8*r14]
+    mov esi, r14d
+    call activate_node_focus
+
     /* Insert window into target workspace tree */
     mov edi, ebx
     mov esi, r12d
@@ -1186,10 +1241,10 @@ emit_hide_win_pkt:
  * Scans node_pool and emits 20-byte off-screen ConfigureWindow packets for all active windows in ws_idx.
  */
 hide_ws_windows:
-    mov ecx, [node_idx]
+    mov ecx, [rip + node_idx]
     test ecx, ecx
     jz hww_done
-    lea rdx, [node_pool]
+    mov edx, offset node_pool
 
 hww_loop:
     mov eax, [rdx + NODE_WIN]
@@ -1220,20 +1275,20 @@ hww_done:
  * =========================================================================
  */
 init_bar:
-    lea r15, [out_buf]                          /* r15 = unified batch write cursor */
+    mov r15d, offset out_buf                          /* r15 = unified batch write cursor */
     xor r12d, r12d                              /* r12d = monitor index (0 or 1) */
 
 create_bar_loop:
     mov eax, r12d
     shl eax, 4                                  /* r12d * 16 bytes mon_geom */
-    lea rbx, [mon_geom]
+    mov ebx, offset mon_geom
     add rbx, rax
 
     /* 1. X_CreateWindow (Opcode 1, length 11 words = 44 bytes) */
     mov dword ptr [r15 + 0], (11 << 16) | 1
     mov eax, [bar_win + 4*r12]
     mov [r15 + 4], eax                          /* wid */
-    mov eax, [root_win]
+    mov eax, [rip + root_win]
     mov [r15 + 8], eax                          /* parent */
 
     mov eax, [rbx + 0]
@@ -1277,8 +1332,8 @@ create_bar_done:
        - bar_gc + 0: active workspace digit GC (fg = 0xc2c2b0, bg = #000000)
        - bar_gc + 1: inactive workspace digit GC (fg = 0x685742, bg = #000000)
      */
-    mov ecx, [bar_gc]
-    mov edx, [bar_win + 0]
+    mov ecx, [rip + bar_gc]
+    mov edx, [rip + bar_win + 0]
     mov rsi, 12                                 /* GCForeground (4) | GCBackground (8) */
     shl rsi, 32
     or rsi, rdx                                 /* rsi = (12 << 32) | bar_win */
@@ -1301,7 +1356,7 @@ create_bar_done:
     mov qword ptr [r15 + 40], 0x685742          /* fg = inactive brown/gray, bg = 0 */
 
     /* 4. SelectInput and set background color on root window (20 bytes) */
-    mov eax, [root_win]
+    mov eax, [rip + root_win]
     shl rax, 32
     or rax, (5 << 16) | 2                       /* Opcode 2: ChangeWindowAttributes (len=5) */
     mov [r15 + 48], rax
@@ -1313,8 +1368,8 @@ create_bar_done:
     call draw_all_bars_buf
 
     /* 6. Append all 72 X_GrabKey requests (1152 bytes) into [r15] and flush in ONE syscall! */
-    lea rbx, [shortcut_keys]
-    mov r8d, [root_win]
+    mov ebx, offset shortcut_keys
+    mov r8d, [rip + root_win]
     shl r8, 32
     or r8, (4 << 16) | (1 << 8) | 33            /* Opcode 33: X_GrabKey (len=4, owner_events=1) */
     mov r9, 0x0000000101000000                  /* pointer_mode=1, keyboard_mode=1 */
@@ -1398,7 +1453,7 @@ dsw_emit:
     cmp edi, r14d
     setne dl
     movzx edx, dl
-    add edx, [bar_gc]
+    add edx, [rip + bar_gc]
 
     /* 64-bit Store 1: Header (0x0005014c) + bar_win[rcx] (low 32b = header, high 32b = win_id) */
     mov eax, [bar_win + 4*rcx]
@@ -1430,35 +1485,35 @@ detect_monitors:
      * Batch QueryExtension "XINERAMA" (16 B) + 2x InternAtom (44 B) = 60 bytes in 1 atomic sys_write!
      * Eliminates an entire roundtrip and 2 syscalls during cold start.
      */
-    mov dword ptr [out_buf + 0], (4 << 16) | 98     /* Opcode 98, len 4 words */
-    mov dword ptr [out_buf + 4], 8                  /* name_len = 8 */
+    mov dword ptr [rip + out_buf + 0], (4 << 16) | 98     /* Opcode 98, len 4 words */
+    mov dword ptr [rip + out_buf + 4], 8                  /* name_len = 8 */
     mov rax, 0x414d4152454e4958                     /* "XINERAMA" */
-    mov [out_buf + 8], rax
+    mov [rip + out_buf + 8], rax
 
-    mov dword ptr [out_buf + 16], (5 << 16) | 16    /* Opcode 16, only_if_exists=0, len=5 */
-    mov dword ptr [out_buf + 20], 12                /* name_len = 12 */
+    mov dword ptr [rip + out_buf + 16], (5 << 16) | 16    /* Opcode 16, only_if_exists=0, len=5 */
+    mov dword ptr [rip + out_buf + 20], 12                /* name_len = 12 */
     mov rax, 0x4f544f52505f4d57                     /* "WM_PROTO" */
-    mov [out_buf + 24], rax
-    mov dword ptr [out_buf + 32], 0x534c4f43        /* "COLS" */
+    mov [rip + out_buf + 24], rax
+    mov dword ptr [rip + out_buf + 32], 0x534c4f43        /* "COLS" */
 
-    mov dword ptr [out_buf + 36], (6 << 16) | 16    /* Opcode 16, only_if_exists=0, len=6 */
-    mov dword ptr [out_buf + 40], 16                /* name_len = 16 */
+    mov dword ptr [rip + out_buf + 36], (6 << 16) | 16    /* Opcode 16, only_if_exists=0, len=6 */
+    mov dword ptr [rip + out_buf + 40], 16                /* name_len = 16 */
     mov rax, 0x54454c45445f4d57                     /* "WM_DELET" */
-    mov [out_buf + 44], rax
+    mov [rip + out_buf + 44], rax
     mov rax, 0x574f444e49575f45                     /* "E_WINDOW" */
-    mov [out_buf + 52], rax
+    mov [rip + out_buf + 52], rax
 
     push SYS_WRITE
     pop rax
     mov edi, r13d
-    lea rsi, [out_buf]
+    mov esi, offset out_buf
     push 60
     pop rdx
     syscall
 
     /* Run autostart (keyboard layout/rate) concurrently while Xorg processes
        QueryExtension(XINERAMA) + 2x InternAtom, BEFORE init_bar grabs keys! */
-    lea rsi, [cmd_autostart]
+    mov esi, offset cmd_autostart
     call spawn_cmd
 
     /* Read all 3 replies (32 + 32 + 32 = 96 bytes) with full drain */
@@ -1477,27 +1532,27 @@ pipe_replies_loop:
     jl pipe_replies_loop
 
     /* Store ICCCM atoms immediately */
-    mov eax, [in_buf + 40]
-    mov [atom_wm_proto], eax
-    mov eax, [in_buf + 72]
-    mov [atom_wm_del], eax
+    mov eax, [rip + in_buf + 40]
+    mov [rip + atom_wm_proto], eax
+    mov eax, [rip + in_buf + 72]
+    mov [rip + atom_wm_del], eax
 
-    cmp byte ptr [in_buf], 1            /* QueryExtension Success? */
+    cmp byte ptr [rip + in_buf], 1            /* QueryExtension Success? */
     jne mon_detect_done
-    cmp byte ptr [in_buf + 8], 0        /* present? */
+    cmp byte ptr [rip + in_buf + 8], 0        /* present? */
     je mon_detect_done
 
-    movzx r12d, byte ptr [in_buf + 9]    /* opcode base */
+    movzx r12d, byte ptr [rip + in_buf + 9]    /* opcode base */
 
     /* Send XineramaQueryScreens (opcode, minor 5, len 1 word) */
     /* byte 0 = opcode (ebx), byte 1 = minor (5), byte 2..3 = len (1) */
     mov eax, (1 << 16) | (5 << 8)
     or eax, r12d
-    mov [out_buf + 0], eax
+    mov [rip + out_buf + 0], eax
 
     push SYS_WRITE
     pop rax
-    lea rsi, [out_buf]
+    mov esi, offset out_buf
     mov dl, 4                   /* rdi still == r13d, edx was 96 (< 256)! */
     syscall
 
@@ -1515,10 +1570,10 @@ qscreens_read_loop:
     cmp ebx, 32
     jl qscreens_read_loop
 
-    cmp byte ptr [in_buf], 1            /* Success reply? */
+    cmp byte ptr [rip + in_buf], 1            /* Success reply? */
     jne mon_detect_done
 
-    mov ecx, [in_buf + 8]               /* number of screens */
+    mov ecx, [rip + in_buf + 8]               /* number of screens */
     cmp ecx, 2
     jl mon_detect_done                  /* 0 or 1 screen: default mon_geom already set */
 
@@ -1527,33 +1582,33 @@ qscreens_read_loop:
     jl qscreens_read_loop
 
     /* Monitor 0 (at in_buf + 32) */
-    movsx eax, word ptr [in_buf + 32]   /* x_org */
-    movsx edx, word ptr [in_buf + 34]   /* y_org */
+    movsx eax, word ptr [rip + in_buf + 32]   /* x_org */
+    movsx edx, word ptr [rip + in_buf + 34]   /* y_org */
     shl rdx, 32
     or rax, rdx
-    mov [mon_geom + 0], rax             /* writes x and y in 1 64-bit store */
+    mov [rip + mon_geom + 0], rax             /* writes x and y in 1 64-bit store */
 
-    movzx eax, word ptr [in_buf + 36]   /* width */
-    movzx edx, word ptr [in_buf + 38]   /* height */
+    movzx eax, word ptr [rip + in_buf + 36]   /* width */
+    movzx edx, word ptr [rip + in_buf + 38]   /* height */
     shl rdx, 32
     or rax, rdx
-    mov [mon_geom + 8], rax             /* writes w and h in 1 64-bit store */
+    mov [rip + mon_geom + 8], rax             /* writes w and h in 1 64-bit store */
 
     /* Monitor 1 (at in_buf + 40) */
-    movsx eax, word ptr [in_buf + 40]   /* x_org */
-    movsx edx, word ptr [in_buf + 42]   /* y_org */
+    movsx eax, word ptr [rip + in_buf + 40]   /* x_org */
+    movsx edx, word ptr [rip + in_buf + 42]   /* y_org */
     shl rdx, 32
     or rax, rdx
-    mov [mon_geom + 16], rax            /* writes x and y in 1 64-bit store */
+    mov [rip + mon_geom + 16], rax            /* writes x and y in 1 64-bit store */
 
-    movzx eax, word ptr [in_buf + 44]   /* width */
-    movzx edx, word ptr [in_buf + 46]   /* height */
+    movzx eax, word ptr [rip + in_buf + 44]   /* width */
+    movzx edx, word ptr [rip + in_buf + 46]   /* height */
     shl rdx, 32
     or rax, rdx
-    mov [mon_geom + 24], rax            /* writes w and h in 1 64-bit store */
+    mov [rip + mon_geom + 24], rax            /* writes w and h in 1 64-bit store */
 
     or bpl, 8                           /* Set bit 3 (is_dual_mon = 1) */
-    mov word ptr [mon_cur_ws], 8        /* Mon 0 = WS 9 (8), Mon 1 = WS 1 (0) */
+    mov word ptr [rip + mon_cur_ws], 8        /* Mon 0 = WS 9 (8), Mon 1 = WS 1 (0) */
 
 mon_detect_done:
     ret
@@ -1604,52 +1659,66 @@ handle_map:
     mov edi, r14d
     call bsp_arrange_ws_buf
 
-    /*
-     * Direct Register-Constructed Window Mapping Pipeline (120 bytes):
-     * 1. ChangeWindowAttributes (16 bytes, 2 stores)
-     * 2. 4x X_GrabButton (96 bytes, register-synthesized SSE vector + quadword stores)
-     * 3. X_MapWindow (8 bytes, 2 stores)
-     */
-    mov dword ptr [r15 + 0], (4 << 16) | 2
-    mov [r15 + 4], r12d
-    mov dword ptr [r15 + 8], 0x00000800
-    mov dword ptr [r15 + 12], 0x00000010
+    /* De-focus previous window before mapping new window */
+    mov eax, [rip + last_focused_win]
+    test eax, eax
+    jz 1f
+    cmp eax, r12d
+    je 1f
+    mov edx, BORDER_INACTIVE
+    call emit_border_pkt
+1:  mov [rip + last_focused_win], r12d
 
+    /*
+     * Fused Pre-Map Window Pipeline (136 bytes):
+     * 1. ChangeWindowAttributes: CWBorderPixel(0x08) | CWEventMask(0x800) = 0x808 (20 bytes)
+     * 2. 4x X_GrabButton (96 bytes)
+     * 3. X_MapWindow (8 bytes) + X_SetInputFocus (12 bytes)
+     */
     mov rax, r12
     shl rax, 32
-    or rax, (6 << 16) | 28
-    movq xmm1, rax
-    mov eax, (1 << 24) | (1 << 16) | 0x4C
-    pinsrd xmm1, eax, 2
+    mov rcx, rax
+    or rcx, (5 << 16) | 2
+    mov [r15 + 0], rcx
+    mov rcx, (BORDER_ACTIVE << 32) | 0x00000808
+    mov [r15 + 8], rcx
+    mov dword ptr [r15 + 16], 0x00000010
+
+    mov rcx, rax
+    or rcx, (6 << 16) | 28
+    movq xmm1, rcx
+    mov ecx, (1 << 24) | (1 << 16) | 0x4C
+    pinsrd xmm1, ecx, 2
 
     /* Button 1 + Mod1 (0x08) */
-    movdqu [r15 + 16], xmm1
+    movdqu [r15 + 20], xmm1
     mov rcx, 0x0008000100000000
-    mov [r15 + 32], rcx
+    mov [r15 + 36], rcx
 
     /* Button 1 + Mod1 | NumLock (0x18) */
-    movdqu [r15 + 40], xmm1
+    movdqu [r15 + 44], xmm1
     mov rdx, 0x0018000100000000
-    mov [r15 + 56], rdx
+    mov [r15 + 60], rdx
 
     /* Button 3 + Mod1 (0x08) */
-    movdqu [r15 + 64], xmm1
+    movdqu [r15 + 68], xmm1
     mov rcx, 0x0008000300000000
-    mov [r15 + 80], rcx
+    mov [r15 + 84], rcx
 
     /* Button 3 + Mod1 | NumLock (0x18) */
-    movdqu [r15 + 88], xmm1
+    movdqu [r15 + 92], xmm1
     mov rdx, 0x0018000300000000
-    mov [r15 + 104], rdx
+    mov [r15 + 108], rdx
 
-    /* X_MapWindow (8 bytes) */
-    mov dword ptr [r15 + 112], (2 << 16) | 8
-    mov [r15 + 116], r12d
+    /* X_MapWindow (8 bytes) + X_SetInputFocus (12 bytes) */
+    mov rcx, rax
+    or rcx, (2 << 16) | 8
+    mov [r15 + 116], rcx
+    or rax, (3 << 16) | (1 << 8) | 42
+    mov [r15 + 124], rax
+    mov dword ptr [r15 + 132], 0
 
-    add r15, 120
-
-    mov edi, r12d
-    call set_focus_buf
+    add r15, 136
     jmp event_loop
 
 handle_unmap:
@@ -1673,14 +1742,12 @@ found_unmap_node:
     cmp r12d, r14d
     jne event_loop
 
-    lea rax, [bsp_roots]
-    mov rdi, [rax + 8*r14]
-    call bsp_first_leaf
-    mov rdi, rax
-    mov esi, r14d
-    call activate_node_focus
     mov edi, r14d
     call bsp_arrange_ws_buf
+    mov eax, offset bsp_focuses
+    mov rdi, [rax + 8*r14]
+    mov esi, r14d
+    call activate_node_focus
     jmp event_loop
 
 /*
@@ -1695,7 +1762,7 @@ bsp_tree_insert_into_ws:
     mov [rax + NODE_INFO], dl  /* packed NODE_INFO: (ws_idx << 1) | 0 */
     mov r9, rax                /* r9 = new leaf */
 
-    lea rax, [bsp_roots]
+    mov eax, offset bsp_roots
     mov rdi, [rax + 8*r8]
     test rdi, rdi
     jnz ws_split_leaf
@@ -1705,7 +1772,7 @@ bsp_tree_insert_into_ws:
     jmp ws_insert_done
 
 ws_split_leaf:
-    lea rax, [bsp_focuses]
+    mov eax, offset bsp_focuses
     mov r10, [rax + 8*r8]
     test r10, r10
     jnz ws_has_focus
@@ -1764,7 +1831,7 @@ ws_link_done:
     mov [rcx], r11              /* Link new split node into parent or root slot */
 
 ws_insert_done:
-    lea rax, [bsp_focuses]
+    mov eax, offset bsp_focuses
     mov [rax + 8*r8], r9
     mov rdi, r9
     call bsp_update_history
@@ -1792,13 +1859,13 @@ bsp_tree_detach:
     jnz td_has_parent
 
     /* Removing root: push leaf node (r8) onto O(1) free-list! */
-    mov rax, [free_node_head]
+    mov rax, [rip + free_node_head]
     mov [r8 + NODE_FIRST], rax
-    mov [free_node_head], r8
+    mov [rip + free_node_head], r8
 
-    lea rax, [bsp_roots]
+    mov eax, offset bsp_roots
     mov qword ptr [rax + 8*r9], 0
-    lea rax, [bsp_focuses]
+    mov eax, offset bsp_focuses
     mov qword ptr [rax + 8*r9], 0
     ret
 
@@ -1826,13 +1893,17 @@ td_has_parent:
 
 td_store_sib:
     mov [rcx], r11              /* Relink promoted sibling */
+    mov rdi, r11
+    call bsp_first_leaf
+    mov ecx, offset bsp_focuses
+    mov [rcx + 8*r9], rax
 
 td_done:
     /* Push both detached leaf (r8) and split parent (r10) onto O(1) free-list! */
-    mov rax, [free_node_head]
+    mov rax, [rip + free_node_head]
     mov [r10 + NODE_FIRST], rax
     mov [r8 + NODE_FIRST], r10
-    mov [free_node_head], r8
+    mov [rip + free_node_head], r8
     ret
 
 /*
@@ -1842,17 +1913,17 @@ td_done:
  * - Recycled nodes: O(1) L1-hot Free-List pop with atomic vector reset
  */
 alloc_node:
-    mov rax, [free_node_head]
+    mov rax, [rip + free_node_head]
     test rax, rax
     jnz 1f
-    mov eax, [node_idx]
-    inc dword ptr [node_idx]
+    mov eax, [rip + node_idx]
+    inc dword ptr [rip + node_idx]
     shl rax, 5
     lea rax, [node_pool + rax]
     ret
 1:
     mov rdx, [rax + NODE_FIRST]
-    mov [free_node_head], rdx
+    mov [rip + free_node_head], rdx
     pxor xmm0, xmm0
     movdqa [rax + 0], xmm0
     movdqa [rax + 16], xmm0
@@ -1882,8 +1953,8 @@ bfl_found:
 win_cache_put:
     test edi, edi
     jz 1f
-    mov [win_mru_id], edi
-    mov [win_mru_node], rsi
+    mov [rip + win_mru_id], edi
+    mov [rip + win_mru_node], rsi
     mov edx, edi
     shr edx, 4
     xor edx, edi
@@ -1902,10 +1973,10 @@ win_cache_put:
 win_cache_evict:
     test edi, edi
     jz 1f
-    cmp edi, [win_mru_id]
+    cmp edi, [rip + win_mru_id]
     jne 2f
-    mov dword ptr [win_mru_id], 0
-    mov qword ptr [win_mru_node], 0
+    mov dword ptr [rip + win_mru_id], 0
+    mov qword ptr [rip + win_mru_node], 0
 2:
     mov edx, edi
     shr edx, 4
@@ -1928,9 +1999,9 @@ bsp_find_win_global:
     jz bfwg_null
 
     /* 1. Fast Path: 1-entry MRU Cache (~1 cycle) */
-    cmp esi, [win_mru_id]
+    cmp esi, [rip + win_mru_id]
     jne bfwg_check_hash
-    mov rax, [win_mru_node]
+    mov rax, [rip + win_mru_node]
     test rax, rax
     jz bfwg_check_hash
     cmp [rax + NODE_WIN], esi
@@ -1943,8 +2014,8 @@ bsp_find_win_global:
     ret
 
 bfwg_mru_inv:
-    mov dword ptr [win_mru_id], 0
-    mov qword ptr [win_mru_node], 0
+    mov dword ptr [rip + win_mru_id], 0
+    mov qword ptr [rip + win_mru_node], 0
 
     /* 2. O(1) Path: 32-entry Direct Hash Table (~3 cycles) */
 bfwg_check_hash:
@@ -1967,8 +2038,8 @@ bfwg_check_hash:
     cmp ecx, WORKSPACE_COUNT
     jge bfwg_hash_inv
     /* HIT: Promote to MRU */
-    mov [win_mru_id], esi
-    mov [win_mru_node], rax
+    mov [rip + win_mru_id], esi
+    mov [rip + win_mru_node], rax
     ret
 
 bfwg_hash_inv:
@@ -1977,10 +2048,10 @@ bfwg_hash_inv:
 
     /* 3. Fallback: Flat L1 linear scan of node_pool (zero stack, zero recursion) */
 bfwg_scan_fallback:
-    mov ecx, [node_idx]         /* total nodes allocated so far (<= 128) */
+    mov ecx, [rip + node_idx]         /* total nodes allocated so far (<= 128) */
     test ecx, ecx
     jz bfwg_null
-    lea rdx, [node_pool]
+    mov edx, offset node_pool
 
 bfwg_scan_loop:
     cmp [rdx + NODE_WIN], esi
@@ -2041,20 +2112,17 @@ geom_init_offsets:
  * Frameless Zero-Stack tail dispatch into bsp_arrange_node.
  */
 bsp_arrange_ws_buf:
-    lea rax, [bsp_roots]
-    mov r8, [rax + 8*rdi]       /* r8 = root node */
+    mov r8, [bsp_roots + 8*rdi] /* r8 = root node */
     test r8, r8
     jz arrange_ws_done
 
     /* Get monitor geometry for this workspace (rdi = ws_idx) */
     call get_mon_for_ws         /* eax = 0 or 1 */
     shl eax, 4                  /* * 16 bytes */
-    lea rcx, [mon_geom]
-    add rcx, rax
 
     /* Vectorized root rect setup: loads [x, y, w, h] and applies gaps in 1 SIMD op */
-    movdqu xmm0, [rcx]
-    paddd xmm0, [geom_init_offsets]
+    movdqu xmm0, [rax + mon_geom]
+    paddd xmm0, [rip + geom_init_offsets]
 
     mov rdi, r8                 /* rdi = root node */
     jmp bsp_arrange_node        /* Pure Tail Call! */
@@ -2266,7 +2334,7 @@ do_exit:
 
 /* kill_xorg: if we spawned Xorg, SIGTERM it and reap it */
 kill_xorg:
-    mov rdi, [xorg_pid]
+    mov rdi, [rip + xorg_pid]
     test rdi, rdi
     jle 1f
     push 62                     /* SYS_KILL */
@@ -2274,14 +2342,14 @@ kill_xorg:
     push 15                     /* SIGTERM */
     pop rsi
     syscall
-    mov rdi, [xorg_pid]
+    mov rdi, [rip + xorg_pid]
     push SYS_WAIT4
     pop rax
     xor esi, esi
     xor edx, edx
     xor r10d, r10d
     syscall
-    mov qword ptr [xorg_pid], 0
+    mov qword ptr [rip + xorg_pid], 0
 1:  ret
 
 /*
@@ -2293,8 +2361,8 @@ kill_xorg:
 start_xorg:
     push 89                     /* SYS_READLINK */
     pop rax
-    lea rdi, [proc_fd0]
-    lea rsi, [tty_buf]
+    mov edi, offset proc_fd0
+    mov esi, offset tty_buf
     push 31
     pop rdx
     syscall
@@ -2318,25 +2386,21 @@ start_xorg:
     jmp 3b
 4:  cmp rdi, offset vt_arg + 2
     je 2f                       /* no digits: tty is not /dev/ttyN */
-    lea rax, [vt_arg]
-    mov [x_argv + 24], rax      /* ... -ac vtN -keeptty */
-    lea rax, [x_keep_str]
-    mov [x_argv + 32], rax
+    mov eax, offset vt_arg
+    mov [rip + x_argv + 24], rax      /* ... -ac vtN -keeptty */
+    mov eax, offset x_keep_str
+    mov [rip + x_argv + 32], rax
 2:  push SYS_FORK
     pop rax
     syscall
     test rax, rax
     jnz 5f
-    lea rdi, [x_path]
-    lea rsi, [x_argv]
-    mov rdx, [saved_envp]
+    mov edi, offset x_path
+    mov esi, offset x_argv
+    mov rdx, [rip + saved_envp]
     mov al, SYS_EXECVE          /* rax == 0 in child! */
     syscall
-    push SYS_EXIT
-    pop rax
-    push 1
-    pop rdi
-    syscall
+    jmp child_exit
 5:  ret
 
 .data
@@ -2376,14 +2440,15 @@ sh_arg_c:
     .asciz "-c"
 
 cmd_menu:
-    .asciz "[ -x $HOME/dotfiles/scripts/nviciod.sh ] && $HOME/dotfiles/scripts/nviciod.sh || ([ -x $HOME/dotfile/dmenuscript ] && $HOME/dotfile/dmenuscript || st)"
+    .asciz "[ -x $HOME/dotfiles/scripts/nviciod.sh ] && exec $HOME/dotfiles/scripts/nviciod.sh; [ -x $HOME/dotfile/dmenuscript ] && exec $HOME/dotfile/dmenuscript; exec st"
 
-cmd_term:
-    .asciz "[ \"$DISPLAY\" != \":0\" ] && st || (ftasm 2>/dev/null || st)"
-    /* .asciz "st || alacritty || kitty" */
+str_ftasm:
+    .asciz "ftasm"
+str_st:
+    .asciz "st"
 
 cmd_autostart:
-    .asciz "command -v setxkbmap >/dev/null 2>&1 && setxkbmap -option caps:escape; command -v xset >/dev/null 2>&1 && xset r rate 180 250; command -v xset >/dev/null 2>&1 && xset +fp $HOME/.fonts && xset fp rehash"
+    .asciz "setxkbmap -option caps:escape 2>/dev/null; exec xset r rate 180 250 +fp $HOME/.fonts fp rehash 2>/dev/null"
 
 .align 8
 sh_argv:
