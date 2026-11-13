@@ -83,14 +83,14 @@ _start:
     lea r9, [rsp + 8*r8 + 16]   /* r9 = envp */
     mov [saved_envp], r9
 
+    mov r11, 0x3d59414c50534944  /* "DISPLAY=" (hoisted once outside loop) */
+
 find_display:
     mov r10, [r9]
     test r10, r10
     jz display_done
 
-    mov rax, [r10]
-    mov r11, 0x3d59414c50534944  /* "DISPLAY=" */
-    cmp rax, r11
+    cmp [r10], r11
     jne next_env
 
     lea r10, [r10 + 8]
