@@ -235,9 +235,9 @@ connected_ok:
     mov [root_win], edx
 
     movzx edx, word ptr [in_buf + rax + 20]
-    mov [screen_w], edx
+    mov [mon_geom + 8], edx
     movzx edx, word ptr [in_buf + rax + 22]
-    mov [screen_h], edx
+    mov [mon_geom + 12], edx
 
     /* Extract resource_id_base (at [in_buf + 12]) */
     mov edx, [in_buf + 12]
@@ -550,12 +550,10 @@ handle_enter:
 
 handle_expose:
     mov edx, [rsi + 4]          /* drawable/window */
-    xor edi, edi                /* default target_mon = 0 */
-    cmp edx, [bar_win + 0]
-    je check_expose_count
-    inc edi                     /* target_mon = 1 */
-    cmp edx, [bar_win + 4]
-    jne event_loop
+    sub edx, [bar_win + 0]
+    cmp edx, 1
+    ja event_loop
+    mov edi, edx                /* edi = 0 (Monitor 0) or 1 (Monitor 1) */
 
 check_expose_count:
     /*
@@ -1327,7 +1325,7 @@ create_bar_done:
 
     /* 6. Append all 72 X_GrabKey requests (1152 bytes) into [r15] and flush in ONE syscall! */
     lea rbx, [shortcut_keys]
-    mov r8, [root_win]
+    mov r8d, [root_win]
     shl r8, 32
     or r8, (4 << 16) | (1 << 8) | 33            /* Opcode 33: X_GrabKey (len=4, owner_events=1) */
     mov r9, 0x0000000101000000                  /* pointer_mode=1, keyboard_mode=1 */
@@ -1438,13 +1436,6 @@ dsw_emit:
  * =========================================================================
  */
 detect_monitors:
-    /* Default: 1 monitor = full screen (wm_state bit 3 starts as 0) */
-    mov qword ptr [mon_geom + 0], 0     /* x = 0, y = 0 */
-    mov eax, [screen_w]
-    mov edx, [screen_h]
-    mov [mon_geom + 8], eax             /* w */
-    mov [mon_geom + 12], edx            /* h */
-
     /*
      * Pipelined Startup Handshake:
      * Batch QueryExtension "XINERAMA" (16 B) + 2x InternAtom (44 B) = 60 bytes in 1 atomic sys_write!
@@ -2501,8 +2492,6 @@ shortcut_keys:
 .align 8
 /* sock_fd lives permanently in register r13d (Zero RAM!) */
 root_win:       .long 0
-screen_w:       .long 0
-screen_h:       .long 0
 bar_win:        .long 0, 0      /* bar_win for Monitor 0 and Monitor 1 */
 bar_gc:         .long 0         /* base GC ID (bar_gc+0=bg, +1=active, +2=inactive) */
 atom_wm_proto:  .long 0         /* WM_PROTOCOLS atom */
