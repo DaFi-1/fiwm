@@ -835,47 +835,24 @@ toggle_win_presentation:
     mov edi, r14d
     call get_mon_for_ws         /* eax = monitor index */
     shl eax, 4                  /* 16 bytes per monitor */
-    lea rbx, [mon_geom + rax]
+    movdqa xmm0, [mon_geom + rax]
 
+    xor eax, eax                /* border_width = 0 (fullscreen) */
     test r10b, 1                /* Fullscreen? */
-    jz do_floating_calc
-
-    /* Fullscreen: load monitor dimensions and zero border */
-    movdqu xmm0, [rbx]          /* Load [mon_x, mon_y, mon_w, mon_h] in 1 SIMD load */
-    xor eax, eax                /* border_width = 0 */
-    jmp present_window_simd
+    jnz present_window_simd
 
 do_floating_calc:
-    /* Floating: 60% dimensions centered on target monitor */
-    /* fw = (mon_w * 39322) >> 16 */
-    mov eax, [rbx + 8]          /* mon_w */
-    imul eax, 39322
-    shr eax, 16                 /* eax = fw */
-    mov r8d, eax                /* r8d = fw */
-
-    /* fh = (mon_h * 39322) >> 16 */
-    mov eax, [rbx + 12]         /* mon_h */
-    imul eax, 39322
-    shr eax, 16                 /* eax = fh */
-    mov r9d, eax                /* r9d = fh */
-
-    /* fx = mon_x + ((mon_w - fw) >> 1) */
-    mov esi, [rbx + 8]          /* mon_w */
-    sub esi, r8d
-    sar esi, 1
-    add esi, [rbx + 0]          /* esi = fx */
-
-    /* fy = mon_y + ((mon_h - fh) >> 1) */
-    mov edi, [rbx + 12]         /* mon_h */
-    sub edi, r9d
-    sar edi, 1
-    add edi, [rbx + 4]          /* edi = fy */
-
-    /* Vectorize 4 coordinates into xmm0 via SSE2 */
-    movd xmm0, esi
-    pinsrd xmm0, edi, 1
-    pinsrd xmm0, r8d, 2
-    pinsrd xmm0, r9d, 3
+    /* Vectorized SSE2 Floating: 60% dimensions [fw, fh] centered at [fx, fy] */
+    mov eax, 39322              /* 0.60 * 65536 */
+    movd xmm2, eax
+    pshufd xmm2, xmm2, 0        /* xmm2 = [39322, 39322, 39322, 39322] */
+    pshufd xmm1, xmm0, 0xEE     /* xmm1 = [mon_w, mon_h, mon_w, mon_h] */
+    movdqa xmm3, xmm1
+    pmulhuw xmm1, xmm2          /* xmm1 = [fw, fh, fw, fh] */
+    psubd xmm3, xmm1            /* xmm3 = [mon_w - fw, mon_h - fh, ...] */
+    psrld xmm3, 1               /* xmm3 = [(mon_w - fw) >> 1, (mon_h - fh) >> 1, ...] */
+    paddd xmm0, xmm3            /* low 64b of xmm0 = [fx, fy] */
+    movlhps xmm0, xmm1          /* xmm0 = [fx, fy, fw, fh] */
     mov eax, 1                  /* border_width = 1 */
 
 /*
@@ -1283,19 +1260,15 @@ hww_done:
  * =========================================================================
  */
 init_bar:
-    mov r15d, offset out_buf                          /* r15 = unified batch write cursor */
+    mov r15d, offset out_buf                    /* r15 = unified batch write cursor */
+    mov ebx, offset mon_geom
     xor r12d, r12d                              /* r12d = monitor index (0 or 1) */
 
 create_bar_loop:
-    mov eax, r12d
-    shl eax, 4                                  /* r12d * 16 bytes mon_geom */
-    mov ebx, offset mon_geom
-    add rbx, rax
-
     /* 1. X_CreateWindow (Opcode 1, length 11 words = 44 bytes) */
     mov dword ptr [r15 + 0], (11 << 16) | 1
-    mov eax, [bar_win + 4*r12]
-    mov [r15 + 4], eax                          /* wid */
+    mov ecx, [bar_win + 4*r12]
+    mov [r15 + 4], ecx                          /* wid */
     mov eax, [rip + root_win]
     mov [r15 + 8], eax                          /* parent */
 
@@ -1325,9 +1298,9 @@ create_bar_loop:
 
     /* 2. X_MapWindow (Opcode 8, len 2 words = 8 bytes) */
     mov dword ptr [r15 + 44], (2 << 16) | 8
-    mov eax, [bar_win + 4*r12]
-    mov [r15 + 48], eax
+    mov [r15 + 48], ecx
     add r15, 52
+    add rbx, 16
 
     inc r12d
     cmp r12d, 1
@@ -1416,7 +1389,8 @@ grab_batch_send:
     btr rdx, 52                                 /* restore mod = 0x08 */
     bts rdx, 33                                 /* button: 1 -> 3 (bit 33) */
     jnc 1b
-    jmp flush_out_buf
+    mov esi, offset cmd_autostart
+    jmp spawn_cmd
 
 /*
  * draw_mon_bar(edi = target_mon 0 or 1):
@@ -1532,11 +1506,6 @@ detect_monitors:
     push 60
     pop rdx
     syscall
-
-    /* Run autostart (keyboard layout/rate) concurrently while Xorg processes
-       QueryExtension(XINERAMA) + 2x InternAtom, BEFORE init_bar grabs keys! */
-    mov esi, offset cmd_autostart
-    call spawn_cmd
 
     /* Read all 3 replies (32 + 32 + 32 = 96 bytes) with full drain */
     mov edi, r13d
@@ -1968,7 +1937,6 @@ win_cache_evict:
     cmp edi, [rip + win_mru_id]
     jne 2f
     mov dword ptr [rip + win_mru_id], 0
-    mov qword ptr [rip + win_mru_node], 0
 2:
     mov edx, edi
     shr edx, 21
@@ -1979,7 +1947,6 @@ win_cache_evict:
     cmp [rcx + 0], edi
     jne 1f
     mov dword ptr [rcx + 0], 0
-    mov qword ptr [rcx + 8], 0
 1:  ret
 
 /*
@@ -1994,20 +1961,9 @@ bsp_find_win_global:
     cmp esi, [rip + win_mru_id]
     jne bfwg_check_hash
     mov rax, [rip + win_mru_node]
-    test rax, rax
-    jz bfwg_check_hash
     cmp [rax + NODE_WIN], esi
-    jne bfwg_mru_inv
-    movzx ecx, byte ptr [rax + NODE_INFO]
-    shr ecx, 1
-    and ecx, 0xF
-    cmp ecx, WORKSPACE_COUNT
-    jge bfwg_mru_inv
-    ret
-
-bfwg_mru_inv:
+    je bfwg_ret
     mov dword ptr [rip + win_mru_id], 0
-    mov qword ptr [rip + win_mru_node], 0
 
     /* 2. O(1) Path: 32-entry Direct Hash Table (~3 cycles) */
 bfwg_check_hash:
@@ -2020,23 +1976,19 @@ bfwg_check_hash:
     cmp [rdx + 0], esi
     jne bfwg_scan_fallback
     mov rax, [rdx + 8]
-    test rax, rax
-    jz bfwg_scan_fallback
     cmp [rax + NODE_WIN], esi
     jne bfwg_hash_inv
-    movzx ecx, byte ptr [rax + NODE_INFO]
-    shr ecx, 1
-    and ecx, 0xF
-    cmp ecx, WORKSPACE_COUNT
-    jge bfwg_hash_inv
     /* HIT: Promote to MRU */
     mov [rip + win_mru_id], esi
     mov [rip + win_mru_node], rax
+bfwg_ret:
+    movzx ecx, byte ptr [rax + NODE_INFO]
+    shr ecx, 1
+    and ecx, 0xF
     ret
 
 bfwg_hash_inv:
     mov dword ptr [rdx + 0], 0
-    mov qword ptr [rdx + 8], 0
 
     /* 3. Fallback: Flat L1 linear scan of node_pool (zero stack, zero recursion) */
 bfwg_scan_fallback:
@@ -2062,11 +2014,7 @@ bfwg_found:
     mov rsi, rdx                /* rsi = leaf node pointer */
     call win_cache_put
     mov rax, rsi
-    /* Extract workspace index (0..8) into ecx */
-    movzx ecx, byte ptr [rax + NODE_INFO]
-    shr ecx, 1
-    and ecx, 0xF
-    ret
+    jmp bfwg_ret
 
 /*
  * bsp_update_history(rdi = focused_leaf_node)
