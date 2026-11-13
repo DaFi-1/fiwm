@@ -24,14 +24,14 @@ Zero C, zero libc, zero libX11 — comunicação direta via protocolo wire sobre
 
 | Segmento / Métrica | Tamanho | Descrição |
 |:---|:---:|:---|
-| **`.text`** | **5.824 B** (~5,6 KB) | Código de máquina executável puro (lógica BSP, eventos X11, barra e atalhos) |
-| **`.data`** | **855 B** | Estruturas de soquete Unix, strings estáticas e tabelas de despacho |
-| **`.bss`** | **9.408 B** (~9,2 KB) | Buffers de I/O em anel e pool L1 de nós para até 128 janelas |
-| **Total Mapeado (ELF)** | **16.087 B** (~15,7 KB) | Cabe inteiramente em 4 páginas virtuais x86_64 do Linux |
-| **Tamanho do Binário em Disco** | **6,9 KB** (7.160 B) | Executável final estático e stripped (sem dependências dinâmicas) |
-| **RAM em Execução (`VmRSS`)** | **24 kB** | Menor consumo de memória da categoria (piso base do kernel Linux) |
+| **`.text`** | **5.802 B** (~5,7 KB) | Código de máquina executável puro (lógica BSP, eventos X11, barra e atalhos) |
+| **`.data`** | **687 B** | Estruturas de soquete Unix, strings estáticas e template `sh_argv` único |
+| **`.bss`** | **5.616 B** (~5,5 KB) | Buffers de I/O compactados e pool L1 de 64 nós BSP |
+| **Total Mapeado (ELF)** | **12.105 B** (~11,8 KB) | Cabe inteiramente em 3 páginas físicas de 4 KB x86_64 (`0x400080`–`0x402fd0`) |
+| **Tamanho do Binário em Disco** | **6,8 KB** (6.976 B) | Executável final estático e stripped (sem dependências dinâmicas) |
+| **RAM em Execução (`VmRSS` / `VmData`)** | **24 kB / 12 kB** | Pico ativo (`VmHWM`) de apenas 24 kB mesmo com janelas abertas (3 páginas ELF) |
 | **Consumo de Pilha (Stack)** | **0 B** | Arquitetura zero-stack com invariantes globais em registradores |
-| **Tempo de Startup a Frio** | **~0,55 ms** | Conexão, autodetecção dual-monitor, barra e 72 atalhos em menos de 1 ms |
+| **Tempo de Startup a Frio** | **~0,55 ms** | Conexão, autodetecção dual-monitor paralela ao autostart, barra e atalhos |
 
 ---
 

@@ -159,7 +159,7 @@ do_connect:
     mov al, SYS_CONNECT         /* upper bits of eax are 0 after socket fd < 256! */
     mov edi, r13d
     lea rsi, [sock_addr]
-    mov dl, 110                 /* edx was 0 from xor edx, edx! */
+    mov dl, 22                  /* AF_UNIX(2) + "/tmp/.X11-unix/X"(16) + "0\0\0\0"(4); edx was 0 */
     syscall
     test eax, eax
     jns connected_ok
@@ -263,18 +263,11 @@ drain_setup_loop:
     jmp drain_setup_loop
 
 setup_drained:
-    /* 6. Autostart (i3 parity): keyboard layout + repeat rate.
-       Run BEFORE grabbing keys on root so setxkbmap's MappingNotify
-       does not ungrab or race with our key grabs! */
-    lea rsi, [sh_argv_autostart]
-    call spawn_cmd
-
-    /* Detect Dual Monitor (Xinerama) */
+    /* Detect Dual Monitor (Xinerama) while running autostart concurrently with reply wait */
     call detect_monitors
 
     /* Create and map top status bar + SelectInput on root + Grab all 72 keys in ONE batched syscall! */
     call init_bar
-    lea r15, [out_buf]
 
 event_loop:
     /* Check if event_queue still has buffered events */
@@ -285,11 +278,11 @@ event_loop:
     /* Coalesced I/O Flush: send all pending X11 commands before blocking on sys_read */
     call flush_out_buf
 
-    /* Buffer is empty, read next chunk of events (up to 64 events = 2048 bytes) */
+    /* Buffer is empty, read next chunk of events (up to 30 events = 960 bytes) */
     xor eax, eax                /* SYS_READ = 0 (2 bytes!) */
     mov edi, r13d
     lea rsi, [event_queue]
-    mov edx, 2048
+    mov edx, 960
     syscall
 
     test eax, eax
@@ -755,12 +748,12 @@ ws_cycle_done:
     jmp event_loop
 
 key_menu:
-    lea rsi, [sh_argv_menu]
+    lea rsi, [cmd_menu]
     call spawn_cmd
     jmp event_loop
 
 key_term:
-    lea rsi, [sh_argv_term]
+    lea rsi, [cmd_term]
     call spawn_cmd
     jmp event_loop
 
@@ -880,7 +873,7 @@ present_window_simd:
 
 win_restore_layout:
     mov edi, r14d
-    call bsp_arrange_ws
+    call bsp_arrange_ws_buf
     jmp event_loop
 
 /*
@@ -913,9 +906,6 @@ activate_node_focus:
     jmp set_focus_buf
 anf_root:
     xor edi, edi
-    jmp set_focus_buf
-
-set_focus:
     jmp set_focus_buf
 
 /*
@@ -1013,11 +1003,11 @@ flush_reset:
     ret
 
 /*
- * spawn_cmd(rsi = argv_pointer)
+ * spawn_cmd(rsi = cmd_ptr)
  * Uses SYS_VFORK (58) for the inner child to avoid page-table copying before execve!
  */
 spawn_cmd:
-    push rsi
+    mov [sh_argv + 16], rsi
     push SYS_FORK
     pop rax
     syscall
@@ -1033,9 +1023,9 @@ spawn_cmd:
     mov edi, r13d
     syscall
 
-    pop rsi
     mov al, SYS_EXECVE          /* eax == 0 after close! */
     lea rdi, [sh_bin]
+    lea rsi, [sh_argv]
     mov rdx, [saved_envp]
     syscall
 
@@ -1046,7 +1036,6 @@ child_exit:
     syscall
 
 parent_fork:
-    pop rsi
     mov edi, eax
     push SYS_WAIT4
     pop rax
@@ -1467,7 +1456,13 @@ detect_monitors:
     pop rdx
     syscall
 
+    /* Run autostart (keyboard layout/rate) concurrently while Xorg processes
+       QueryExtension(XINERAMA) + 2x InternAtom, BEFORE init_bar grabs keys! */
+    lea rsi, [cmd_autostart]
+    call spawn_cmd
+
     /* Read all 3 replies (32 + 32 + 32 = 96 bytes) with full drain */
+    mov edi, r13d
     xor ebx, ebx
 pipe_replies_loop:
     xor eax, eax                /* SYS_READ = 0 */
@@ -1701,12 +1696,11 @@ bsp_tree_insert_into_ws:
     mov r9, rax                /* r9 = new leaf */
 
     lea rax, [bsp_roots]
-    mov r10, [rax + 8*r8]
-    test r10, r10
+    mov rdi, [rax + 8*r8]
+    test rdi, rdi
     jnz ws_split_leaf
 
     /* First window on this workspace becomes root */
-    lea rax, [bsp_roots]
     mov [rax + 8*r8], r9
     jmp ws_insert_done
 
@@ -1715,8 +1709,6 @@ ws_split_leaf:
     mov r10, [rax + 8*r8]
     test r10, r10
     jnz ws_has_focus
-    lea rax, [bsp_roots]
-    mov rdi, [rax + 8*r8]
     call bsp_first_leaf
     mov r10, rax
 ws_has_focus:
@@ -1757,8 +1749,7 @@ ws_apply_split:
     mov [r9 + NODE_PARENT], r11
 
     /* Branchless parent / root slot selection */
-    lea rcx, [bsp_roots]
-    lea rcx, [rcx + 8*r8]       /* Default target: &bsp_roots[ws_idx] */
+    lea rcx, [bsp_roots + 8*r8] /* Default target: &bsp_roots[ws_idx] */
 
     test rax, rax
     jz ws_link_done             /* If no parent, r11 becomes new root */
@@ -2037,13 +2028,6 @@ buh_loop:
 buh_ret:
     ret
 
-/*
- * bsp_arrange_ws(edi = ws_idx)
- * Standalone entry point: arranges workspace into [r15].
- */
-bsp_arrange_ws:
-    jmp bsp_arrange_ws_buf
-
 .align 16
 geom_init_offsets:
     .long GAP_PX
@@ -2265,18 +2249,19 @@ nid_null:
     ret
 
 exit_clean:
-    call kill_xorg
-    push SYS_EXIT
-    pop rax
     xor edi, edi
-    syscall
+    jmp do_exit
 
 exit_fail:
-    call kill_xorg
-    push SYS_EXIT
-    pop rax
     push 1
     pop rdi
+
+do_exit:
+    push rdi
+    call kill_xorg
+    pop rdi
+    push SYS_EXIT
+    pop rax
     syscall
 
 /* kill_xorg: if we spawned Xorg, SIGTERM it and reap it */
@@ -2361,7 +2346,6 @@ sock_path:
     .ascii "/tmp/.X11-unix/X"
 sock_path_num:
     .ascii "0\0\0\0"
-    .space 90, 0
 
 x11_setup_req:
     .byte 'l', 0, 11, 0
@@ -2381,7 +2365,7 @@ x_keep_str:
 proc_fd0:
     .asciz "/proc/self/fd/0"
 vt_arg:
-    .asciz "vt\0\0\0\0\0\0\0\0\0\0\0\0"
+    .asciz "vt\0\0\0\0\0"
 .align 8
 x_argv:
     .quad x_path, x_disp, x_ac, x_keep_str, 0, 0
@@ -2402,22 +2386,10 @@ cmd_autostart:
     .asciz "command -v setxkbmap >/dev/null 2>&1 && setxkbmap -option caps:escape; command -v xset >/dev/null 2>&1 && xset r rate 180 250; command -v xset >/dev/null 2>&1 && xset +fp $HOME/.fonts && xset fp rehash"
 
 .align 8
-sh_argv_menu:
+sh_argv:
     .quad sh_bin
     .quad sh_arg_c
-    .quad cmd_menu
     .quad 0
-
-sh_argv_term:
-    .quad sh_bin
-    .quad sh_arg_c
-    .quad cmd_term
-    .quad 0
-
-sh_argv_autostart:
-    .quad sh_bin
-    .quad sh_arg_c
-    .quad cmd_autostart
     .quad 0
 
 /*
@@ -2489,7 +2461,9 @@ shortcut_keys:
     .byte 0, 0                  /* Sentinel */
 
 .bss
-.align 8
+.align 16
+/* Monitor configuration: up to 2 monitors (16 bytes each: x, y, w, h) */
+mon_geom:       .space 32
 /* sock_fd lives permanently in register r13d (Zero RAM!) */
 root_win:       .long 0
 bar_win:        .long 0, 0      /* bar_win for Monitor 0 and Monitor 1 */
@@ -2503,26 +2477,17 @@ xorg_pid:       .quad 0
  * All 4 state flags live permanently in 8-bit register bpl (Zero RAM!).
  */
 
-/* Monitor configuration: up to 2 monitors (16 bytes each: x, y, w, h) */
-.align 16
-mon_geom:       .space 32
-mon_cur_ws:     .byte 0, 0      /* Currently visible workspace index per monitor */
-                .space 6        /* Pad to 40 bytes */
-
-.align 64
-/* 9 Workspaces state (Cache-line aligned) */
+/* 9 Workspaces state (8-byte aligned) */
 bsp_roots:      .space 72       /* 9 x 8 bytes pointers */
-.align 64
 bsp_focuses:    .space 72       /* 9 x 8 bytes pointers */
-last_focused_win: .long 0       /* Last window with active border (for de-focus) */
 free_node_head: .quad 0         /* O(1) recycled BSP node free-list head */
-
-.align 64
-win_mru_id:     .long 0
-                .long 0
 win_mru_node:   .quad 0
 win_hash_tab:   .space 512      /* 32 entries * 16 bytes (win_id, pad, node_ptr) */
+drag_last_coords: .quad 0       /* Last rendered (Y<<32)|X or (H<<32)|W for Zero-Delta filtering */
+env_buf:        .space 160      /* Up to 19 env vars + DISPLAY=:0 + NULL for TTY login */
 
+last_focused_win: .long 0       /* Last window with active border (for de-focus) */
+win_mru_id:     .long 0
 node_idx:       .long 0
 ev_q_head:      .long 0         /* Current read offset in event_queue */
 ev_q_tail:      .long 0         /* Total bytes available in event_queue */
@@ -2536,21 +2501,19 @@ drag_orig_w:    .long 0         /* Window W at drag start */
 drag_orig_h:    .long 0         /* Window H at drag start */
 drag_start_x:   .long 0         /* Mouse Root X at drag start */
 drag_start_y:   .long 0         /* Mouse Root Y at drag start */
-drag_last_coords: .quad 0       /* Last rendered (Y<<32)|X or (H<<32)|W for Zero-Delta filtering */
-
-/*
- * Shared I/O Buffer (1056 bytes total) + node_pool (512 bytes) = 1568 bytes contiguous!
- * Entire ELF binary (.text + .data + ALL .bss) fits inside 2 physical 4 KB pages [0x400000..0x401fff]!
- */
-.align 64
-env_buf:        .space 160      /* Up to 19 env vars + DISPLAY=:0 + NULL for TTY login */
+mon_cur_ws:     .byte 0, 0      /* Currently visible workspace index per monitor */
 tty_buf:        .space 32
 
-.align 64
+/*
+ * Shared I/O Buffer (1600 B) + event_queue (960 B = 30 events) + node_pool (2048 B = 64 nodes):
+ * Setup reads up to 2048 B into in_buf safely overflow into adjacent event_queue before event_loop!
+ * Entire ELF binary (.text + .data + ALL .bss) fits inside 3 physical 4 KB pages [_end <= 0x403000]!
+ */
+.align 16
 out_buf:
-in_buf:         .space 2048
-event_queue:    .space 2048     /* Buffer for up to 64 X11 events (32 bytes each) */
+in_buf:         .space 1600
+event_queue:    .space 960      /* Buffer for up to 30 X11 events (32 bytes each) */
 
-/* 128 nodes of 32 bytes = 4096 bytes (64-byte aligned, pairs fit in exact L1 cache lines!) */
-.align 64
-node_pool:      .space 4096
+/* 64 nodes of 32 bytes = 2048 bytes (16-byte aligned for movdqa!) */
+.align 16
+node_pool:      .space 2048
