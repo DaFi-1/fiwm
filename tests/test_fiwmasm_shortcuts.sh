@@ -16,9 +16,12 @@ cleanup() {
     if [ -n "${XE_PID:-}" ] && kill -0 "$XE_PID" 2>/dev/null; then
         kill "$XE_PID" 2>/dev/null || true
     fi
+    if [ -n "${PARENT_PID:-}" ] && kill -0 "$PARENT_PID" 2>/dev/null; then
+        kill "$PARENT_PID" 2>/dev/null || true
+    fi
     pkill -f "st.*$TEST_DISP" 2>/dev/null || true
     pkill -f "Xephyr.*$TEST_DISP" 2>/dev/null || true
-    rm -f "/tmp/.X11-unix/X${TEST_DISP#:}" "/tmp/.X${TEST_DISP#:}-lock"
+    rm -f "/tmp/.X11-unix/X${TEST_DISP#:}" "/tmp/.X${TEST_DISP#:}-lock" /tmp/headless_parent_sc.pid
 }
 trap cleanup EXIT INT TERM
 
@@ -48,10 +51,23 @@ echo "========================================================="
 echo "[*] Compiling fiwmasm..."
 make fiwmasm >/dev/null
 
-# 2. Start isolated Xephyr on :98
-echo "[*] Launching Xephyr on display ${TEST_DISP} (800x600)..."
-rm -f "/tmp/.X11-unix/X${TEST_DISP#:}" "/tmp/.X${TEST_DISP#:}-lock"
-DISPLAY=:0 Xephyr -br -ac -noreset -screen 800x600 "$TEST_DISP" >"$XEPHYR_LOG" 2>&1 &
+# 2. Start isolated Xephyr on :98 (Headless / Unmapped parent window)
+echo "[*] Launching Xephyr on display ${TEST_DISP} (800x600, headless)..."
+rm -f "/tmp/.X11-unix/X${TEST_DISP#:}" "/tmp/.X${TEST_DISP#:}-lock" /tmp/headless_parent_sc.pid
+PARENT_PID=""
+PARENT_WIN=""
+python3 /home/a/fiwm/tests/headless_parent.py 800 600 >/tmp/headless_parent_sc.pid 2>/dev/null &
+PARENT_PID=$!
+sleep 0.2
+if [ -s /tmp/headless_parent_sc.pid ]; then
+    PARENT_WIN=$(cat /tmp/headless_parent_sc.pid | head -n 1)
+fi
+
+if [ -n "$PARENT_WIN" ]; then
+    DISPLAY=:0 Xephyr -br -ac -noreset -screen 800x600 -parent "$PARENT_WIN" "$TEST_DISP" >"$XEPHYR_LOG" 2>&1 &
+else
+    DISPLAY=:0 Xephyr -br -ac -noreset -screen 800x600 "$TEST_DISP" >"$XEPHYR_LOG" 2>&1 &
+fi
 XE_PID=$!
 
 for i in $(seq 1 30); do
