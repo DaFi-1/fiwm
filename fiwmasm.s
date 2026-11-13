@@ -202,32 +202,32 @@ connected_ok:
     mov dl, 12                  /* edx was 110 (< 256), so upper 24 bits are 0! */
     syscall
 
-    /* 4. Read X11 Setup Reply Header (8 bytes) - rdi still == r13d! */
-    xor eax, eax                /* SYS_READ = 0 (2 bytes!) */
+    /* 4. Read X11 Setup Reply directly into in_buf (up to 2048 bytes in ONE syscall!) */
+    xor eax, eax                /* SYS_READ = 0 */
     lea rsi, [in_buf]
-    mov dl, 8                   /* edx was 12 (< 256)! */
+    mov edx, 2048
     syscall
+    test eax, eax
+    jle exit_fail
     cmp byte ptr [in_buf], 1
     jne exit_fail
 
+    /* Calculate remaining bytes: total = 8 + (additional_data_len * 4) */
     movzx ebx, word ptr [in_buf + 6]
-    shl ebx, 2                  /* ebx = remaining setup reply bytes to drain (syscall-preserved) */
+    shl ebx, 2
+    add ebx, 8
+    sub ebx, eax                /* ebx = total remaining bytes to drain */
 
-    /* Read first chunk into in_buf (up to 576 bytes - fits in 1 KB I/O overlay!) */
-    xor eax, eax                /* SYS_READ = 0, rdi still == r13d! */
-    lea rsi, [in_buf]
-    mov edx, 576
-    cmp edx, ebx
-    cmovg edx, ebx
-    syscall
-    sub ebx, eax                /* remaining bytes */
-
-    /* Parse Screen Info from first chunk */
-    movzx eax, word ptr [in_buf + 16]   /* vendor_len */
+    /* Parse Screen Info directly from unified in_buf:
+       - Header (8) + Fixed Body (32) = 40 bytes base.
+       - vendor_len is at [in_buf + 24]
+       - num_formats is at [in_buf + 29]
+     */
+    movzx eax, word ptr [in_buf + 24]   /* vendor_len */
     add eax, 3
     and eax, -4
-    add eax, 32
-    movzx edx, byte ptr [in_buf + 21]   /* num_formats */
+    add eax, 40
+    movzx edx, byte ptr [in_buf + 29]   /* num_formats */
     shl edx, 3
     add eax, edx                        /* screen_offset */
 
@@ -239,19 +239,19 @@ connected_ok:
     movzx edx, word ptr [in_buf + rax + 22]
     mov [screen_h], edx
 
-    /* Extract resource_id_base (bar_win[0..1], bar_gc (bg), bar_gc+1 (act), bar_gc+2 (inact)) */
-    mov edx, [in_buf + 4]
+    /* Extract resource_id_base (at [in_buf + 12]) */
+    mov edx, [in_buf + 12]
     mov [bar_win + 0], edx
     inc edx
     mov [bar_win + 4], edx
     inc edx
     mov [bar_gc], edx
 
-    /* Drain all remaining setup reply bytes from socket (rdi still == r13d!) */
+    /* Drain all remaining setup reply bytes in full 2048-byte bursts */
 drain_setup_loop:
     test ebx, ebx
     jle setup_drained
-    mov edx, 576
+    mov edx, 2048
     cmp edx, ebx
     cmovg edx, ebx
     xor eax, eax                /* SYS_READ = 0 */
