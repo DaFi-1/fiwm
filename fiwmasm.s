@@ -1456,27 +1456,58 @@ detect_monitors:
     mov [mon_geom + 8], eax             /* w */
     mov [mon_geom + 12], edx            /* h */
 
-    /* QueryExtension "XINERAMA" (Opcode 98, len 4 words) */
-    mov dword ptr [out_buf + 0], (4 << 16) | 98
-    mov dword ptr [out_buf + 4], 8
-    mov rax, 0x414d4152454e4958
-    mov [out_buf + 8], rax /* "XINERAMA" */
+    /*
+     * Pipelined Startup Handshake:
+     * Batch QueryExtension "XINERAMA" (16 B) + 2x InternAtom (44 B) = 60 bytes in 1 atomic sys_write!
+     * Eliminates an entire roundtrip and 2 syscalls during cold start.
+     */
+    mov dword ptr [out_buf + 0], (4 << 16) | 98     /* Opcode 98, len 4 words */
+    mov dword ptr [out_buf + 4], 8                  /* name_len = 8 */
+    mov rax, 0x414d4152454e4958                     /* "XINERAMA" */
+    mov [out_buf + 8], rax
+
+    mov dword ptr [out_buf + 16], (5 << 16) | 16    /* Opcode 16, only_if_exists=0, len=5 */
+    mov dword ptr [out_buf + 20], 12                /* name_len = 12 */
+    mov rax, 0x4f544f52505f4d57                     /* "WM_PROTO" */
+    mov [out_buf + 24], rax
+    mov dword ptr [out_buf + 32], 0x534c4f43        /* "COLS" */
+
+    mov dword ptr [out_buf + 36], (6 << 16) | 16    /* Opcode 16, only_if_exists=0, len=6 */
+    mov dword ptr [out_buf + 40], 16                /* name_len = 16 */
+    mov rax, 0x54454c45445f4d57                     /* "WM_DELET" */
+    mov [out_buf + 44], rax
+    mov rax, 0x574f444e49575f45                     /* "E_WINDOW" */
+    mov [out_buf + 52], rax
 
     push SYS_WRITE
     pop rax
     mov edi, r13d
     lea rsi, [out_buf]
-    push 16
+    push 60
     pop rdx
     syscall
 
-    /* Read reply (32 bytes) - rdi still == r13d, edx was 16 (< 256)! */
+    /* Read all 3 replies (32 + 32 + 32 = 96 bytes) with full drain */
+    xor ebx, ebx
+pipe_replies_loop:
     xor eax, eax                /* SYS_READ = 0 */
-    lea rsi, [in_buf]
-    mov dl, 32
+    lea rsi, [in_buf + rbx]
+    mov edx, 96
+    sub edx, ebx
     syscall
+    test eax, eax
+    jle mon_detect_done
+    add ebx, eax
+    cmp ebx, 96
+    jl pipe_replies_loop
 
-    cmp byte ptr [in_buf], 1            /* Success? */
+    /* Store ICCCM atoms immediately */
+    mov eax, [in_buf + 40]
+    mov [atom_wm_proto], eax
+    mov eax, [in_buf + 72]
+    mov [atom_wm_del], eax
+
+    cmp byte ptr [in_buf], 1            /* QueryExtension Success? */
     jne mon_detect_done
     cmp byte ptr [in_buf + 8], 0        /* present? */
     je mon_detect_done
@@ -1492,7 +1523,7 @@ detect_monitors:
     push SYS_WRITE
     pop rax
     lea rsi, [out_buf]
-    mov dl, 4                   /* rdi still == r13d, edx was 32 (< 256)! */
+    mov dl, 4                   /* rdi still == r13d, edx was 96 (< 256)! */
     syscall
 
     /* Read reply header (32 bytes) - rdi still == r13d, edx was 4 (< 256)! */
@@ -1508,7 +1539,7 @@ detect_monitors:
     cmp ecx, 2
     jge mon_read_screens
 
-    /* If num_screens == 1, drain its 8-byte structure so atom replies aren't corrupted */
+    /* If num_screens == 1, drain its 8-byte structure */
     test ecx, ecx
     jz mon_detect_done
     xor eax, eax                /* SYS_READ = 0 */
@@ -1563,42 +1594,6 @@ mon_read_loop:
     mov word ptr [mon_cur_ws], 8        /* Mon 0 = WS 9 (8), Mon 1 = WS 1 (0) */
 
 mon_detect_done:
-    /*
-     * Intern ICCCM atoms in ONE pipelined batch (44 bytes total):
-     * 1. X_InternAtom "WM_PROTOCOLS" (20 bytes)
-     * 2. X_InternAtom "WM_DELETE_WINDOW" (24 bytes)
-     */
-    mov dword ptr [out_buf + 0],  (5 << 16) | 16    /* Opcode 16, only_if_exists=0, len=5 */
-    mov dword ptr [out_buf + 4],  12                /* name_len = 12 */
-    mov rax, 0x4f544f52505f4d57                     /* "WM_PROTO" */
-    mov [out_buf + 8], rax
-    mov dword ptr [out_buf + 16], 0x534c4f43        /* "COLS" */
-
-    mov dword ptr [out_buf + 20], (6 << 16) | 16    /* Opcode 16, only_if_exists=0, len=6 */
-    mov dword ptr [out_buf + 24], 16                /* name_len = 16 */
-    mov rax, 0x54454c45445f4d57                     /* "WM_DELET" */
-    mov [out_buf + 28], rax
-    mov rax, 0x574f444e49575f45                     /* "E_WINDOW" */
-    mov [out_buf + 36], rax
-
-    push SYS_WRITE
-    pop rax
-    lea rsi, [out_buf]
-    push 44                     /* rdi still == r13d! */
-    pop rdx
-    syscall
-
-    /* Read both 32-byte replies (64 bytes total) - rdi == r13d, edx was 44 (< 256)! */
-    xor eax, eax                /* SYS_READ = 0 */
-    lea rsi, [in_buf]
-    mov dl, 64
-    syscall
-
-    mov eax, [in_buf + 8]
-    mov [atom_wm_proto], eax
-    mov eax, [in_buf + 40]
-    mov [atom_wm_del], eax
-
     ret
 
 /*
