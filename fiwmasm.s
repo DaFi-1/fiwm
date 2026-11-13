@@ -973,23 +973,25 @@ anf_root:
 set_focus:
     jmp set_focus_buf
 
-.align 16
-simd_border_inact_pkt:
-    .long (4 << 16) | 2         /* Opcode 2: ChangeWindowAttributes (len=4) */
-    .long 0                     /* Placeholder for win_id */
-    .long 8                     /* CWBorderPixel */
-    .long BORDER_INACTIVE       /* 0x2D2D2D */
-
-.align 16
-simd_border_act_pkt:
-    .long (4 << 16) | 2         /* Opcode 2: ChangeWindowAttributes (len=4) */
-    .long 0                     /* Placeholder for win_id */
-    .long 8                     /* CWBorderPixel */
-    .long BORDER_ACTIVE         /* 0x005577 */
+/*
+ * emit_border_pkt(eax = win_id, edx = color_pixel, r15 = write cursor)
+ * Emits 16-byte X_ChangeWindowAttributes (CWBorderPixel) via 64-bit store coalescing.
+ */
+emit_border_pkt:
+    mov rcx, rax
+    shl rcx, 32
+    or rcx, (4 << 16) | 2
+    mov [r15 + 0], rcx
+    mov rcx, rdx
+    shl rcx, 32
+    or rcx, 8
+    mov [r15 + 8], rcx
+    add r15, 16
+    ret
 
 /*
  * set_focus_buf(edi = win_id, r15 = write cursor)
- * Vectorized SIMD serialization: paints active/inactive borders and sets input focus.
+ * Serialization: paints active/inactive borders and sets input focus.
  */
 set_focus_buf:
     test edi, edi
@@ -999,10 +1001,8 @@ set_focus_buf:
     mov eax, [last_focused_win]
     test eax, eax
     jz sfb_root_focus
-    movdqa xmm0, [simd_border_inact_pkt]
-    pinsrd xmm0, eax, 1
-    movdqu [r15], xmm0
-    add r15, 16
+    mov edx, BORDER_INACTIVE
+    call emit_border_pkt
     mov dword ptr [last_focused_win], 0
 
 sfb_root_focus:
@@ -1025,20 +1025,17 @@ sfb_has_win:
     cmp eax, edi
     je sfb_do_input_focus       /* Already has active border */
 
-    /* If old window exists, paint border_inactive (0x2D2D2D) via 128-bit vector burst */
+    /* If old window exists, paint border_inactive (0x2D2D2D) */
     test eax, eax
     jz sfb_paint_active
-    movdqa xmm0, [simd_border_inact_pkt]
-    pinsrd xmm0, eax, 1
-    movdqu [r15], xmm0
-    add r15, 16
+    mov edx, BORDER_INACTIVE
+    call emit_border_pkt
 
 sfb_paint_active:
-    /* Paint new window border_active (0x005577) via 128-bit vector burst */
-    movdqa xmm0, [simd_border_act_pkt]
-    pinsrd xmm0, edi, 1
-    movdqu [r15], xmm0
-    add r15, 16
+    /* Paint new window border_active (0x005577) */
+    mov eax, edi
+    mov edx, BORDER_ACTIVE
+    call emit_border_pkt
 
     mov [last_focused_win], edi
 
