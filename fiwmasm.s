@@ -727,6 +727,7 @@ key_move_hjkl:
     mov r9d, [rax + NODE_WIN]
     mov [r12 + NODE_WIN], r9d
     mov [rax + NODE_WIN], r8d
+    mov dword ptr [win_mru_id], 0
 
     /* Update focus to follow the moved window */
     lea rbx, [bsp_focuses]
@@ -2098,27 +2099,113 @@ bfl_found:
 bsp_find_node_by_win:
     test rdi, rdi
     jz bfn_null
+    test esi, esi
+    jz bfn_null
+
+    /* 1. Fast Path: 1-entry MRU Cache (~1 cycle) */
+    cmp esi, [win_mru_id]
+    jne bfn_check_hash
+    mov rax, [win_mru_node]
+    test rax, rax
+    jz bfn_check_hash
+    cmp [rax + NODE_WIN], esi
+    jne bfn_mru_inv
+    movzx ecx, byte ptr [rax + NODE_INFO]
+    shr ecx, 1
+    and ecx, 0xF
+    cmp ecx, WORKSPACE_COUNT
+    jge bfn_mru_inv
+    lea r8, [bsp_roots]
+    cmp rdi, [r8 + 8*rcx]
+    je bfn_ret_ok
+    xor eax, eax
+    ret
+bfn_mru_inv:
+    mov dword ptr [win_mru_id], 0
+
+    /* 2. O(1) Path: 32-entry Direct Hash Table (~3 cycles) */
+bfn_check_hash:
+    mov eax, esi
+    shr eax, 4
+    xor eax, esi
+    and eax, 31
+    shl eax, 4
+    lea rdx, [win_hash_tab + rax]
+    cmp [rdx + 0], esi
+    jne bfn_tree_search
+    mov rax, [rdx + 8]
+    test rax, rax
+    jz bfn_tree_search
+    cmp [rax + NODE_WIN], esi
+    jne bfn_hash_inv
+    movzx ecx, byte ptr [rax + NODE_INFO]
+    shr ecx, 1
+    and ecx, 0xF
+    cmp ecx, WORKSPACE_COUNT
+    jge bfn_hash_inv
+    lea r8, [bsp_roots]
+    cmp rdi, [r8 + 8*rcx]
+    jne bfn_hash_diff_ws
+    /* HIT: Promote to MRU and return */
+    mov [win_mru_id], esi
+    mov [win_mru_node], rax
+bfn_ret_ok:
+    ret
+
+bfn_hash_diff_ws:
+    /* Window belongs to another workspace root: tree rdi does NOT contain it */
+    xor eax, eax
+    ret
+
+bfn_hash_inv:
+    mov dword ptr [rdx + 0], 0
+
+    /* 3. Slow Path Fallback: Recursive BSP Tree Traversal */
+bfn_tree_search:
     cmp [rdi + NODE_WIN], esi
-    je bfn_found
+    je bfn_found_and_cache
     cmp dword ptr [rdi + NODE_WIN], 0
     jne bfn_null
 
     push rdi
     mov rdi, [rdi + NODE_FIRST]
-    call bsp_find_node_by_win
-    pop rdi
+    test rdi, rdi
+    jz bfn_skip_first
+    call bfn_tree_search
     test rax, rax
-    jnz bfn_ret
-
+    jnz bfn_pop_ret
+bfn_skip_first:
+    mov rdi, [rsp]
     mov rdi, [rdi + NODE_SECOND]
-    jmp bsp_find_node_by_win
-
-bfn_found:
-    mov rax, rdi
+    test rdi, rdi
+    jz bfn_skip_second
+    call bfn_tree_search
+    test rax, rax
+    jnz bfn_pop_ret
+bfn_skip_second:
+    xor eax, eax
+bfn_pop_ret:
+    pop rdi
     ret
+
+bfn_found_and_cache:
+    mov rax, rdi
+    /* Cache in MRU */
+    mov [win_mru_id], esi
+    mov [win_mru_node], rax
+    /* Cache in Hash Table */
+    mov ecx, esi
+    shr ecx, 4
+    xor ecx, esi
+    and ecx, 31
+    shl ecx, 4
+    lea rdx, [win_hash_tab + rcx]
+    mov [rdx + 0], esi
+    mov [rdx + 8], rax
+    ret
+
 bfn_null:
     xor eax, eax
-bfn_ret:
     ret
 
 /*
@@ -2635,6 +2722,12 @@ bsp_roots:      .space 72       /* 9 x 8 bytes pointers */
 bsp_focuses:    .space 72       /* 9 x 8 bytes pointers */
 last_focused_win: .long 0       /* Last window with active border (for de-focus) */
 free_node_head: .quad 0         /* O(1) recycled BSP node free-list head */
+
+.align 64
+win_mru_id:     .long 0
+                .long 0
+win_mru_node:   .quad 0
+win_hash_tab:   .space 512      /* 32 entries * 16 bytes (win_id, pad, node_ptr) */
 
 node_idx:       .long 0
 ev_q_head:      .long 0         /* Current read offset in event_queue */
