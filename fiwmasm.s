@@ -287,11 +287,11 @@ event_loop:
     cmp eax, [ev_q_tail]
     jl ev_pop_buffered
 
-    /* Buffer is empty, read next chunk of events (up to 9 events = 288 bytes) */
+    /* Buffer is empty, read next chunk of events (up to 64 events = 2048 bytes) */
     xor eax, eax                /* SYS_READ = 0 (2 bytes!) */
     mov edi, r13d
     lea rsi, [event_queue]
-    mov edx, 288
+    mov edx, 2048
     syscall
 
     test eax, eax
@@ -2939,7 +2939,7 @@ tty_buf:        .space 32
 .align 64
 out_buf:
 in_buf:         .space 2048
-event_queue:    .space 288      /* Buffer for up to 9 X11 events (32 bytes each) */
+event_queue:    .space 2048     /* Buffer for up to 64 X11 events (32 bytes each) */
 
 /* 128 nodes of 32 bytes = 4096 bytes (64-byte aligned, pairs fit in exact L1 cache lines!) */
 .align 64
