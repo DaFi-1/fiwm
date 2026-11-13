@@ -1330,32 +1330,21 @@ create_bar_done:
     mov r8, [root_win]
     shl r8, 32
     or r8, (4 << 16) | (1 << 8) | 33            /* Opcode 33: X_GrabKey (len=4, owner_events=1) */
+    mov r9, 0x0000000101000000                  /* pointer_mode=1, keyboard_mode=1 */
 
 grab_batch_loop:
-    movzx edi, byte ptr [rbx]                   /* keycode */
-    test edi, edi
+    movzx edx, byte ptr [rbx]                   /* keycode */
+    test edx, edx
     jz grab_batch_send
-    movzx esi, byte ptr [rbx + 1]               /* modifiers */
+    shl edx, 16
+    mov dl, [rbx + 1]                           /* modifiers */
+    or rdx, r9
 
     mov [r15 + 0], r8
+    mov [r15 + 8], rdx                          /* standard combo */
     mov [r15 + 16], r8
-
-    /* Pack (modifiers | (keycode << 16) | (pointer_mode << 24)) */
-    mov edx, edi
-    shl edx, 16
-    and esi, 0xFFFF
-    or edx, esi
-    or edx, (1 << 24)                           /* pointer_mode = 1 (Async) */
-
-    /* Pack edx + keyboard_mode (1) into 64-bit */
-    mov rax, 1                                  /* keyboard_mode = 1 (Async) */
-    shl rax, 32
-    or rax, rdx
-    mov [r15 + 8], rax                          /* standard combo */
-
-    /* NumLock/CapsLock combo: modifiers | 0x10 */
-    or rax, 0x10
-    mov [r15 + 24], rax                         /* NumLock combo */
+    or rdx, 0x10
+    mov [r15 + 24], rdx                         /* NumLock combo */
 
     add r15, 32
     add rbx, 2
@@ -2419,7 +2408,7 @@ cmd_term:
     /* .asciz "st || alacritty || kitty" */
 
 cmd_autostart:
-    .asciz "command -v setxkbmap >/dev/null 2>&1 && setxkbmap -option caps:escape; command -v xset >/dev/null 2>&1 && xset r rate 180 250; command -v xset >/dev/null 2>&1 && xset +fp /home/a/.fonts && xset fp rehash"
+    .asciz "command -v setxkbmap >/dev/null 2>&1 && setxkbmap -option caps:escape; command -v xset >/dev/null 2>&1 && xset r rate 180 250; command -v xset >/dev/null 2>&1 && xset +fp $HOME/.fonts && xset fp rehash"
 
 .align 8
 sh_argv_menu:
