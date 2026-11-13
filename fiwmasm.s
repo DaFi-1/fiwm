@@ -883,54 +883,18 @@ key_kill:
     add r15, 52
     jmp event_loop
 
+/*
+ * Window Presentation Engine:
+ * Unified Fullscreen & Floating Mode Pipeline (Zero Stack, 128-bit SIMD Serializer)
+ */
 key_fullscreen:
-    lea rbx, [bsp_focuses]
-    mov rax, [rbx + 8*r14]
-    test rax, rax
-    jz event_loop
-    mov edx, [rax + NODE_WIN]
-    test edx, edx
-    jz event_loop
-
-    xor bpl, 1                  /* Toggle bit 0 (is_fullscreen) */
-    test bpl, 1
-    jz fs_restore
-
-    /* Set fullscreen on target monitor */
-    mov edi, r14d
-    call get_mon_for_ws         /* eax = monitor index */
-    mov ecx, eax
-    shl ecx, 4                  /* 16 bytes per monitor */
-    lea rbx, [mon_geom]
-    add rbx, rcx
-
-    /* Vectorized SIMD Fullscreen Packet Serialization (48 bytes) */
-    movdqu xmm0, [rbx]          /* Load all 4 monitor dimensions [x, y, w, h] in 1 SIMD load */
-
-    /* Packet 1: ConfigureWindow (32 bytes) */
-    mov rax, rdx
-    shl rax, 32
-    or rax, (8 << 16) | 12      /* Opcode 12, len = 8 words */
-    mov [r15 + 0], rax
-    mov dword ptr [r15 + 8], 31             /* x, y, w, h, border_width */
-    movdqu [r15 + 12], xmm0                 /* SIMD 128-bit store: [x, y, w, h] in 1 instruction! */
-    mov dword ptr [r15 + 28], 0             /* border_width = 0 for fullscreen */
-
-    /* Packet 2: X_RaiseWindow (ConfigureWindow, stack mode = Above) (16 bytes) */
-    mov rax, rdx
-    shl rax, 32
-    or rax, (4 << 16) | 12      /* Opcode 12, len = 4 words */
-    mov [r15 + 32], rax
-    mov qword ptr [r15 + 40], 64            /* CWStackMode = 64, Above = 0 in 1 quadword */
-    add r15, 48
-    jmp event_loop
-
-fs_restore:
-    mov edi, r14d
-    call bsp_arrange_ws
-    jmp event_loop
+    mov r10d, 1                 /* bit 0: is_fullscreen */
+    jmp toggle_win_presentation
 
 key_floating:
+    mov r10d, 32                /* bit 5: is_floating */
+
+toggle_win_presentation:
     lea rbx, [bsp_focuses]
     mov rax, [rbx + 8*r14]
     test rax, rax
@@ -939,18 +903,26 @@ key_floating:
     test edx, edx
     jz event_loop
 
-    xor bpl, 32                 /* Toggle bit 5 (is_floating) */
-    test bpl, 32
-    jz fl_restore
+    xor bpl, r10b               /* Toggle presentation mode flag */
+    test bpl, r10b
+    jz win_restore_layout
 
-    /* Set floating: 60% dimensions centered on target monitor */
+    /* Set presentation on target monitor */
     mov edi, r14d
     call get_mon_for_ws         /* eax = monitor index */
-    mov ecx, eax
-    shl ecx, 4                  /* 16 bytes per monitor */
-    lea rbx, [mon_geom]
-    add rbx, rcx
+    shl eax, 4                  /* 16 bytes per monitor */
+    lea rbx, [mon_geom + rax]
 
+    test r10b, 1                /* Fullscreen? */
+    jz do_floating_calc
+
+    /* Fullscreen: load monitor dimensions and zero border */
+    movdqu xmm0, [rbx]          /* Load [mon_x, mon_y, mon_w, mon_h] in 1 SIMD load */
+    xor eax, eax                /* border_width = 0 */
+    jmp present_window_simd
+
+do_floating_calc:
+    /* Floating: 60% dimensions centered on target monitor */
     /* fw = (mon_w * 39322) >> 16 */
     mov eax, [rbx + 8]          /* mon_w */
     imul eax, 39322
@@ -975,25 +947,37 @@ key_floating:
     sar edi, 1
     add edi, [rbx + 4]          /* edi = fy */
 
-    /* Packet 1: ConfigureWindow (x, y, w, h, border_width = 1) (32 bytes) */
-    mov dword ptr [r15 + 0], (8 << 16) | 12
-    mov [r15 + 4], edx
-    mov dword ptr [r15 + 8], 31             /* x, y, w, h, border_width */
-    mov [r15 + 12], esi                     /* x */
-    mov [r15 + 16], edi                     /* y */
-    mov [r15 + 20], r8d                     /* w */
-    mov [r15 + 24], r9d                     /* h */
-    mov dword ptr [r15 + 28], 1             /* border_width = 1 */
+    /* Vectorize 4 coordinates into xmm0 via SSE2 */
+    movd xmm0, esi
+    pinsrd xmm0, edi, 1
+    pinsrd xmm0, r8d, 2
+    pinsrd xmm0, r9d, 3
+    mov eax, 1                  /* border_width = 1 */
+
+/*
+ * present_window_simd(edx = win_id, xmm0 = [x, y, w, h], eax = border_width, r15 = write cursor)
+ * Emits 48 bytes (ConfigureWindow + X_RaiseWindow) via 128-bit SIMD burst.
+ */
+present_window_simd:
+    /* Packet 1: ConfigureWindow (32 bytes) */
+    mov r8, rdx
+    shl r8, 32
+    or r8, (8 << 16) | 12       /* Opcode 12, len = 8 words */
+    mov [r15 + 0], r8
+    mov dword ptr [r15 + 8], 31 /* CWX | CWY | CWWidth | CWHeight | CWBorderWidth */
+    movdqu [r15 + 12], xmm0     /* SIMD 128-bit store: [x, y, w, h] written all at once! */
+    mov [r15 + 28], eax         /* border_width */
 
     /* Packet 2: X_RaiseWindow (ConfigureWindow, stack mode = Above) (16 bytes) */
-    mov dword ptr [r15 + 32], (4 << 16) | 12
-    mov [r15 + 36], edx
-    mov dword ptr [r15 + 40], 64            /* CWStackMode = 64 */
-    mov dword ptr [r15 + 44], 0             /* Above = 0 */
+    mov r8, rdx
+    shl r8, 32
+    or r8, (4 << 16) | 12       /* Opcode 12, len = 4 words */
+    mov [r15 + 32], r8
+    mov qword ptr [r15 + 40], 64 /* CWStackMode = 64, Above = 0 in 1 quadword */
     add r15, 48
     jmp event_loop
 
-fl_restore:
+win_restore_layout:
     mov edi, r14d
     call bsp_arrange_ws
     jmp event_loop
